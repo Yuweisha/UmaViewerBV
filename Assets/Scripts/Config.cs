@@ -57,6 +57,9 @@ public class Config
     public string WorkModeTip = "Affects how application work, options: 0 - work with game client, 1 - work without game client (automatically builds databases and downloads resources)";
     public WorkMode WorkMode = WorkMode.Default;
 
+    public string CdnModeTip = "CDN source. Cy = official Cygames CDN, CN = China CDN.";
+    public string CdnMode = "Cy";
+
     public string VmdKeyReductionLevelTip = "Affects the recording quality: 1 = record every frame, 2 = record every two frames, and so on.";
     public int VmdKeyReductionLevel = 2;
 

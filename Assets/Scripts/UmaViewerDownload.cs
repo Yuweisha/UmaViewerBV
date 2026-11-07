@@ -13,15 +13,71 @@ using System.Linq;
 
 public class UmaViewerDownload : MonoBehaviour
 {
-    public static string MANIFEST_ROOT_URL = "https://prd-storage-app-umamusume.akamaized.net/dl/resources/Manifest";
-    public static string GENERIC_BASE_URL = "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Generic";
+    public static string MANIFEST_ROOT_URL =
+        "https://prd-storage-app-umamusume.akamaized.net/dl/resources/Manifest";
+
+    public static string GENERIC_BASE_URL =
+        "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Generic";
+
 #if UNITY_IOS || UNITY_IPHONE || UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
-    public static string ASSET_BASE_URL = "https://prd-storage-game-umamusume.akamaized.net/dl/resources/iOS/assetbundles/";
+    public static string ASSET_BASE_URL =
+        "https://prd-storage-game-umamusume.akamaized.net/dl/resources/iOS/assetbundles/";
 #elif UNITY_ANDROID
-    public static string ASSET_BASE_URL = "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Android/assetbundles/";
+    public static string ASSET_BASE_URL =
+        "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Android/assetbundles/";
 #else
-    public static string ASSET_BASE_URL = "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Windows/assetbundles/";
+    public static string ASSET_BASE_URL =
+        "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Windows/assetbundles/";
 #endif
+
+    private static bool IsCnCdn
+    {
+        get
+        {
+            return Config.Instance != null &&
+                   string.Equals(Config.Instance.CdnMode, "CN",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public static void ApplyCdnMode()
+    {
+        if (IsCnCdn)
+        {
+            MANIFEST_ROOT_URL =
+                "https://umamusume.cn-sy1.rains3.com/dat/";
+
+            GENERIC_BASE_URL =
+                "https://umamusume.cn-sy1.rains3.com/dat/";
+
+#if UNITY_ANDROID
+            ASSET_BASE_URL =
+                "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Android/assetbundles/";
+#else
+            ASSET_BASE_URL =
+                "https://umamusume.cn-sy1.rains3.com/dat/";
+#endif
+        }
+        else
+        {
+            MANIFEST_ROOT_URL =
+                "https://prd-storage-app-umamusume.akamaized.net/dl/resources/Manifest";
+
+            GENERIC_BASE_URL =
+                "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Generic";
+
+#if UNITY_IOS || UNITY_IPHONE || UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+            ASSET_BASE_URL =
+                "https://prd-storage-game-umamusume.akamaized.net/dl/resources/iOS/assetbundles/";
+#elif UNITY_ANDROID
+            ASSET_BASE_URL =
+                "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Android/assetbundles/";
+#else
+            ASSET_BASE_URL =
+                "https://prd-storage-game-umamusume.akamaized.net/dl/resources/Windows/assetbundles/";
+#endif
+        }
+    }
 
 #if UNITY_ANDROID || UNITY_IOS || UNITY_IPHONE
     private const int maxConcurrentDownloads = 6;
@@ -353,16 +409,19 @@ public class UmaViewerDownload : MonoBehaviour
 
     public static string GetManifestRequestUrl(string hash)
     {
-        return $"{MANIFEST_ROOT_URL}/{hash.Substring(0, 2)}/{hash}";
+        ApplyCdnMode();
+        return $"{MANIFEST_ROOT_URL.TrimEnd('/')}/{hash.Substring(0, 2)}/{hash}";
     }
 
     public static string GetGenericRequestUrl(string hash)
     {
-        return $"{GENERIC_BASE_URL}/{hash.Substring(0, 2)}/{hash}";
+        ApplyCdnMode();
+        return $"{GENERIC_BASE_URL.TrimEnd('/')}/{hash.Substring(0, 2)}/{hash}";
     }
     
     public static string GetAssetRequestUrl(string hash)
     {
+        ApplyCdnMode();
         return $"{ASSET_BASE_URL.TrimEnd('/')}/{hash.Substring(0, 2)}/{hash}";
     }
 }

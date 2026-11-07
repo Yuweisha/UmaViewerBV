@@ -22,7 +22,9 @@ public class UISettingsOther : MonoBehaviour
     public TMP_Dropdown WorkModeDropdown;
     public TMP_Dropdown LanguageDropdown;
     public TMP_Dropdown FrameRateDropdown;
+    public TMP_Dropdown CdnDropdown;
     private GameObject _runtimeFrameRateRow;
+    private GameObject _runtimeCdnRow;
     private InputField _customFrameRateInput;
     private IEnumerator _updateResVerCoroutine;
 
@@ -30,6 +32,10 @@ public class UISettingsOther : MonoBehaviour
     {
         EnsureLanguageOptions();
         EnsureFrameRateDropdown();
+        EnsureCdnDropdown();
+        RefreshCdnDropdown();
+        UmaViewerDownload.ApplyCdnMode();
+
         WorkModeDropdown.SetValueWithoutNotify((int)Config.Instance.WorkMode);
         RegionDropdown.SetValueWithoutNotify((int)Config.Instance.Region);
         LanguageDropdown.SetValueWithoutNotify(LanguageToDropdownValue(Config.Instance.Language));
@@ -138,6 +144,71 @@ public class UISettingsOther : MonoBehaviour
         }
     }
 
+    private void EnsureCdnDropdown()
+    {
+        if (CdnDropdown != null || LanguageDropdown == null)
+            return;
+
+        var sourceRow = LanguageDropdown.transform.parent;
+        var parent = sourceRow.parent;
+
+        _runtimeCdnRow = Instantiate(sourceRow.gameObject, parent);
+        _runtimeCdnRow.name = "CdnMode";
+        _runtimeCdnRow.transform.SetSiblingIndex(sourceRow.GetSiblingIndex() + 1);
+
+        var label = _runtimeCdnRow.transform.GetChild(0)
+            .GetComponentInChildren<TextMeshProUGUI>(true);
+
+        if (label != null)
+            label.text = "CDN";
+
+        CdnDropdown = _runtimeCdnRow.GetComponentInChildren<TMP_Dropdown>(true);
+        CdnDropdown.name = "CdnDropdown";
+        CdnDropdown.ClearOptions();
+        CdnDropdown.AddOptions(new List<string> { "Cy", "CN" });
+
+        CdnDropdown.onValueChanged = new TMP_Dropdown.DropdownEvent();
+        CdnDropdown.onValueChanged.AddListener(ChangeCdnMode);
+
+        var parentRect = parent as RectTransform;
+        var sourceRect = sourceRow as RectTransform;
+
+        if (parentRect != null && sourceRect != null)
+        {
+            parentRect.SetSizeWithCurrentAnchors(
+                RectTransform.Axis.Vertical,
+                parentRect.rect.height + sourceRect.rect.height + 30);
+
+            LayoutRebuilder.MarkLayoutForRebuild(parentRect);
+        }
+    }
+
+    private void RefreshCdnDropdown()
+    {
+        if (CdnDropdown == null)
+            return;
+
+        int value = string.Equals(
+            Config.Instance.CdnMode,
+            "CN",
+            System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+        CdnDropdown.SetValueWithoutNotify(value);
+        CdnDropdown.RefreshShownValue();
+    }
+
+    public void ChangeCdnMode(int value)
+    {
+        string mode = value == 1 ? "CN" : "Cy";
+
+        if (Config.Instance.CdnMode == mode)
+            return;
+
+        Config.Instance.CdnMode = mode;
+        Config.Instance.UpdateConfig(false);
+
+        UmaViewerDownload.ApplyCdnMode();
+    }
 
     public void ChangeFrameRate(int value)
     {
