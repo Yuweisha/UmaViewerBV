@@ -14,6 +14,8 @@ namespace Gallop.Live.Cutt
         public WrapMode wrapMode;
         public float speed;
         public float offsetTime;
+        public float AnimationTime;
+        public bool UseAnimationTime;
     }
 
     public delegate void AnimationUpdateInfoDelegate(ref AnimationUpdateInfo updateInfo);

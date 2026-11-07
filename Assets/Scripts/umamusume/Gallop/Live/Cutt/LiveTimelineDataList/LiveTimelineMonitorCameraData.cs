@@ -28,14 +28,10 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineKeyMonitorCameraPositionData : LiveTimelineKeyCameraPositionData
     {
         public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.MonitorCameraPos;
-        public Vector3 CharaPositionAtStartFrame;
-        public bool IsUseCharaPositionAtPrevKeyStartFrame;
-        public bool IsAttachedToProps;
-        public int PropsIndex;
-        public int PropsAttachNodeIndex;
         public bool enable;
         public float fov = 30f;
         public float roll;
+        public LiveCameraCullingLayer cullingMask;
     }
 
     [Serializable]
@@ -55,11 +51,6 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineKeyMonitorCameraLookAtData : LiveTimelineKeyCameraLookAtData
     {
         public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.MonitorCameraLookAt;
-        public Vector3 CharaPositionAtStartFrame;
-        public bool IsUseCharaPositionAtPrevKeyStartFrame;
-        public bool IsAttachedToProps;
-        public int PropsIndex;
-        public int PropsAttachNodeIndex;
     }
 
     [Serializable]

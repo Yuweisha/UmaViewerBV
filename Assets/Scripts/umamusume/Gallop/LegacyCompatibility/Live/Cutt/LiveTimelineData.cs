@@ -218,4 +218,3 @@ namespace Gallop.Live.Cutt
     }
 
 }
-

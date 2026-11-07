@@ -69,7 +69,13 @@ namespace Gallop.Live
                     var controller = controllers[i];
                     if (controller != null && controller.TimelineIndex == info.timelineIndex)
                     {
-                        controller.SetUpdateInfo(ref info);
+                        Transform root = _characterRoots[character];
+                        Transform target = null;
+                        if (root != null && !string.IsNullOrEmpty(info.TargetNodeName))
+                            foreach (var node in root.GetComponentsInChildren<Transform>(true))
+                                if (node.name == info.TargetNodeName) { target = node; break; }
+                        controller.SetUpdateInfo(ref info, target != null ? target.position :
+                            root != null ? root.position : Vector3.zero);
                         break;
                     }
                 }

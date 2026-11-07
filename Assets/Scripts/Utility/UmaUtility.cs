@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -57,15 +57,22 @@ public static class UmaUtility
 
     public static string GetCurrentLyrics(float time, List<UmaLyricsData> lyricsDatas)
     {
+        return GetCurrentLyrics(time, lyricsDatas, null);
+    }
+
+    // Original LyricsController.IsVisibleLyric: AdditionalSettingType.SheetVariationId
+    // entries are visible only on the matching worksheet variation.
+    public static string GetCurrentLyrics(float time, List<UmaLyricsData> lyricsDatas, int? sheetVariationId)
+    {
         for (int i = lyricsDatas.Count - 1; i >= 0; i--)
         {
-            if (lyricsDatas[i].time < time)
-            {
-                var lyric = lyricsDatas[i].text;
-                lyric = lyric.Replace("[COMMA]", ",");
-                lyric = lyric.Replace("\\n", "\n");
-                return lyric;
-            }
+            var data = lyricsDatas[i];
+            if (data.time > time) continue;
+            if (sheetVariationId.HasValue && data.additionalSettingType == 1 && data.additionalSettingValue != sheetVariationId.Value) continue;
+            var lyric = data.text;
+            lyric = lyric.Replace("[COMMA]", ",");
+            lyric = lyric.Replace("\\n", "\n");
+            return lyric;
         }
         return "";
     }

@@ -32,7 +32,6 @@ namespace Gallop.Live
 
         private readonly Dictionary<int, Binding> _bindings = new Dictionary<int, Binding>();
         private readonly List<CustomProjector> _projectors = new List<CustomProjector>();
-        private readonly HashSet<int> _missingGroups = new HashSet<int>();
         private readonly MirrorBallProjectionRuntime _mirrorRuntime = new MirrorBallProjectionRuntime();
         private Func<int, Texture> _mirrorTextureResolver;
         private Func<int, Texture> _textureResolver;
@@ -88,8 +87,7 @@ namespace Gallop.Live
             int hash = info.group.nameHash;
             if (!_bindings.TryGetValue(hash, out Binding binding))
             {
-                if (_missingGroups.Add(hash))
-                    Debug.LogError("LightProjection track '" + info.group.name + "' has no matching authored stage LightProjection or MirrorBallProjector.");
+                // Original4eb99f0 returns on a missing authored controller.
                 return;
             }
             CustomProjector projector = binding.projector;
@@ -139,27 +137,15 @@ namespace Gallop.Live
                 Report(binding, "content:" + info.group.ContentType, "Unknown authored ContentType " + info.group.ContentType + ".");
                 return;
             }
-            // The key's TextureId is an id into the per-song projector table published by
-            // `livesettings` (row type 11: id -> texture asset name), resolved by the Director when it
-            // loads the asset. It is NOT the texture's file number: song 1001 maps id 1 to
-            // `tex_env_live_cmn_projector000`, while song 1005 maps 1/2/3 to 004/001/002. A group is
-            // only an instance, so two groups may share a gobo; song 1001 stores id 1 on all eighteen
-            // keys, so every instance projects the same texture.
-            int textureId = a.TextureId;
             if (a.IsEnable)
             {
-                Texture texture = (info.group.ContentType == 0 ? _textureResolver : _mirrorTextureResolver)?.Invoke(textureId);
-                if (texture == null)
-                {
-                    // Native only writes the texture when the table has one; without it the authored
-                    // (unassigned) LightTex stays, which Unity renders as white instead of removing
-                    // the projector from the stage.
-                    Report(binding, "texture:" + textureId, "Authored projector texture " + textureId + " is unavailable.");
-                }
-                else
-                {
+                Texture texture = (info.group.ContentType == 0 ? _textureResolver : _mirrorTextureResolver)?.Invoke(a.TextureId);
+                // Original StageController.UpdateLightProjection 0x4eb99f0
+                // only writes a texture when TryGetValue succeeds. An absent
+                // ID (e.g. SHAΚEROCK projector_02/id0) retains the prefab's
+                // texture; it does not disable an otherwise enabled projector.
+                if (texture != null)
                     material.SetTexture(ShaderManager.GetPropertyId(ShaderManager.PropertyId._LightTex), texture);
-                }
             }
             if (binding.projection.IsAnimationProjection && !ApplyAnimation(binding, a, b, t, info.time))
             {
@@ -173,15 +159,21 @@ namespace Gallop.Live
             LiveTimelineKeyLightProjectionData b, float progress, float elapsed)
         {
             var param = a.AnimationParam;
-            if (param == null || param.TextureId == -1) return true;
+            if (param == null) return true;
+            if (param.TextureId == -1)
+            {
+                binding.projector.Material.SetTexture(ShaderManager.GetPropertyId(ShaderManager.PropertyId._AnimationTex),null);
+                return true;
+            }
             Texture texture;
             Vector2 scale, offset;
             if (a.UseMonitorMovie())
             {
                 if (_movieResolver == null || !_movieResolver(param.TextureId, out MovieFrame frame) || frame.texture == null)
                 {
-                    Report(binding, "movie:" + param.TextureId, "Currently evaluated monitor frame for slot " + param.TextureId + " is unavailable.");
-                    return false;
+                    // Original4eb9560 keeps the material and enabled state for
+                    // an absent/inactive one-based UV movie slot (including0).
+                    return true;
                 }
                 texture = frame.texture;
                 scale = frame.scale;
@@ -190,11 +182,6 @@ namespace Gallop.Live
             else
             {
                 texture = _textureResolver?.Invoke(param.TextureId);
-                if (texture == null)
-                {
-                    Report(binding, "animation:" + param.TextureId, "Authored animation texture " + param.TextureId + " is unavailable.");
-                    return false;
-                }
                 if (param.MaxCut >= 1)
                 {
                     scale = Vector2.one;
@@ -218,10 +205,10 @@ namespace Gallop.Live
                 }
             }
             Material material = binding.projector.Material;
-            int lightTex = ShaderManager.GetPropertyId(ShaderManager.PropertyId._LightTex);
-            material.SetTexture(lightTex, texture);
-            material.SetTextureScale(lightTex, scale);
-            material.SetTextureOffset(lightTex, offset);
+            int animationTex = ShaderManager.GetPropertyId(ShaderManager.PropertyId._AnimationTex);
+            if(texture!=null)material.SetTexture(animationTex, texture);
+            material.SetVector(ShaderManager.GetPropertyId(ShaderManager.PropertyId._UVAdjust),
+                new Vector4(scale.x,scale.y,offset.x,offset.y));
             return true;
         }
 
@@ -253,7 +240,6 @@ namespace Gallop.Live
             }
             _bindings.Clear();
             _projectors.Clear();
-            _missingGroups.Clear();
             _mirrorRuntime.Dispose();
             _mirrorTextureResolver = null;
             _textureResolver = null;

@@ -1,10 +1,10 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace Gallop
 {
 	[Serializable]
-	public class FaceOverrideData : ScriptableObject 
+	public class FaceOverrideData : ScriptableObject
 	{
 		public bool Enable;
 		private readonly string[] OverrideTypeText;
@@ -26,4 +26,3 @@ namespace Gallop
 		}
 	}
 }
-

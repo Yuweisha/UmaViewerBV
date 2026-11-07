@@ -99,6 +99,8 @@ namespace Gallop.Live
 
         private bool _isEnabledRaycastChara;
         private float _raycastDistance;
+        public bool IsRaycastHitChara { get; private set; }
+        public float RaycastHitDistance { get; private set; }
         private Ray _ray;
         private Ray[] _vertexRayArray = new Ray[RECTANGLE_VERTEX_NUM];
 
@@ -448,6 +450,7 @@ namespace Gallop.Live
         }
         private void RaycastCharaModel(bool enable, float rayDistance, float checkDistance)
         {
+            IsRaycastHitChara = false;
             if (rayDistance < 0.000001f)
                 return;
 
@@ -470,6 +473,8 @@ namespace Gallop.Live
 
             if (Physics.Raycast(_ray, out RaycastHit hit, checkDistance, _raycastLayerMask))
             {
+                IsRaycastHitChara = true;
+                RaycastHitDistance = hit.distance;
                 Vector3 localScale = _cachedTransform.localScale;
                 float rate = Mathf.Clamp01(hit.distance / rayDistance);
                 _cachedTransform.localScale = localScale * rate;

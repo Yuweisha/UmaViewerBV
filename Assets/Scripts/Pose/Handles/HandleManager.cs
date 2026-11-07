@@ -8,23 +8,23 @@ public class HandleManager : MonoBehaviour
     public GameObject Pfb_HandleDisplay;
     public UIPopupPanel Pfb_Popup;
     public Button Pfb_PopupButton;
-
     public Material LineRendererMaterial;
-
     public List<BoneTags> EnabledHandles { get => IKMode ? IKHandles : enabledHandles; }
+
     public bool EnabledLines = true;
     public bool IKMode = false;
-
     public static bool InteractionInProgress;
-
     private List<UIHandle> AllHandles = new List<UIHandle>();
-
     public static System.Action<RuntimeGizmoUndoData> RegisterRuntimeGizmoUndoAction;
     public static System.Action<List<RuntimeGizmoUndoData>> RegisterRuntimeGizmoUndoActions;
-
-    private List<BoneTags> enabledHandles = new List<BoneTags>() { BoneTags.Humanoid };
-    private List<BoneTags> IKHandles = new List<BoneTags>() { BoneTags.IK };
-
+    private List<BoneTags> enabledHandles = new List<BoneTags>()
+    {
+        BoneTags.Humanoid
+    };
+    private List<BoneTags> IKHandles = new List<BoneTags>()
+    {
+        BoneTags.IK
+    };
     public struct RuntimeGizmoUndoData
     {
         public Transform NewPosition;
@@ -35,7 +35,6 @@ public class HandleManager : MonoBehaviour
     {
         var camera = Camera.main;
         var poseModeOn = UmaViewerUI.Instance.PoseManager.PoseModeOn;
-
         if (Input.GetKeyDown(KeyCode.Space))
         {
             IKMode = !IKMode;
@@ -52,6 +51,7 @@ public class HandleManager : MonoBehaviour
                             effector.target.localRotation = Quaternion.identity;
                         }
                     }
+
                     ik.solver.StoreDefaultLocalState();
                     ik.enabled = true;
                 }
@@ -64,13 +64,12 @@ public class HandleManager : MonoBehaviour
                     ik.enabled = false;
                 }
             }
-        };
+        }
 
         foreach (var handle in AllHandles)
         {
             handle.ForceDisplayOff(!poseModeOn);
             handle.UpdateManual(camera, EnabledLines && !IKMode);
-
             if (handle.Popup.gameObject.activeInHierarchy)
             {
                 handle.Popup.UpdateManual(camera);
@@ -81,7 +80,6 @@ public class HandleManager : MonoBehaviour
     public static void RegisterHandle(UIHandle handle)
     {
         var hm = UmaViewerUI.Instance.HandleManager;
-        
         if (hm.AllHandles.Contains(handle))
         {
             return;
@@ -93,7 +91,6 @@ public class HandleManager : MonoBehaviour
     public static void UnregisterHandle(UIHandle handle)
     {
         var hm = UmaViewerUI.Instance.HandleManager;
-
         if (!hm.AllHandles.Contains(handle))
         {
             return;
@@ -105,8 +102,7 @@ public class HandleManager : MonoBehaviour
     public static void CloseAllPopups()
     {
         var hm = UmaViewerUI.Instance.HandleManager;
-
-        foreach(var handle in hm.AllHandles)
+        foreach (var handle in hm.AllHandles)
         {
             if (handle.Popup.gameObject.activeInHierarchy)
             {

@@ -23,56 +23,59 @@ public class MirrorReflection : MonoBehaviour
     private const float MIRROR_CAMERA_FOV_MAX = 179f;
     private const float MIRROR_TEXTURE_SIZE_RATE_MIN = 0.01f;
     private const int MIRROR_CAMERA_DEPTH_OFFSET = -100;
-    private const float MIRROR_PROJECTION_DEGENERATE_EPSILON = 1e-7f;
 
     private static readonly Vector4 DEFAULT_DIST_POWER_VALUE = Vector4.zero;
     private static readonly Vector4 DEFAULT_DIST_MAP_TILE_OFFSET_VALUE = new Vector4(1f, 1f, 0f, 0f);
 
     [Header("镜面基础设置")]
-    [SerializeField] private LayerMask _renderLayers = ~0;
-    [SerializeField] private int _mirrorTextureSize = 1024;
-    [SerializeField] private float _mirrorCliipPlaneOffset = 0.07f;
+    [SerializeField] private LayerMask _renderLayers = (1 << 8) | (1 << 12) | (1 << 13);
+    [SerializeField] private int _mirrorTextureSize = 256;
+    [SerializeField] private float _mirrorCliipPlaneOffset = 0f;
     [SerializeField] private Camera _baseCamera;
-    [SerializeField] private float _mirrorReflectionRate = 0f;
+    [SerializeField] private float _mirrorReflectionRate = 1f;
     [SerializeField] private Vector4 _mirrorDistortionTileOffset = DEFAULT_DIST_MAP_TILE_OFFSET_VALUE;
-    [SerializeField] private Vector4 _mirrorDistortionPower = DEFAULT_DIST_POWER_VALUE;
+    [SerializeField] private Vector4 _mirrorDistortionPower = new Vector4(1f, 1f, 0f, 0f);
     [SerializeField] private Direction _direction = Direction.Up;
     [SerializeField] private Color _mirrorReflectionColor = Color.white;
     [SerializeField] private Color _backgroundColor = Color.black;
-    [SerializeField] private bool _useBackgroundColor = false;
+    [SerializeField] private bool _useBackgroundColor = true;
 
+    // Authored field order below follows Gallop.MirrorReflection field offsets
+    // from the original assembly. Unity's MonoScript properties hash depends
+    // on this layout; changing it makes the serialized prefab component appear
+    // as a missing script and forces the auto-attach fallback.
     [Header("材质贴图大小")]
     [SerializeField] private bool _useMirrorTextureScale = false;
     [SerializeField] private float _mirrorTextureScaleForBaseCamera = 1f;
-    [SerializeField] private bool _isUseBaseCameraTextureSize = false;
 
     [Header("Runtime State")]
-    [SerializeField] private bool _isEnabledMirrorCamera = true;
-    [SerializeField] private bool _isEnabled = true;
-    [SerializeField] private int _mirrorIndex = -1;
-    [SerializeField] private bool _autoInitialize = true;
-    [SerializeField] private bool _autoFindBaseCamera = true;
-    [SerializeField] private bool _logDebug = false;
+    private Transform _baseCameraTransform;
+    private Transform _transform;
+    private Camera _mirrorCamera;
+    private Gallop.RenderPipeline.CameraData _mirrorCameraData;
+    private bool _isEnabledMirrorCamera = true;
+    private Transform _mirrorCameraTransform;
+    private RenderTexture _mirrorTexture;
+    private int _oldMirrorTextureSize = -1;
+    private Renderer _receivedMirrorMeshRenderer;
+    private LayerMask _finalRenderLayers = ~0;
+    private int _objectLayer;
+    private bool _isInitialized;
+    private Material[] _materials;
+    private bool _isEnabled = true;
+    private int _mirrorIndex = -1;
+    private bool _isUseBaseCameraTextureSize = false;
+    private Vector4 _clipPlane;
+    private int _beginRenderCRPId;
+    private Vector4 _initMirrorDistortionPower = DEFAULT_DIST_POWER_VALUE;
+    private Vector4 _initMirrorDistortionTileOffset = DEFAULT_DIST_MAP_TILE_OFFSET_VALUE;
+    private float _oldMirrorTextureScaleForBaseCamera = -1f;
 
-    [Header("Debug 和Fallback备选")]
-    [SerializeField] private bool _legacyBuiltInFallback = false;
-
-    [SerializeField, HideInInspector] private Transform _baseCameraTransform;
-    [SerializeField, HideInInspector] private Transform _transform;
-    [SerializeField, HideInInspector] private Camera _mirrorCamera;
-    [SerializeField, HideInInspector] private Transform _mirrorCameraTransform;
-    [SerializeField, HideInInspector] private RenderTexture _mirrorTexture;
-    [SerializeField, HideInInspector] private int _oldMirrorTextureSize = -1;
-    [SerializeField, HideInInspector] private Renderer _receivedMirrorMeshRenderer;
-    [SerializeField, HideInInspector] private Material[] _materials;
-    [SerializeField, HideInInspector] private LayerMask _finalRenderLayers = ~0;
-    [SerializeField, HideInInspector] private int _objectLayer;
-    [SerializeField, HideInInspector] private bool _isInitialized;
-    [SerializeField, HideInInspector] private Vector4 _clipPlane;
-    [SerializeField, HideInInspector] private Vector4 _initMirrorDistortionPower = DEFAULT_DIST_POWER_VALUE;
-    [SerializeField, HideInInspector] private Vector4 _initMirrorDistortionTileOffset = DEFAULT_DIST_MAP_TILE_OFFSET_VALUE;
-    [SerializeField, HideInInspector] private float _oldMirrorTextureScaleForBaseCamera = -1f;
-
+    // Not serialized by native MirrorReflection; kept as host controls only.
+    private bool _autoInitialize = true;
+    private bool _autoFindBaseCamera = true;
+    private bool _logDebug = false;
+    private bool _legacyBuiltInFallback = false;
 
     private Func<float> _getBaseCameraFovFactor;
     private Action<MirrorReflection> OnPreDraw;
@@ -180,6 +183,8 @@ public class MirrorReflection : MonoBehaviour
     private void OnEnable()
     {
         _isEnabled = true;
+        RenderPipelineManager.beginCameraRendering += OnBeginMirrorCamera;
+        RenderPipelineManager.endCameraRendering += OnEndMirrorCamera;
 
         if (_autoInitialize && !_isInitialized)
         {
@@ -198,9 +203,11 @@ public class MirrorReflection : MonoBehaviour
     private void OnDisable()
     {
         _isEnabled = false;
+        RenderPipelineManager.beginCameraRendering -= OnBeginMirrorCamera;
+        RenderPipelineManager.endCameraRendering -= OnEndMirrorCamera;
+        if (_mirrorCamera != null) _mirrorCamera.enabled = false;
         LifecycleOwner?.RestoreMirrorActorLayers(_mirrorCamera);
         RestoreMirrorObjectLayers();
-        ClearMirrorMaterialBindingOnDisable();
     }
 
     private void LateUpdate()
@@ -223,11 +230,76 @@ public class MirrorReflection : MonoBehaviour
         if (_baseCamera == null || _mirrorCamera == null || _baseCameraTransform == null)
             return;
 
-        // Director submits once after the timeline and presentation camera pose settle.
+        PrepareAutomaticRender();
+    }
+
+    // Native MirrorReflection.LateUpdate keeps the mirror Camera enabled and
+    // lets the render pipeline render it as a normal camera. The original
+    // implementation updates the RT/projection in OnBeginRender; doing it here
+    // is the managed equivalent for the URP camera loop.
+    public void PrepareAutomaticRender()
+    {
+        if (!isActiveAndEnabled || !_isEnabled || !_isEnabledMirrorCamera)
+        {
+            if (_mirrorCamera != null) _mirrorCamera.enabled = false;
+            return;
+        }
+        if (!_isInitialized)
+        {
+            if (_autoInitialize) TryAutoInitializeIfPossible();
+            if (!_isInitialized) { if (_mirrorCamera != null) _mirrorCamera.enabled = false; return; }
+        }
+        if (_isRenderingNow) return;
+        if (_baseCamera == null || _mirrorCamera == null || _baseCameraTransform == null)
+        {
+            _mirrorCamera.enabled = false;
+            return;
+        }
+        if (_receivedMirrorMeshRenderer == null || !_receivedMirrorMeshRenderer.enabled)
+        {
+            _mirrorCamera.enabled = false;
+            return;
+        }
+
+        UpdateRenderTexture();
+        UpdateMirrorParams();
+        if (!IsBaseCameraInFrontOfMirror())
+        {
+            _mirrorCamera.enabled = false;
+            return;
+        }
+        UpdateProjectionMatrix();
+        _mirrorCamera.enabled = true;
+    }
+
+    private void OnBeginMirrorCamera(ScriptableRenderContext context, Camera camera)
+    {
+        if (camera != _mirrorCamera || _mirrorCamera == null) return;
+        if (!_isEnabled || !_isEnabledMirrorCamera) return;
+        if (!_isInitialized) return;
+
+        // Native OnBeginRender refreshes the mirror projection immediately
+        // before the camera's draw, after the presentation camera has settled.
+        _isRenderingNow = true;
+        UpdateRenderTexture();
+        UpdateMirrorParams();
+        UpdateProjectionMatrix();
+        _beginCameraRenderingCallbacks?.Invoke(context, _mirrorCamera);
+    }
+
+    private void OnEndMirrorCamera(ScriptableRenderContext context, Camera camera)
+    {
+        if (camera != _mirrorCamera || _mirrorCamera == null) return;
+        if (!_isRenderingNow) return;
+        _endCameraRenderingCallbacks?.Invoke(context, _mirrorCamera);
+        _isRenderingNow = false;
     }
 
     private void OnDestroy()
     {
+        RenderPipelineManager.beginCameraRendering -= OnBeginMirrorCamera;
+        RenderPipelineManager.endCameraRendering -= OnEndMirrorCamera;
+        if (_mirrorCamera != null) _mirrorCamera.enabled = false;
         LifecycleOwner?.ReleaseMirrorReflection(this);
         RestoreMirrorObjectLayers();
         ReleaseMirrorTexture();
@@ -321,6 +393,25 @@ public class MirrorReflection : MonoBehaviour
             return;
 
         Initialize(_baseCamera, _mirrorIndex, _isUseBaseCameraTextureSize);
+    }
+
+    // Restores the authored prefab fields recovered from the original stage
+    // bundle. Called by StageController before Initialize.
+    internal void ApplyPrefabRow(MirrorReflectionPrefabTable.Row row)
+    {
+        if (row == null) return;
+        _mirrorTextureSize = row.TextureSize;
+        _mirrorCliipPlaneOffset = row.Clip;
+        _mirrorReflectionRate = row.Rate;
+        _mirrorDistortionTileOffset = new Vector4(row.DistTile[0], row.DistTile[1], row.DistTile[2], row.DistTile[3]);
+        _mirrorDistortionPower = new Vector4(row.DistPower[0], row.DistPower[1], row.DistPower[2], row.DistPower[3]);
+        _direction = (Direction)row.Direction;
+        _mirrorReflectionColor = new Color(row.ReflectionColor[0], row.ReflectionColor[1], row.ReflectionColor[2], row.ReflectionColor[3]);
+        _backgroundColor = new Color(row.Background[0], row.Background[1], row.Background[2], row.Background[3]);
+        _useBackgroundColor = row.UseBackground;
+        _useMirrorTextureScale = row.UseScale;
+        _mirrorTextureScaleForBaseCamera = row.Scale;
+        _renderLayers = row.Layers;
     }
 
     public void Initialize(Camera baseCamera, int mirrorIndex = -1, bool isUseBaseCameraTextureSize = false)
@@ -483,9 +574,17 @@ public class MirrorReflection : MonoBehaviour
     {
         // Native RVA 0x19b7f90 writes CameraData.MirrorCasterQuality (0/1).
         // GallopRenderer replaces both forward queues with SimpleMirrorCaster
-        // when quality is 1; renderer slot 1 is installed by LiveRenderSetup.
+        // when quality is 1; renderer slot 3 is the independent Gallop mirror renderer.
         if (_mirrorCamera != null)
-            _mirrorCamera.GetUniversalAdditionalCameraData().SetRenderer(isEnable ? 1 : -1);
+        {
+            var owner = _mirrorCameraData != null
+                ? _mirrorCameraData
+                : _mirrorCamera.GetComponent<Gallop.RenderPipeline.CameraData>();
+            if (owner != null) owner.MirrorCasterQuality = isEnable ? 1 : 0;
+            // Native SetLightMirrorShader 0x3faa590 writes only
+            // CameraData.MirrorCasterQuality (+0xdc). It does not select a
+            // renderer slot here; GallopRenderer consumes the quality flag.
+        }
     }
 
     public void SetMirrorVisibleOfficialStyle(bool visible, bool pauseRenderWhenHidden = true)
@@ -515,7 +614,10 @@ public class MirrorReflection : MonoBehaviour
         ApplyMaterialParams();
 
         if (pauseRenderWhenHidden)
+        {
             _isEnabledMirrorCamera = false;
+            if (_mirrorCamera != null) _mirrorCamera.enabled = false;
+        }
     }
 
     public void RemakeMirrorTexture()
@@ -581,6 +683,41 @@ public class MirrorReflection : MonoBehaviour
         go.hideFlags = HideFlags.DontSave;
 
         _mirrorCamera = go.GetComponent<Camera>();
+        // Original CreateMirrorCamera 0x4a8acd0 explicitly adds FlareLayer.
+        Gallop.RenderPipeline.NativeLensFlareCameraRegistry.RestoreSerializedFlareLayer(_mirrorCamera);
+        // Installed MirrorReflection.CreateMirrorCamera 0x3ee2950 sets CameraData+d9.
+        // This selects the native flare event549 before mirror post-processing.
+        _mirrorCameraData = go.AddComponent<Gallop.RenderPipeline.CameraData>();
+        _mirrorCameraData.IsMirrorRendering = true;
+        // Current native CreateMirrorCamera 0x3fa8bf1 initializes quality to 1.
+        // A timeline's IsToonMirror can subsequently select the full caster.
+        _mirrorCameraData.MirrorCasterQuality = 1;
+        // Native OnBeginRender re-culls with the reflected camera and publishes
+        // its matrices before drawing. URP14 culls before render passes, so the
+        // begin-camera callback prepares culling and GallopBeforePass publishes
+        // the same matrices after SetupCameraProperties.
+        _mirrorCameraData.ForceViewProjectionMatrix = true;
+        // Native CreateMirrorCamera explicitly enables the mirror blur:
+        // ImageEffectParameter.BlurOptimized (+0x150/+0x24):
+        // IsEnable=1, Downsample=0, BlurSize=1.0, BlurIterations=1.
+        var blur = _mirrorCameraData.Parameter.BlurOptimize;
+        blur.IsEnable = true;
+        blur.Downsample = 0;
+        blur.BlurSize = 1f;
+        blur.BlurIterations = 1;
+        _mirrorCameraData.Parameter.BlurOptimize = blur;
+        // A runtime-created Camera needs URP's additional camera data before
+        // the camera loop will submit it. Native CreateMirrorCamera creates the
+        // same camera data stack; without this the enabled mirror camera never
+        // reaches beginCameraRendering and its RenderTexture stays unwritten.
+        var urpCamera = go.AddComponent<UniversalAdditionalCameraData>();
+        urpCamera.renderType = CameraRenderType.Base;
+        urpCamera.renderPostProcessing = false;
+        urpCamera.renderShadows = false;
+        // Native CreateMirrorCamera does not select a renderer slot. It keeps
+        // the pipeline default (GallopRenderer, slot 2), because that renderer
+        // owns "Gallop Live Post Effects" and therefore the mirror blur pass.
+        // GallopSimpleMirrorRenderer (slot 3) has no PostImageEffectFeature.
         _mirrorCameraTransform = go.transform;
 
         _mirrorCameraTransform.SetParent(_transform, true);
@@ -591,7 +728,7 @@ public class MirrorReflection : MonoBehaviour
         _mirrorCamera.allowHDR = false;
         _mirrorCamera.allowMSAA = false;
         _mirrorCamera.enabled = false;
-        _mirrorCamera.depth = (_baseCamera != null ? _baseCamera.depth : 0f) + MIRROR_CAMERA_DEPTH_OFFSET;
+        _mirrorCamera.depth = MIRROR_CAMERA_DEPTH_OFFSET;
         _mirrorCamera.clearFlags = CameraClearFlags.Color;
         _mirrorCamera.cullingMask = _finalRenderLayers;
         _mirrorCamera.stereoTargetEye = StereoTargetEyeMask.None;
@@ -601,64 +738,61 @@ public class MirrorReflection : MonoBehaviour
 
     private Vector2Int GetRenderTextureSize()
     {
-        int refWidth = 0;
-        int refHeight = 0;
+        // Host equivalent of GraphicSettings.GetVirtualResolution3D: the Live
+        // presentation surface, independent of a selected monitor/base camera.
+        var presentation = Live.Director.instance != null ? Live.Director.instance.MainRenderCamera : _baseCamera;
+        var surface = presentation != null ? presentation.targetTexture : null;
+        var virtualSize = surface != null ? new Vector2Int(surface.width, surface.height)
+            : presentation != null ? new Vector2Int(presentation.pixelWidth, presentation.pixelHeight)
+            : new Vector2Int(Screen.width, Screen.height);
+        var baseTexture = _baseCamera != null ? _baseCamera.targetTexture : null;
+        return CalculateRenderTextureSize(virtualSize, _mirrorTextureSize, _useMirrorTextureScale,
+            _mirrorCamera != null && _mirrorCamera.allowMSAA, _isUseBaseCameraTextureSize,
+            baseTexture != null ? new Vector2Int(baseTexture.width, baseTexture.height) : Vector2Int.zero,
+            _mirrorTextureScaleForBaseCamera);
+    }
 
-        if (_baseCamera != null && _baseCamera.targetTexture != null)
+    // GetRenderTextureSize 0x3fa8d90. Fixed size is a 16:9 reference width;
+    // scale mode uses thousandths, and every branch retains the final +1 row.
+    internal static Vector2Int CalculateRenderTextureSize(Vector2Int virtualSize, int size,
+        bool scaleMode, bool msaa, bool useBaseTexture, Vector2Int baseSize, float baseScale)
+    {
+        if (msaa) { scaleMode = true; size = 1000; baseScale = 1f; }
+        int width, height;
+        if (useBaseTexture && baseSize.x > 0 && baseSize.y > 0)
         {
-            refWidth = Mathf.Max(1, _baseCamera.targetTexture.width);
-            refHeight = Mathf.Max(1, _baseCamera.targetTexture.height);
+            // Native falls back to full size below the minimum accepted rate.
+            float scale = baseScale < MIRROR_TEXTURE_SIZE_RATE_MIN ? 1f : baseScale;
+            width = Mathf.FloorToInt(baseSize.x * scale);
+            height = Mathf.FloorToInt(baseSize.y * scale);
         }
-        else if (_baseCamera != null)
+        else if (scaleMode)
         {
-            refWidth = Mathf.Max(1, _baseCamera.pixelWidth);
-            refHeight = Mathf.Max(1, _baseCamera.pixelHeight);
+            width = Mathf.FloorToInt((float)unchecked(virtualSize.x * size) / 1000f);
+            height = Mathf.FloorToInt((float)unchecked(virtualSize.y * size) / 1000f);
         }
         else
         {
-            refWidth = Mathf.Max(1, Screen.width);
-            refHeight = Mathf.Max(1, Screen.height);
+            height = Mathf.FloorToInt((float)size * 720f / 1280f);
+            width = Mathf.FloorToInt((float)unchecked(height * virtualSize.x) / virtualSize.y);
         }
-
-        if (_isUseBaseCameraTextureSize)
-            return new Vector2Int(refWidth, refHeight);
-
-        if (_useMirrorTextureScale)
-        {
-            float scale = Mathf.Max(MIRROR_TEXTURE_SIZE_RATE_MIN, _mirrorTextureScaleForBaseCamera);
-            return new Vector2Int(
-                Mathf.Max(1, Mathf.RoundToInt(refWidth * scale)),
-                Mathf.Max(1, Mathf.RoundToInt(refHeight * scale))
-            );
-        }
-
-        int longSide = Mathf.Max(1, _mirrorTextureSize);
-
-        if (refWidth >= refHeight)
-        {
-            int h = Mathf.Max(1, Mathf.RoundToInt(longSide * (float)refHeight / refWidth));
-            return new Vector2Int(longSide, h);
-        }
-        else
-        {
-            int w = Mathf.Max(1, Mathf.RoundToInt(longSide * (float)refWidth / refHeight));
-            return new Vector2Int(w, longSide);
-        }
+        return new Vector2Int(width, height + 1);
     }
 
     private void UpdateRenderTexture()
     {
+        Vector2Int size = GetRenderTextureSize();
         bool needRebuild =
             _mirrorTexture == null ||
             _oldMirrorTextureSize != _mirrorTextureSize ||
-            !Mathf.Approximately(_oldMirrorTextureScaleForBaseCamera, _mirrorTextureScaleForBaseCamera);
+            !Mathf.Approximately(_oldMirrorTextureScaleForBaseCamera, _mirrorTextureScaleForBaseCamera) ||
+            _mirrorTexture.width != size.x || _mirrorTexture.height != size.y;
 
         if (!needRebuild)
             return;
 
         ReleaseMirrorTexture();
 
-        Vector2Int size = GetRenderTextureSize();
         _oldMirrorTextureScaleForBaseCamera = _mirrorTextureScaleForBaseCamera;
 
         _mirrorTexture = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32)
@@ -666,7 +800,7 @@ public class MirrorReflection : MonoBehaviour
             name = TEXTURE_NAME,
             hideFlags = HideFlags.DontSave,
             useMipMap = false,
-            autoGenerateMips = false
+            autoGenerateMips = false,
         };
 
         _mirrorTexture.Create();
@@ -695,16 +829,6 @@ public class MirrorReflection : MonoBehaviour
             if (mat.HasProperty(PID_ReflectionTex))
                 mat.SetTexture(PID_ReflectionTex, tex);
         }
-    }
-
-    private void ClearMirrorMaterialBindingOnDisable()
-    {
-        _mirrorReflectionRate = 0f;
-        ApplyMaterialParams();
-        SetMirrorTextureOnMaterials(null);
-
-        if (_mirrorCamera != null)
-            _mirrorCamera.targetTexture = null;
     }
 
     private void UpdateMirrorTexture()
@@ -839,7 +963,6 @@ public class MirrorReflection : MonoBehaviour
         Vector3 reflectedBasePos = reflectionMat.MultiplyPoint(_baseCameraTransform.position);
 
         _mirrorCamera.worldToCameraMatrix = _baseCamera.worldToCameraMatrix * reflectionMat;
-        _mirrorCamera.cullingMatrix = _baseCamera.cullingMatrix * reflectionMat;
 
         Vector3 offsetPlanePos = planePos + normal * _mirrorCliipPlaneOffset;
         Matrix4x4 mirrorWorldToCamera = _mirrorCamera.worldToCameraMatrix;
@@ -857,6 +980,9 @@ public class MirrorReflection : MonoBehaviour
             Matrix4x4 projection = _baseCamera.projectionMatrix;
             CalculateObliqueMatrix(ref projection, _clipPlane);
             _mirrorCamera.projectionMatrix = projection;
+            // Original 0x3ee539e..0x3ee53d5 culls using the final oblique
+            // projection, not the base camera's unclipped culling matrix.
+            _mirrorCamera.cullingMatrix = projection * mirrorWorldToCamera;
         }
         finally
         {
@@ -865,6 +991,8 @@ public class MirrorReflection : MonoBehaviour
         }
 
         _mirrorCameraTransform.position = reflectedBasePos;
+        // Native 0x3fab3a1 sets only Transform pitch to zero. The reflected view
+        // and oblique projection above remain authoritative for rendering.
         Vector3 baseEuler = _baseCameraTransform.eulerAngles;
         _mirrorCameraTransform.eulerAngles = new Vector3(0f, baseEuler.y, baseEuler.z);
     }
@@ -916,27 +1044,6 @@ public class MirrorReflection : MonoBehaviour
         reflectionMat.m33 = 1f;
     }
 
-    // La matriz oblícua se degenera cuando el plano de recorte acaba pasando por el origen de la
-    // cámara del espejo: la fila de profundidad queda a cero y el reflejo de ese frame es
-    // inservible. Además Unity falla al calcular el plano lejano de una cámara con projectionMatrix
-    // propia en ese estado ("Screen position out of view frustum"), así que ese frame no se envía.
-    private bool IsMirrorProjectionDegenerate()
-    {
-        if (_mirrorCamera == null)
-            return true;
-
-        Matrix4x4 projection = _mirrorCamera.projectionMatrix;
-        for (int i = 0; i < 16; i++)
-        {
-            float value = projection[i];
-            if (float.IsNaN(value) || float.IsInfinity(value))
-                return true;
-        }
-
-        return Mathf.Abs(projection.m22) < MIRROR_PROJECTION_DEGENERATE_EPSILON &&
-               Mathf.Abs(projection.m23) < MIRROR_PROJECTION_DEGENERATE_EPSILON;
-    }
-
     private bool TrySubmitSingleCameraRequest()
     {
         if (_mirrorCamera == null || _mirrorTexture == null)
@@ -980,16 +1087,12 @@ public class MirrorReflection : MonoBehaviour
 
             UpdateProjectionMatrix();
 
-            if (IsMirrorProjectionDegenerate())
-            {
-                Log("ForceRenderOnce skipped: degenerate oblique projection matrix.");
-                return;
-            }
-
             OnPreDraw?.Invoke(this);
             _beginCameraRenderingCallbacks?.Invoke(default, _mirrorCamera);
 
-            GL.invertCulling = !oldInvert;
+            // GallopRenderer enqueues the native invert pair itself.
+            bool gallopOwnsCulling = _mirrorCamera.GetUniversalAdditionalCameraData().scriptableRenderer is Gallop.RenderPipeline.GallopRenderer;
+            if (!gallopOwnsCulling) GL.invertCulling = !oldInvert;
             if (!TrySubmitSingleCameraRequest())
                 _mirrorCamera.Render();
         }

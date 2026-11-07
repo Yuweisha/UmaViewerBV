@@ -1,9 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
-using TMPro;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEngine.UI;
+using Toggle=UnityEngine.UI.Toggle;
 
 public class LiveViewerUI : MonoBehaviour
 {
@@ -11,17 +11,9 @@ public class LiveViewerUI : MonoBehaviour
 
     public UnityEngine.UI.Slider ProgressBar;
 
-    //(Tiempo del live) Etiquetas que sustituyen al antiguo texto "ProgressSeconds" creado por codigo:
-    //muestran el tiempo actual de la cancion y su duracion total. Son OPCIONALES: si el YAML no las
-    //deja cableadas, se descubren en Awake por nombre dentro de Canvas/Trigger/Bottom/Slider.
-    public TMP_Text CurrentTimeLabel;
-    public TMP_Text TotalTimeLabel;
-
     public RectTransform BottonUITransform;
 
-    //(Live: los controles de ajustes graficos viven en la escena `LiveScene`; este componente los
-    //rellena y cablea. Ver LiveGraphicsSettingsUI.cs.)
-    public LiveGraphicsSettingsUI GraphicsSettings;
+    public Dropdown FrameRateDropDown;
 
     public GameObject RecordingUI;
 
@@ -31,260 +23,221 @@ public class LiveViewerUI : MonoBehaviour
 
     public List<UmaLyricsData> CurrentLyrics = new List<UmaLyricsData>();
 
-    private int _displayedCurrentSecond = -1;
-    private int _displayedTotalSecond = -1;
+    private UnityEngine.UI.Text progressSeconds;
+    private int displayedCurrentTenth = -1;
+    private int displayedTotalTenth = -1;
 
     float targetHeight = 0;
     float height;
-    // (VIDEO SPEED) Momento (reloj de pared) en el que la barra se oculta sola.
-    float _hideAtUnscaledTime = -1f;
+    bool playbackPaused;
+    bool cursorHidden;
     private void Awake()
     {
         if (Config.Instance == null)
         {
             new Config();
         }
-        //(Los controles de ajustes graficos ya existen en la escena: aqui solo se rellenan.)
-        if (GraphicsSettings != null) GraphicsSettings.Apply();
-        RuntimeGraphicsSettings.ApplyLiveRenderScale();
-        UmaViewerMain.ApplyFrameRateLimitLive();
+        // Graphics controls live in the main settings panel.
+        if(FrameRateDropDown!=null)FrameRateDropDown.transform.parent.gameObject.SetActive(false);
+        RuntimeGraphicsSettings.Apply();
+        UmaViewerMain.ApplyFrameRateLimit();
 
         height = BottonUITransform.rect.height;
         targetHeight = 0;
-        _hideAtUnscaledTime = Time.unscaledTime + 1.5f;
+        Invoke(nameof(HideSlider), 1.5f);
         Instance = this;
-
-        // Se descubren las etiquetas de tiempo de la barra si el YAML no las deja cableadas.
-        if (CurrentTimeLabel == null) CurrentTimeLabel = FindTimeLabel("CurrentTime");
-        if (TotalTimeLabel == null) TotalTimeLabel = FindTimeLabel("TotalTime");
-
-        //Las etiquetas cuelgan del slider y su rect se sale del rect de la barra (CurrentTime por la
-        //izquierda, justo encima del boton de play/pausa). Con el raycast del texto activo se comian
-        //el click: el evento subia al Slider, que lo interpretaba como un salto a esa posicion de la
-        //barra y, al quedar a la izquierda del relleno, recortaba el valor a 0 (el show volvia al
-        //principio). Son solo texto: se les apaga el raycast para que el click llegue al boton.
-        if (CurrentTimeLabel != null) CurrentTimeLabel.raycastTarget = false;
-        if (TotalTimeLabel != null) TotalTimeLabel.raycastTarget = false;
-
-        // Cablea el boton de salir del live que haya en la escena (el onClick trae un binding roto:
-        //se sustituye entero por la salida real). Si no se encuentra, avisa: el Esc sigue saliendo.
-        WireCancelButton();
-
-        // Overlay de depuración con el frame actual del live, que se enciende y apaga con
-        // Ctrl+Shift+F9. Se monta por código (no en el YAML) y vive en esta escena, que es la que
-        // tiene el Director. Ver LiveFrameDebugOverlay.cs.
-        LiveFrameDebugOverlay.Ensure();
-
-        // Overlay de depuración con los slots de voz del live (qué PJ canta en cada uno y si su
-        // pista está sonando), que se enciende y apaga con Ctrl+F8. Ver LiveVocalDebugOverlay.cs.
-        LiveVocalDebugOverlay.Ensure();
-
-        // (Grabación de pantalla del live) Grabador de clips EN TIEMPO REAL: Ctrl+Shift+Enter
-        // empieza/para un clip de hasta 30 s de lo que se ve. Es independiente del Record offline
-        // de abajo. Ver LiveClipRecorder.cs.
-        LiveClipRecorder.Ensure();
-
-        //(Grabación del live) Si el panel del viewer dejó una grabación pendiente, aquí se arranca el
-        //grabador offline del show. Ver LiveRecordDirector.cs.
-        LiveRecordDirector.TryStart();
+        CreatePlaybackProgress();
+        var subtitleToggle=GetComponentsInChildren<Toggle>(true);
+        foreach(var toggle in subtitleToggle)
+            if(toggle.name=="Lyrics")
+            {
+                toggle.name="Subtitles";
+                toggle.onValueChanged=new Toggle.ToggleEvent();
+                toggle.SetIsOnWithoutNotify(LiveSubtitleSettings.Enabled);
+                var label=toggle.GetComponentInChildren<Text>();
+                if(label!=null)label.text="Subtitles";
+                toggle.onValueChanged.AddListener(value=>LiveSubtitleSettings.SetEnabled(value));
+            }
+        LiveSubtitleSettings.Changed+=RefreshSubtitleToggle;
         //TrueProgressBar = (UnityEngine.UIElements.Slider)ProgressBar;
-    }
-
-    //Busca la etiqueta de tiempo (TMP) dentro del objeto de escena con el nombre dado
-    //("CurrentTime" / "TotalTime", hijos de Canvas/Trigger/Bottom/Slider). Primero por ruta exacta y,
-    //si no, por nombre en toda la escena. Descarta prefabs/assets: solo cuenta lo que esta en una
-    //escena cargada.
-    private TMP_Text FindTimeLabel(string goName)
-    {
-        var go = GameObject.Find("Canvas/Trigger/Bottom/Slider/" + goName);
-        if (go != null)
-        {
-            var t = go.GetComponent<TMP_Text>();
-            if (t == null) t = go.GetComponentInChildren<TMP_Text>(true);
-            if (t != null) return t;
-        }
-
-        foreach (var t in Resources.FindObjectsOfTypeAll<TMP_Text>())
-        {
-            if (t == null) continue;
-            if (!t.gameObject.scene.IsValid()) continue;   //descarta prefabs/assets
-            if (t.gameObject.name == goName) return t;
-            if (t.transform.parent != null && t.transform.parent.name == goName) return t;
-        }
-        return null;
-    }
-
-    //Pinta el tiempo actual y la duracion total de la cancion. La llama Director.Update cada frame
-    //(barato: solo escribe si el segundo mostrado cambia).
-    public void UpdateTimeLabels(float current, float total)
-    {
-        if (CurrentTimeLabel != null)
-        {
-            int s = ToWholeSeconds(current);
-            if (s != _displayedCurrentSecond)
-            {
-                _displayedCurrentSecond = s;
-                CurrentTimeLabel.text = FormatTime(s);
-            }
-        }
-        if (TotalTimeLabel != null)
-        {
-            int s = ToWholeSeconds(total);
-            if (s != _displayedTotalSecond)
-            {
-                _displayedTotalSecond = s;
-                TotalTimeLabel.text = FormatTime(s);
-            }
-        }
-    }
-
-    private static int ToWholeSeconds(float seconds)
-    {
-        if (seconds < 0f || float.IsNaN(seconds) || float.IsInfinity(seconds)) return 0;
-        return Mathf.FloorToInt(seconds);
-    }
-
-    //mm:ss (los minutos no se acotan a 60: un show de 90 min da "90:00").
-    private static string FormatTime(int totalSeconds)
-    {
-        int minutes = totalSeconds / 60;
-        int secs = totalSeconds % 60;
-        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}:{1:00}", minutes, secs);
-    }
-
-    //Cablea el boton de salir del live. Se busca por RUTA exacta y, si no, por nombre en toda la
-    //escena, para no depender de como este escrito. Si no se encuentra, solo avisa: el Esc sigue
-    //saliendo del live.
-    private void WireCancelButton()
-    {
-        var bn = FindCancelButton();
-        if (bn == null)
-        {
-            Debug.LogWarning("[LiveViewerUI] No se encuentra el boton de salir del live: se sale solo con Esc.");
-            return;
-        }
-        //El onClick puede traer llamadas persistentes con target vacio (binding roto). Se sustituye
-        //entero por la salida real del live.
-        bn.onClick = new UnityEngine.UI.Button.ButtonClickedEvent();
-        bn.onClick.AddListener(OnExitLiveButtonClick);
-
-        //El boton de salir tambien cuelga del slider: se le corta el arrastre para que pulsarlo no
-        //mueva la barra de progreso. Ver SliderDragBlocker.cs.
-        SliderDragBlocker.Ensure(bn.gameObject);
-    }
-
-    //Busca el Button de salir del live. Primero por ruta exacta (su sitio en LiveScene.unity) y, si
-    //no, por nombre. Descarta prefabs/assets: solo cuenta lo que esta en una escena cargada.
-    private UnityEngine.UI.Button FindCancelButton()
-    {
-        string[] names = { "CancelButtton", "CancelButton", "ExitButtton", "ExitButton" };
-        string[] parents = { "Canvas/Trigger/Bottom/Slider/", "Canvas/Trigger/Bottom/" };
-
-        //1) Ruta exacta.
-        foreach (var parentPath in parents)
-        {
-            foreach (var n in names)
-            {
-                var go = GameObject.Find(parentPath + n);
-                if (go == null) continue;
-                var b = go.GetComponent<UnityEngine.UI.Button>();
-                if (b != null) return b;
-            }
-        }
-
-        //2) Por nombre, en cualquier parte de las escenas cargadas (incluye inactivos).
-        foreach (var b in Resources.FindObjectsOfTypeAll<UnityEngine.UI.Button>())
-        {
-            if (b == null) continue;
-            if (!b.gameObject.scene.IsValid()) continue;   //descarta prefabs/assets
-            var goName = b.gameObject.name;
-            foreach (var n in names)
-            {
-                if (goName == n) return b;
-            }
-        }
-        return null;
-    }
-
-    //Sale del live igual que Esc: pide la salida al Director, que es quien hace el cambio de escena
-    //(Director.ExitLive es privado; RequestExit es el punto de entrada publico).
-    public void OnExitLiveButtonClick()
-    {
-        var director = Gallop.Live.Director.instance;
-        if (director == null)
-        {
-            //Respaldo: por si el singleton no estuviera asignado, se busca el componente en escena.
-            director = UnityEngine.Object.FindObjectOfType<Gallop.Live.Director>();
-        }
-        if (director != null)
-        {
-            director.RequestExit();
-        }
-        else
-        {
-            Debug.LogWarning("[LiveViewerUI] No hay Director en escena: no se puede salir del live con el boton.");
-        }
-    }
-
-    public void OnMouse(bool isEnter)
-    {
-        if (isEnter)
-        {
-            targetHeight = 0;
-            _hideAtUnscaledTime = -1f;
-        }
-        else
-        {
-            _hideAtUnscaledTime = Time.unscaledTime + 2.5f;
-        }
     }
 
     private void Update()
     {
-        // (VIDEO SPEED) La barra se anima con tiempo SIN escalar: si el live va a camara lenta
-        // (Time.timeScale < 1) mostrar/ocultar debe seguir siendo inmediato.
-        float t = 1f - Mathf.Exp(-5.3f * Time.unscaledDeltaTime);
-        BottonUITransform.anchoredPosition = Vector2.Lerp(BottonUITransform.anchoredPosition, new Vector2(0, targetHeight), t);
-
-        // El auto-ocultado tambien va por reloj de pared, no por tiempo escalado.
-        if (_hideAtUnscaledTime >= 0f && Time.unscaledTime >= _hideAtUnscaledTime)
+        var director = Gallop.Live.Director.instance;
+        if (director == null || !director._isLiveSetup)
         {
-            _hideAtUnscaledTime = -1f;
-            HideSlider();
+            RestoreCursor();
+            playbackPaused = false;
+            return;
         }
+
+        // Space owns the persistent playback state. Pointer events only seek.
+        if (!director.IsOfflineRendering && Input.GetKeyDown(KeyCode.Space))
+        {
+            director.sliderControl?.TogglePause();
+        }
+
+        bool paused = director.IsPlaybackPaused ||
+            (director.sliderControl != null && director.sliderControl.is_Touched);
+        if (paused == playbackPaused) return;
+        playbackPaused = paused;
+        ApplyPlaybackVisibility(paused);
+    }
+
+    private void ApplyPlaybackVisibility(bool paused)
+    {
+        CancelInvoke();
+        targetHeight = paused ? 0f : -height;
+        UnityEngine.Cursor.lockState = paused ? CursorLockMode.None : CursorLockMode.Locked;
+        UnityEngine.Cursor.visible = paused;
+        cursorHidden = !paused;
+    }
+
+    private void RestoreCursor()
+    {
+        if (!cursorHidden && UnityEngine.Cursor.visible) return;
+        UnityEngine.Cursor.lockState = CursorLockMode.None;
+        UnityEngine.Cursor.visible = true;
+        cursorHidden = false;
+    }
+
+    private void OnDisable()
+    {
+        RestoreCursor();
+    }
+
+    private void OnDestroy()
+    {
+        LiveSubtitleSettings.Changed-=RefreshSubtitleToggle;
+        RestoreCursor();
+        if (Instance == this) Instance = null;
+    }
+
+    // The scene reserves 200 canvas units on each side of the progress slider.
+    private void CreatePlaybackProgress()
+    {
+        if (ProgressBar == null || BottonUITransform == null) return;
+        progressSeconds = CreateProgressText("ProgressSeconds", BottonUITransform);
+        var rect = progressSeconds.rectTransform;
+        rect.anchorMin = rect.anchorMax = new Vector2(1, 0.5f);
+        rect.pivot = new Vector2(1, 0.5f);
+        rect.anchoredPosition = new Vector2(-8, 0);
+        rect.sizeDelta = new Vector2(184, 24);
+        progressSeconds.alignment = TextAnchor.MiddleRight;
+        progressSeconds.text = "0.0s / 0.0s";
+
+    }
+
+    private UnityEngine.UI.Text CreateProgressText(string name, RectTransform parent)
+    {
+        var textObject = new GameObject(name, typeof(RectTransform), typeof(UnityEngine.UI.Text));
+        textObject.layer = parent.gameObject.layer;
+        textObject.transform.SetParent(parent, false);
+        var text = textObject.GetComponent<UnityEngine.UI.Text>();
+        text.font = FrameRateDropDown != null && FrameRateDropDown.captionText != null
+            ? FrameRateDropDown.captionText.font : null;
+        if (text.font == null && LyricsText != null) text.font = LyricsText.font;
+        if (text.font == null) text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.fontSize = 16;
+        text.color = Color.white;
+        text.alignment = TextAnchor.MiddleCenter;
+        text.horizontalOverflow = HorizontalWrapMode.Overflow;
+        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.raycastTarget = false;
+        return text;
+    }
+
+
+    private void LateUpdate()
+    {
+        if (progressSeconds == null) return;
+        var director = Gallop.Live.Director.instance;
+        float total = director != null ? director.totalTime : 0f;
+        if (float.IsNaN(total) || float.IsInfinity(total) || total < 0) total = 0;
+        bool seeking = director != null && director.sliderControl != null &&
+            (director.sliderControl.is_Touched || director.sliderControl.is_Outed);
+        float current = director == null ? 0f : seeking
+            ? ProgressBar.normalizedValue * total : director._liveCurrentTime;
+        if (float.IsNaN(current) || float.IsInfinity(current)) current = 0;
+        int currentTenth = Mathf.FloorToInt(Mathf.Clamp(current, 0, total) * 10f);
+        int totalTenth = Mathf.FloorToInt(total * 10f);
+        if (currentTenth == displayedCurrentTenth && totalTenth == displayedTotalTenth) return;
+        displayedCurrentTenth = currentTenth;
+        displayedTotalTenth = totalTenth;
+        progressSeconds.text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "{0:F1}s / {1:F1}s", currentTenth / 10f, totalTenth / 10f);
+
+        // Enforce the playback cursor state after other scene components update;
+        // a transition-only assignment can be overwritten by another cursor user.
+        var live = Gallop.Live.Director.instance;
+        if (live == null || !live._isLiveSetup)
+        {
+            RestoreCursor();
+            return;
+        }
+        if(live.IsOfflineRendering)
+        {
+            UnityEngine.Cursor.visible=true;UnityEngine.Cursor.lockState=CursorLockMode.None;
+            targetHeight=-height;
+            return;
+        }
+        bool paused = live.IsPlaybackPaused ||
+            (live.sliderControl != null && live.sliderControl.is_Touched);
+        UnityEngine.Cursor.visible = paused;
+        UnityEngine.Cursor.lockState = paused ? CursorLockMode.None : CursorLockMode.Locked;
+        targetHeight = paused ? 0f : -height;
+    }
+
+    public void OnMouse(bool isEnter)
+    {
+        // Moving the mouse during playback must never reveal the timeline bar.
+        // While paused the bar remains visible; there is no auto-hide timer.
+        var director = Gallop.Live.Director.instance;
+        bool paused = director != null && director._isLiveSetup &&
+            (director.IsPlaybackPaused ||
+             (director.sliderControl != null && director.sliderControl.is_Touched));
+        CancelInvoke();
+        targetHeight = paused ? 0f : -height;
+    }
+
+    private void FixedUpdate()
+    {
+        BottonUITransform.anchoredPosition = Vector2.Lerp(BottonUITransform.anchoredPosition, new Vector2(0, targetHeight), Time.fixedDeltaTime * 5);
     }
 
     private void HideSlider()
     {
-        targetHeight = -HideDistance();
+        targetHeight = -height;
     }
 
-    //Distancia necesaria para que TODO lo que cuelga de la barra quede por debajo del borde inferior
-    //de la pantalla. No basta con la altura de la propia barra: los textos de tiempo
-    //("CurrentTime"/"TotalTime") son hijos del slider y sobresalen por encima de ella, así que con
-    //sólo '-height' se seguían viendo. Se calcula el borde superior de todos los hijos dentro del
-    //espacio local de la barra (independiente de lo que esté desplazada ahora mismo).
-    private float HideDistance()
+    public void SetFrameRate(int fps)
     {
-        if (BottonUITransform == null) return 0f;
-
-        float top = 0f;
-        var rects = BottonUITransform.GetComponentsInChildren<RectTransform>(true);
-        for (int i = 0; i < rects.Length; i++)
-        {
-            var rt = rects[i];
-            if (rt == null || rt == BottonUITransform) continue;
-            Vector3 corner = BottonUITransform.InverseTransformPoint(
-                rt.TransformPoint(new Vector3(rt.rect.xMin, rt.rect.yMax, 0f)));
-            if (corner.y > top) top = corner.y;
-        }
-
-        return top > 0.01f ? top : height;
+        Config.Instance.TargetFrameRate = UISettingsGraphics.FrameRateAt(fps);
+        Config.Instance.UpdateConfig(false);
+        UmaViewerMain.ApplyFrameRateLimit();
     }
 
-    public void UpdateLyrics(float time)
+    private void ApplyFrameRateOptions()
     {
-        var text = UmaUtility.GetCurrentLyrics(time, CurrentLyrics);
-        LyricsText.text = text;
+        if (FrameRateDropDown == null) return;
+
+        FrameRateDropDown.ClearOptions();
+        FrameRateDropDown.AddOptions(UISettingsGraphics.FrameRateLabels());
+        FrameRateDropDown.SetValueWithoutNotify(UISettingsGraphics.FrameRateIndex());
+        FrameRateDropDown.RefreshShownValue();
+    }
+
+    public void UpdateLyrics(float time, int sheetVariationId)
+    {
+        var text = UmaUtility.GetCurrentLyrics(time, CurrentLyrics, sheetVariationId);
+        if(LyricsText.text!=text)LyricsText.text = text;
+        var director=Gallop.Live.Director.instance;
+        if(director!=null)director.SetLiveSubtitleText(text,LyricsText);
+    }
+    private void RefreshSubtitleToggle(bool enabled)
+    {
+        foreach(var toggle in GetComponentsInChildren<Toggle>(true))
+            if(toggle.name=="Subtitles")toggle.SetIsOnWithoutNotify(enabled);
     }
 }

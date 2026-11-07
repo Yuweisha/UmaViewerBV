@@ -12,6 +12,7 @@ public static class LiveAutoSelection
         public string CostumeId;
         public Sprite Icon;
         public int BodyTypeSub;
+        public int MasterDressId;
     }
 
     // Existing character, body costume and head costume choices are never replaced.
@@ -66,6 +67,8 @@ public static class LiveAutoSelection
 
             if (missingCharacter) slot.CharaEntry = selected.Character;
             if (missingCostume) slot.CostumeId = selected.CostumeId;
+            if (missingCostume || (missingCharacter && slot.CostumeId == selected.CostumeId))
+                slot.MasterDressId = selected.MasterDressId;
             used.Add(slot.CharaEntry.Id);
             if (slot.CharaImage != null)
             {
@@ -99,7 +102,8 @@ public static class LiveAutoSelection
                 if (costume.Icon != null) icon = costume.Icon;
                 break;
             }
-            result[characterId] = new Candidate { CostumeId = costumeId, Icon = icon, BodyTypeSub = subtype };
+            result[characterId] = new Candidate { CostumeId = costumeId, Icon = icon, BodyTypeSub = subtype,
+                MasterDressId = Convert.ToInt32(row["id"]) };
         }
         return result;
     }

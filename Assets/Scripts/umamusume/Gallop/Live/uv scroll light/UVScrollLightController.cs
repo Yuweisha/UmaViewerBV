@@ -90,36 +90,51 @@ namespace Gallop.Live
 
         public void Update()
         {
+            {
             if (_materialArray == null || _materialArray.Length == 0)
                 return;
 
-            float offsetX = _scrollOffsetX + _scrollSpeedX * _elapsedTime;
-            float offsetY = _scrollOffsetY + _scrollSpeedY * _elapsedTime;
-
+            // Complete original Update 0x4f10c50 and RenderUtils consumers keep
+            // shader time, speed and initial offset separate. The original GPU
+            // program combines them; modifying _MainTex_ST is a different input.
+            int color0=ShaderManager.GetPropertyId(ShaderManager.PropertyId._MulColor0);
+            int color1=ShaderManager.GetPropertyId(ShaderManager.PropertyId._MulColor1);
+            int power=ShaderManager.GetPropertyId(ShaderManager.PropertyId._ColorPower);
+            int offsetX=ShaderManager.GetPropertyId(ShaderManager.PropertyId._UVScrollOffsetX);
+            int offsetY=ShaderManager.GetPropertyId(ShaderManager.PropertyId._UVScrollOffsetY);
+            int speedX=ShaderManager.GetPropertyId(ShaderManager.PropertyId._UVScrollX);
+            int speedY=ShaderManager.GetPropertyId(ShaderManager.PropertyId._UVScrollY);
+            int time=ShaderManager.GetPropertyId(ShaderManager.PropertyId._AppTime);
+            int texture=ShaderManager.GetPropertyId(ShaderManager.PropertyId._MainTex);
             for (int i = 0; i < _materialArray.Length; i++)
             {
                 var mat = _materialArray[i];
                 if (mat == null)
                     continue;
 
-                if (mat.HasProperty("_MulColor0"))
-                    mat.SetColor("_MulColor0", _mulColor0);
+                if (mat.HasProperty(color0))
+                    mat.SetColor(color0, _mulColor0);
 
-                if (mat.HasProperty("_MulColor1"))
-                    mat.SetColor("_MulColor1", _mulColor1);
+                if (mat.HasProperty(color1))
+                    mat.SetColor(color1, _mulColor1);
 
-                if (mat.HasProperty("_ColorPower"))
-                    mat.SetFloat("_ColorPower", _colorPower);
+                if (mat.HasProperty(power))
+                    mat.SetFloat(power, _colorPower);
 
-                if (mat.HasProperty("_MainTex"))
-                {
-                    mat.SetTextureOffset("_MainTex", new Vector2(offsetX, offsetY));
-                }
-
-                if (_isEnabledTexture && _texture != null && mat.HasProperty("_MainTex"))
-                    mat.SetTexture("_MainTex", _texture);
+                // Original RenderUtils.SetFloat/SetTexture are unconditional;
+                // only the two colors and power use TrySet* property gates.
+                mat.SetFloat(offsetX, _scrollOffsetX);
+                mat.SetFloat(offsetY, _scrollOffsetY);
+                mat.SetFloat(speedX, _scrollSpeedX);
+                mat.SetFloat(speedY, _scrollSpeedY);
+                mat.SetFloat(time, _elapsedTime);
+                if (_isEnabledTexture && _texture != null)
+                    mat.SetTexture(texture, _texture);
             }
-        }
+        
+            }
+        
+}
 
         public void Release()
         {

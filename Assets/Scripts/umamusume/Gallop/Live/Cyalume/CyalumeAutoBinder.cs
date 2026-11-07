@@ -131,6 +131,10 @@ public class CyalumeAutoBinder : MonoBehaviour
                     ? playbackProvider.gameObject.name
                     : "<null>";
 
+            Debug.Log(
+                $"[CyalumeAutoBinder] Start: musicId={musicId}, " +
+                $"provider={(playbackProvider != null)}@{providerHostName}, " +
+                $"controller={(controller3D != null)}@{controllerHostName}");
         }
 
         yield return controller3D.SetupOfficialLike(forceRebuildOnStart);

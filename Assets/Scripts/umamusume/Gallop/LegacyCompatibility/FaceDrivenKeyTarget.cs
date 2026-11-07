@@ -65,7 +65,7 @@ namespace Gallop
                 {
                     foreach(var particle in dynamicbone.Particles)
                     {
-                        if (!particles.ContainsKey(particle.m_Transform.name)) 
+                        if (!particles.ContainsKey(particle.m_Transform.name))
                             particles.Add(particle.m_Transform.name,particle);
                     }
                 }
@@ -510,7 +510,7 @@ namespace Gallop
                     case BindProperty.BindType.Texture:
                         if (property.Value > 0.01f)
                         {
-                            if (!morph.BindGameObject.activeSelf) morph.BindGameObject.SetActive(true);
+                            morph.BindGameObject.SetActive(true);
                             property.BindMaterial.mainTexture = property.BindTexture;
                             property.BindMaterial.SetFloat(property.PropertyName, property.Value);
                         }
@@ -518,7 +518,7 @@ namespace Gallop
                         {
                             if (morph.BindProperties.Find(p =>p.Value >0) == null)
                             {
-                                if (morph.BindGameObject.activeSelf) morph.BindGameObject.SetActive(false);
+                                morph.BindGameObject.SetActive(false);
                             }
                         }
                         break;
@@ -526,38 +526,22 @@ namespace Gallop
                         property.BindMaterial.SetFloat(property.PropertyName, property.Value);
                         break;
                     case BindProperty.BindType.Select:
-                        // (RENDIMIENTO) SetActive solo si cambia: este bucle corre por morph y frame.
-                        for (int i = 0; i < property.BindPrefabs.Count; i++)
-                        {
-                            var bindGo = property.BindPrefabs[i];
-                            bool want = (int)property.Value == i;
-                            if (bindGo != null && bindGo.activeSelf != want) bindGo.SetActive(want);
-                        }
+                        property.BindPrefabs.ForEach(a => a.SetActive((int)property.Value == property.BindPrefabs.IndexOf(a)));
                         break;
                     case BindProperty.BindType.EyeSelect:
                         var count = property.BindPrefabs.Count / 2;
                         var val = (int)property.Value;
-                        for (int i = 0; i < property.BindPrefabs.Count; i++)
-                        {
-                            var bindGo = property.BindPrefabs[i];
-                            bool want = val + count < property.BindPrefabs.Count && (val == i || val + count == i);
-                            if (bindGo != null && bindGo.activeSelf != want) bindGo.SetActive(want);
-                        }
+                        property.BindPrefabs.ForEach(a =>
+                        a.SetActive(val + count < property.BindPrefabs.Count && (val == property.BindPrefabs.IndexOf(a) || val + count == property.BindPrefabs.IndexOf(a))));
                         break;
                     case BindProperty.BindType.Enable:
                         if(property.BindPrefabs.Count == 1)
                         {
-                            var bindGo = property.BindPrefabs[0];
-                            bool want = property.Value > 0;
-                            if (bindGo != null && bindGo.activeSelf != want) bindGo.SetActive(want);
+                            property.BindPrefabs.ForEach(a => a.SetActive(property.Value > 0));
                         }
                         else if(property.Value <= 0)
                         {
-                            for (int i = 0; i < property.BindPrefabs.Count; i++)
-                            {
-                                var bindGo = property.BindPrefabs[i];
-                                if (bindGo != null && bindGo.activeSelf) bindGo.SetActive(false);
-                            }
+                            property.BindPrefabs.ForEach(a => a.SetActive(false));
                         }
                         break;
                     case BindProperty.BindType.TearSide:
@@ -717,7 +701,7 @@ namespace Gallop
                         {
                             //Debug.Log("No Key Found:" + trs.transform.name);
                         }
-                    }   
+                    }
                 }
             };
             applyRotation.Invoke(BaseLEarMorph.trsArray);
@@ -826,8 +810,8 @@ namespace Gallop
                 Dictionary<LiveTimelineDefine.FacialEyeId, FacialMorph> morphDic = new Dictionary<LiveTimelineDefine.FacialEyeId, FacialMorph>();
                 morphs.ForEach(m => {
                     m.OverrideType = OverrideType.Ignore;
-                    m.overrideWeight = 0; 
-                    morphDic.Add((LiveTimelineDefine.FacialEyeId)m.index, m); 
+                    m.overrideWeight = 0;
+                    morphDic.Add((LiveTimelineDefine.FacialEyeId)m.index, m);
                 });
 
                 foreach (var data in datalist)
@@ -854,7 +838,7 @@ namespace Gallop
                         }
                     }
 
-                    if (!changed && data.IsOnlyBaseReplace) 
+                    if (!changed && data.IsOnlyBaseReplace)
                     {
                         var replacemorph = morphDic[data.BaseReplaceFaceType];
                         replacemorph.overrideWeight += 1;
@@ -874,14 +858,14 @@ namespace Gallop
         public void AlterUpdateAutoLip(LiveTimelineKeyLipSyncData _prevLipKeyData, LiveTimelineKeyLipSyncData keyData_, float liveTime_, float _switch)
         {
             //|| lockMouth
-            
-            
+
+
             if (_switch == 0 || lockMouth)
             {
                 return;
             }
-            
-            
+
+
 
             float weightRatio = CalcMorphWeight(liveTime_, keyData_.speed, keyData_.time, keyData_.interpolateType, keyData_, null);
 
@@ -905,7 +889,7 @@ namespace Gallop
                         MouthMorphs[part.FacialPartsId - 1].weight = 0;
                     }
                 }
-            } 
+            }
 
             foreach (var part in keyData_.facialPartsDataArray)
             {
@@ -1256,10 +1240,10 @@ namespace Gallop
             if (deltaRotation.x > 180) deltaRotation.x -= 360;
             if (deltaRotation.y > 180) deltaRotation.y -= 360;
 
-            var finalRotation = new Vector2(Mathf.Clamp(deltaRotation.y / 35, -1, 1), Mathf.Clamp(-deltaRotation.x / 25, -1, 1));//Limited to the angle of view 
+            var finalRotation = new Vector2(Mathf.Clamp(deltaRotation.y / 35, -1, 1), Mathf.Clamp(-deltaRotation.x / 25, -1, 1));//Limited to the angle of view
 
             return finalRotation;
-            
+
         }
 
         public void SetEyeTrack(Vector2 rotation)

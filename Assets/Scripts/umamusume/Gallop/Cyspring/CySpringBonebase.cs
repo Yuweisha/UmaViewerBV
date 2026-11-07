@@ -12,7 +12,7 @@ namespace Gallop
     /// - 注册最多 16 个碰撞体索引
     /// - 执行重置/结果姿态回写操作
     /// </summary>
-    public class CySpringBoneBase
+    public partial class CySpringBoneBase
     {
         private const int DEFAULT_COLLISION_NUM = 16;
         private const float MIN_BONE_DISTANCE = 0.0001f;
@@ -53,30 +53,11 @@ namespace Gallop
         public bool Exist { get => _exist; set => _exist = value; }
         public bool IsAddSpring => _isAddSpring;
         public bool NeedSimulateEndBone => _needSimulateEndBone;
-
-        // (DIAG) Acceso de solo lectura al estado nativo de este hueso (para diagnosticos del
-        // cargador: coherencia de Aim = (ParentRotation * InitLocalRotation) * BoneAxis).
-        public NativeClothWorking NativeState
-        {
-            get { return GetNative(); }
-        }
         public List<int> CollisionIndexList => _collisionIndexList;
 
         public float StiffnessForce => GetNative().StiffnessForce;
         public float DragForce => GetNative().DragForce;
-        public float CollisionRadius
-        {
-            get => GetNative().CollisionRadius;
-            set
-            {
-                if (_rootBone == null || _rootBone.NativeArray == null || (uint)Index >= (uint)_rootBone.NativeArray.Length)
-                    return;
-
-                NativeClothWorking native = _rootBone.NativeArray[Index];
-                native.CollisionRadius = value;
-                _rootBone.NativeArray[Index] = native;
-            }
-        }
+        public float CollisionRadius => GetNative().CollisionRadius;
         public float Gravity => GetNative().Gravity;
         public float VerticalWindRateSlow => GetNative().VerticalWindRateSlow;
         public float VerticalWindRateFast => GetNative().VerticalWindRateFast;
@@ -445,25 +426,10 @@ namespace Gallop
             if (_dataChildElement != null)
             {
                 List<string> collisionNames = _dataChildElement.CollisionNameList;
-                bool hasOwnCollision = collisionNames != null && collisionNames.Count > 0 && _root != null;
-
-                if (hasOwnCollision)
+                if (collisionNames != null && _root != null)
                 {
                     for (int i = 0; i < collisionNames.Count; i++)
                         AddCollisionIndex(collisionNames[i]);
-                }
-                else if (_rootBone != null && _rootBone.CollisionIndexList != null)
-                {
-                    // (P1, COLISIÓN - T012a) Un hijo que declara un `_childElement` pero con la
-                    // lista de colisiones VACÍA no heredaba los colisores del hueso raíz: el
-                    // `return` de abajo lo dejaba con CERO colisiones. Es el MISMO defecto que en
-                    // DynamicBone (donde el colisor se ataba solo a la partícula raíz, que va
-                    // fijada). En la falda, la raíz `Sp_Hi_MSkirt0_B_00` sí declara sus colisores
-                    // (`Col_B_Hip_MSkirt_B`, etc.) y las partículas hijas se quedaban sin ellos →
-                    // el glúteo sobresalía por detrás. Si el hijo no nombra colisores propios,
-                    // hereda los de la raíz, igual que el camino "sin child element" de abajo.
-                    for (int i = 0; i < _rootBone.CollisionIndexList.Count; i++)
-                        AddCollisionIndex(_rootBone.CollisionIndexList[i]);
                 }
 
                 bool checkEnv = _dataChildElement.CheckEnvCollision;
@@ -510,6 +476,11 @@ namespace Gallop
 
         public void SaveWorldRotation()
         {
+            SaveWorldRotationInPlace();
+        }
+
+        private void SaveWorldRotationInPlace()
+        {
             if (!_exist)
                 return;
 
@@ -519,12 +490,16 @@ namespace Gallop
             if ((uint)Index >= (uint)_rootBone.NativeArray.Length)
                 return;
 
-            NativeClothWorking native = _rootBone.NativeArray[Index];
+            ref NativeClothWorking native = ref _rootBone.NativeArray[Index];
             native.AnimationRotation = _transform.localRotation;
-            _rootBone.NativeArray[Index] = native;
         }
 
         public void PostSpring()
+        {
+            PostSpringInPlace();
+        }
+
+        private void PostSpringInPlace()
         {
             if (!_needSimulateEndBone || _root == null || _root.IsDeltaTimeZero || !ShouldReflectCalcResult)
                 return;
@@ -532,7 +507,7 @@ namespace Gallop
             if (_transform == null || _rootBone == null || _rootBone.NativeArray == null || (uint)Index >= (uint)_rootBone.NativeArray.Length)
                 return;
 
-            NativeClothWorking native = _rootBone.NativeArray[Index];
+            ref readonly NativeClothWorking native = ref _rootBone.NativeArray[Index];
 
             // 官方：先取 NativeClothWorking.FinalRotation
             Quaternion finalRotation = native.FinalRotation;
@@ -549,7 +524,7 @@ namespace Gallop
                 // 注意：官方 IsLimit 分支在 BlendRate < 1.0f 里面
                 if (native.IsLimit != 0)
                 {
-                    finalRotation = ApplyLimitRotation(native, finalRotation);
+                    finalRotation = ApplyLimitRotation(in native, finalRotation);
                 }
             }
 
@@ -564,7 +539,7 @@ namespace Gallop
             _transform.rotation = finalRotation;
         }
 
-        private static Quaternion ApplyLimitRotation(NativeClothWorking native, Quaternion finalRotation)
+        private static Quaternion ApplyLimitRotation(in NativeClothWorking native, Quaternion finalRotation)
         {
             // Official PostSpring:
             // relative = final * inverse(parentRotation * initLocalRotation)
@@ -727,6 +702,11 @@ namespace Gallop
 
         public void ResetConnectedForce()
         {
+            ResetConnectedForceInPlace();
+        }
+
+        private void ResetConnectedForceInPlace()
+        {
             // Official writes connected force to the previous native slot, not this bone's own slot.
             if (Index == 0 || _rootBone == null || _rootBone.NativeArray == null)
                 return;
@@ -735,12 +715,16 @@ namespace Gallop
             if ((uint)targetIndex >= (uint)_rootBone.NativeArray.Length)
                 return;
 
-            NativeClothWorking native = _rootBone.NativeArray[targetIndex];
+            ref NativeClothWorking native = ref _rootBone.NativeArray[targetIndex];
             native.ConnectedForce = Vector3.zero;
-            _rootBone.NativeArray[targetIndex] = native;
         }
 
         public void UpdateConnectedForce(Vector3 pairPos, float defaultDistance, float intensity)
+        {
+            UpdateConnectedForceInPlace(pairPos, defaultDistance, intensity);
+        }
+
+        private void UpdateConnectedForceInPlace(Vector3 pairPos, float defaultDistance, float intensity)
         {
             // Official accumulates the force into the previous native slot (Index - 1).
             if (Index == 0 || _transform == null || _rootBone == null || _rootBone.NativeArray == null)
@@ -754,9 +738,8 @@ namespace Gallop
             float distance = delta.magnitude;
             Vector3 force = delta.normalized * ((distance - defaultDistance) * intensity);
 
-            NativeClothWorking native = _rootBone.NativeArray[targetIndex];
+            ref NativeClothWorking native = ref _rootBone.NativeArray[targetIndex];
             native.ConnectedForce += force;
-            _rootBone.NativeArray[targetIndex] = native;
         }
 
         public bool FindCySpringBone(List<CySpringBoneBase> resultBoneList, Func<string, bool> checkFunc, bool firstHitBreak)

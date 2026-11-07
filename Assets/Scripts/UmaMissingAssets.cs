@@ -5,7 +5,7 @@ using System.Text;
 using UnityEngine;
 
 /// <summary>
-/// Remembers content hashes the CDN answered 404/403/410 for.
+/// Remembers content hashes the CDN answered 404/410 for.
 /// The manifest occasionally lists entries whose payload is no longer (or not yet) on the
 /// CDN; without this the viewer re-requested them on every load, which is what showed up
 /// as "continuously requesting resources that do not exist".
@@ -23,13 +23,12 @@ public static class UmaMissingAssets
     {
         get
         {
-            if (!string.IsNullOrEmpty(cachePath)) return cachePath;
-
             string root = Config.Instance != null && !string.IsNullOrEmpty(Config.Instance.MainPath)
                 ? Config.Instance.MainPath
                 : Application.persistentDataPath;
 
-            cachePath = Path.Combine(root, "missing_assets.txt");
+            string nextPath = Path.Combine(root, "missing_assets.txt");
+            if (cachePath != nextPath) { cachePath = nextPath; loaded = false; Missing.Clear(); }
 
             return cachePath;
         }
@@ -39,6 +38,7 @@ public static class UmaMissingAssets
     {
         lock (Sync)
         {
+            var path = CachePath;
             if (loaded) return;
 
             loaded = true;
@@ -61,12 +61,12 @@ public static class UmaMissingAssets
                     if (Missing.Add(hash)) count++;
                 }
 
-                StandaloneLogger.Info(
+                Debug.Log(
                     "Missing-asset cache loaded: " + count + " entries from " + CachePath);
             }
             catch (Exception ex)
             {
-                StandaloneLogger.Exception("Loading missing-asset cache", ex);
+                Debug.LogWarning("Loading missing-asset cache: " + ex.Message);
             }
         }
     }
@@ -112,20 +112,23 @@ public static class UmaMissingAssets
 
         if (!added) return;
 
-        StandaloneLogger.Warning(
+        Debug.LogWarning(
             "Asset marked as unavailable, further requests skipped: " + hash +
             " (" + reason + ")");
 
         try
         {
-            File.AppendAllText(
-                CachePath,
-                hash + Environment.NewLine,
-                new UTF8Encoding(false));
+            lock (Sync)
+            {
+                File.AppendAllText(
+                    CachePath,
+                    hash + Environment.NewLine,
+                    new UTF8Encoding(false));
+            }
         }
         catch (Exception ex)
         {
-            StandaloneLogger.Exception("Saving missing-asset cache", ex);
+            Debug.LogWarning("Saving missing-asset cache: " + ex.Message);
         }
     }
 
@@ -145,7 +148,7 @@ public static class UmaMissingAssets
 
         if (!removed) return;
 
-        StandaloneLogger.Info("Asset available again, removed from missing cache: " + hash);
+        Debug.Log("Asset available again, removed from missing cache: " + hash);
 
         try
         {
@@ -160,7 +163,7 @@ public static class UmaMissingAssets
         }
         catch (Exception ex)
         {
-            StandaloneLogger.Exception("Rewriting missing-asset cache", ex);
+            Debug.LogWarning("Rewriting missing-asset cache: " + ex.Message);
         }
     }
 

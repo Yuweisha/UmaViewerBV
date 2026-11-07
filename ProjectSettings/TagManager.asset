@@ -11,9 +11,9 @@ TagManager:
   - 
   - Water
   - UI
-  - 3D
-  - B
   - 3D_UI
+  - B
+  - 3D
   - D
   - E
   - EFFECT
@@ -34,10 +34,13 @@ TagManager:
   - Character3D_NotReflect
   - Character3D_0
   - Character3D_1
-  - 
+  - CharaMini
   - CircleProfile
   - NO_VISIBLE
   m_SortingLayers:
   - name: Default
     uniqueID: 0
+    locked: 0
+  - name: UI
+    uniqueID: 19201080
     locked: 0

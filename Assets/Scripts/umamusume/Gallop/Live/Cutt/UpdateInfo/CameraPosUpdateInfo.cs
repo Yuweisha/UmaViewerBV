@@ -1,4 +1,4 @@
-﻿namespace Gallop.Live.Cutt
+namespace Gallop.Live.Cutt
 {
     public struct CameraPosUpdateInfo
     {

@@ -70,7 +70,7 @@ namespace Gallop
             get { return _needEnvCollision; }
         }
 
-        // ÓĞĞ©¹Ù·½½Å±¾¿ÉÄÜ½Ğ CheckEnvCollision£¬ËùÒÔ¸øÒ»¸ö±ğÃû
+        // æœ‰äº›å®˜æ–¹è„šæœ¬å¯èƒ½å« CheckEnvCollisionï¼Œæ‰€ä»¥ç»™ä¸€ä¸ªåˆ«å
         public bool CheckEnvCollision
         {
             get { return _needEnvCollision; }

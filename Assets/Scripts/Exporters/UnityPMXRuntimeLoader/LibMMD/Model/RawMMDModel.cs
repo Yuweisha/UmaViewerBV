@@ -1,4 +1,4 @@
-﻿using LibMMD.Material;
+using LibMMD.Material;
 using System;
 using System.Collections.Generic;
 using static LibMMD.Reader.PMXReader;

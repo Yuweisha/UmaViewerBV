@@ -1,5 +1,4 @@
-﻿using Gallop;
-using Gallop.Live.Cutt;
+using Gallop;
 using RootMotion;
 using RootMotion.Dynamics;
 using RootMotion.FinalIK;
@@ -11,32 +10,53 @@ using System.Linq;
 using UnityEngine;
 using static SerializableBone;
 
-public class UmaContainerCharacter : UmaContainer
+public partial class UmaContainerCharacter : UmaContainer
 {
+    // Original CharacterBuildInfo.DirtTextureArray. Populated by the resource
+    // loader, not inferred from shader property existence or all renderers.
+    public Texture[] LiveDirtTextureArray;
+    public int LiveMasterDressId;
+    public int LiveHeadCharacterId;
+    public int LiveHeadModelSubId;
+    public bool IsUseLiveDirtTexture()
+    {
+        if (LiveDirtTextureArray == null)
+            return false;
+        foreach (var texture in LiveDirtTextureArray)
+            if (texture != null)
+                return true;
+        return false;
+    }
+
     public CharaEntry CharaEntry;
     public DataRow CharaData;
     public GameObject Body;
     public GameObject Tail;
     public GameObject Head;
     public GameObject Hair;
-
+    [NonSerialized]
+    public string LiveHeadResourceName;
+    [NonSerialized]
+    public Gallop.Live.LiveEyeHighlightController LiveEyeHighlight;
+    [NonSerialized]
+    public Gallop.Live.LiveRandomEarController LiveRandomEar;
+    [NonSerialized]
+    public Gallop.Live.LiveFacePartsScaleController LiveFacePartsScale;
+    [NonSerialized]
+    public Gallop.Live.LiveEyeBlinkController LiveEyeBlink;
     public Material FaceMaterial;
-
     public TextureList TailTextures = new TextureList();
-
     [Header("Animator")]
     public Animator UmaAnimator;
     public AnimatorOverrideController OverrideController;
     public Animator UmaFaceAnimator;
     public AnimatorOverrideController FaceOverrideController;
     public bool isAnimatorControl;
-
     [Header("Body")]
     public GameObject UpBodyBone;
     public Vector3 UpBodyPosition;
     public Quaternion UpBodyRotation;
     public Dictionary<Transform, (Vector3 localPosition, Quaternion localRotation, Vector3 localScale)> InitBoneTransform;
-
     [Header("Face")]
     public FaceDrivenKeyTarget FaceDrivenKeyTarget;
     public FaceEmotionKeyTarget FaceEmotionKeyTarget;
@@ -45,90 +65,41 @@ public class UmaContainerCharacter : UmaContainer
     public Transform TrackTarget;
     public float EyeHeight;
     public bool EnableEyeTracking = true;
-
     [Header("Cheek")]
     public Texture CheekTex_0;
     public Texture CheekTex_1;
     public Texture CheekTex_2;
-
     [Header("Manga")]
     public List<GameObject> LeftMangaObject = new List<GameObject>();
     public List<GameObject> RightMangaObject = new List<GameObject>();
-
     [Header("Tear")]
     public GameObject StaticTear_L;
     public GameObject StaticTear_R;
     public GameObject TearPrefab_0;
     public GameObject TearPrefab_1;
     public List<TearController> TearControllers = new List<TearController>();
-
-    // Valor de stencil que aÃ­sla los "decals" de cara (cejas, lagrimas, rubor y efectos de
-    // ojos) de un personaje del resto. Tiene que ser UNICO por instancia: esos pases no se
-    // descartan por profundidad, solo por un test de stencil "igual", asi que dos personajes
-    // con el mismo valor se pintan los decals unos encima de otros (p.ej. las cejas de los
-    // bailarines de atras sobre la cara del de delante cuando todos son el mismo personaje).
-    // Antes se usaba CharaEntry.Id, que se repite entre copias del mismo personaje y ademas
-    // el buffer de stencil solo tiene 8 bits (los ids > 255 colisionan entre si).
-    private int _stencilId;
-    public int StencilId
-    {
-        get
-        {
-            if (_stencilId == 0)
-                _stencilId = AllocateStencilId();
-            return _stencilId;
-        }
-    }
-
-    // Rango alto (donde ya caian los ids reales al truncarse a 8 bits) y sin usar el 0 ni el
-    // 100 que llevan cuerpo y cola, para no habilitar los decals sobre ellos.
-    private const int StencilIdFirst = 200;
-    private const int StencilIdLast = 250;
-    private static int _nextStencilId = StencilIdFirst;
-
-    private static int AllocateStencilId()
-    {
-        int id = _nextStencilId;
-        _nextStencilId = id >= StencilIdLast ? StencilIdFirst : id + 1;
-        return id;
-    }
-
-    public static void ResetStencilAllocator()
-    {
-        _nextStencilId = StencilIdFirst;
-    }
-
     [Header("Generic")]
     public bool IsGeneric = false;
     public string VarCostumeIdShort, VarCostumeIdLong, VarSkin, VarHeight, VarSocks, VarBust;
-    // Color elegido de un traje COMUN (0 = el de siempre). Algunos comunes traen varios colores
-    // (0015 = camisa blanca/negra; 0006 y 0009 = 4 colores) y cada color es una textura propia
-    // (_00_diff, _01_diff, ...). Lo usa LoadBody para elegir _diff y _shad_c.
-    public int VarColorIndex = 0;
     public TextureList GenericBodyTextures = new TextureList();
-
     [Header("Mini")]
     public bool IsMini = false;
     public TextureList MiniHeadTextures = new TextureList();
-
     [Header("Mob")]
     public bool IsMob = false;
     public DataRow MobDressColor;
     public DataRow MobHeadColor;
     public TextureList MobHeadTextures = new TextureList();
-
-    [Header("ModelController FaceLighté¼»éƒ¨é˜´å½±")]
+    [Header("ModelController FaceLight鼻部阴影")]
     public Transform HeadToonBaseTransform;
     public Renderer FaceRenderer;
-    // è¿™ä¸¤ä¸ªå…ˆä¿ç•™ä½ æµ‹è¯•æ—¶æ•ˆæžœå¥½çš„å€¼ã€‚
-    // åŽé¢å¦‚æžœç»§ç»­é€† asset holderï¼Œå†æ¢æˆå®˜æ–¹ asset é‡Œçš„å€¼ã€‚
+    // 这两个先保留你测试时效果好的值。
+    // 后面如果继续逆 asset holder，再换成官方 asset 里的值。
     public float FaceCenterUpOffset = 0.03f;
     public float FaceCenterForwardOffset = 0.03f;
     public bool FlipFaceForward = false;
-
     private Material[] _faceMaterials;
     private bool _faceLightInitialized;
-
     private readonly HashSet<Renderer> _mirrorHeadRenderers = new HashSet<Renderer>();
     private GameObject[] _mirrorAllRendererObjects = Array.Empty<GameObject>();
     private GameObject[] _mirrorBodyRendererObjects = Array.Empty<GameObject>();
@@ -137,7 +108,6 @@ public class UmaContainerCharacter : UmaContainer
     private int _mirrorChangedCount;
     private bool _mirrorLayerCacheDirty = true;
     private bool _mirrorLayerCacheReady;
-
     private void RegisterMirrorHeadRenderers(GameObject source)
     {
         RestoreMirrorChangedLayers();
@@ -147,12 +117,14 @@ public class UmaContainerCharacter : UmaContainer
             for (int i = 0; i < renderers.Length; i++)
                 _mirrorHeadRenderers.Add(renderers[i]);
         }
+
         InvalidateMirrorLayerCache();
     }
 
     private void InvalidateMirrorLayerCache()
     {
         RestoreMirrorChangedLayers();
+        ResetLiveEnvironmentMirrorBounds();
         _mirrorLayerCacheDirty = true;
         if (_mirrorLayerCacheReady)
             PrepareMirrorLayerCache();
@@ -162,7 +134,6 @@ public class UmaContainerCharacter : UmaContainer
     {
         if (!_mirrorLayerCacheDirty)
             return;
-
         RestoreMirrorChangedLayers();
         var renderers = GetComponentsInChildren<Renderer>(true);
         var all = new List<GameObject>(renderers.Length);
@@ -181,6 +152,7 @@ public class UmaContainerCharacter : UmaContainer
             if (!headObjects.Contains(renderer.gameObject))
                 body.Add(renderer.gameObject);
         }
+
         _mirrorAllRendererObjects = all.ToArray();
         _mirrorBodyRendererObjects = body.ToArray();
         if (_mirrorChangedObjects.Length < all.Count)
@@ -188,15 +160,16 @@ public class UmaContainerCharacter : UmaContainer
             _mirrorChangedObjects = new GameObject[all.Count];
             _mirrorOriginalLayers = new int[all.Count];
         }
+
         _mirrorLayerCacheDirty = false;
         _mirrorLayerCacheReady = true;
+        RebuildLiveEnvironmentMirrorRenderers(renderers);
     }
 
     internal void SetLayerBeforeMirrorCameraRendering(bool bodyBit, bool headBit, int layer)
     {
         if (!bodyBit || layer < 0)
             return;
-
         RestoreMirrorChangedLayers();
         var objects = headBit ? _mirrorAllRendererObjects : _mirrorBodyRendererObjects;
         for (int i = 0; i < objects.Length; i++)
@@ -225,11 +198,20 @@ public class UmaContainerCharacter : UmaContainer
 
     private void OnDisable()
     {
+        UnregisterLiveModelIK();
         RestoreMirrorChangedLayers();
     }
 
     private void OnDestroy()
     {
+        ReleaseLiveAnimation();
+        LiveEyeHighlight?.Dispose();
+        LiveRandomEar?.Dispose();
+        LiveEyeBlink?.Dispose();
+        FaceDrivenKeyTarget?.LiveEyeTrace?.Dispose();
+        LiveSystemTextDrivenKey?.Dispose();
+        ReleaseLiveSystemTextSubmotion();
+        ReleaseLiveSweat();
         RestoreMirrorChangedLayers();
     }
 
@@ -237,58 +219,17 @@ public class UmaContainerCharacter : UmaContainer
     private static readonly int ID_FaceUp = Shader.PropertyToID("_FaceUp");
     private static readonly int ID_FaceForward = Shader.PropertyToID("_FaceForward");
     private static readonly int ID_FaceShadowHeadMat = Shader.PropertyToID("_faceShadowHeadMat");
-    private static readonly int ID_CheekPretenseThreshold = Shader.PropertyToID("_CheekPretenseThreshold");
-    private static readonly int ID_NosePretenseThreshold = Shader.PropertyToID("_NosePretenseThreshold");
-    private static readonly int ID_NoseVisibility = Shader.PropertyToID("_NoseVisibility");
-    private static readonly int ID_CylinderBlend = Shader.PropertyToID("_CylinderBlend");
-    private static readonly int ID_HairNormalBlend = Shader.PropertyToID("_HairNormalBlend");
-
     [Header("Physics")]
     public bool EnablePhysics = true;
     public List<CySpringDataContainer> cySpringDataContainers;
     public GameObject PhysicsContainer;
     public float BodyScale = 1;
-
-    // (DATAMINE) El motor CySpring es un solver Verlet que se alimenta UNA vez por frame: el
-    // "ancla" (SelfPosition) se recoge al principio del frame y su desplazamiento respecto al
-    // frame anterior es la energÃ­a de la cadena. Por eso NO se sub-divide el frame en pasos
-    // fijos: ver AlterLateUpdateRuntime.
-    [Header("CySpring (datamine)")]
-    [Tooltip("Warm-up (s) al cargar: asienta la cadena antes de mostrarla (oficial: DEFAULT_WARMUPTIME). 0 = off.")]
-    public float CySpringWarmUpTime = 1.0f;
-    [Tooltip("Re-liga la fisica UNA vez cuando el live ya ha posado al personaje. OJO: medido - captura la pose de reposo en un frame cualquiera de la cancion, asi que la cola acaba apuntando hacia arriba. Desactivado por defecto.")]
-    public bool CySpringRebindOnAnimatedPose = false;
-    [Tooltip("Viento del solver CySpring (parametros del asset). El visor no aplica la pista charaWind del live, asi que sopla constante; desactivado por defecto hasta implementar esa pista.")]
-    public bool CySpringEnableWind = false;
-    [Tooltip("Solver propio de falda (SkirtController + NativeSkirtUpdate: planos de rodilla/tobillo). Necesario: sin el, la falda se mete en las piernas.")]
-    public bool CySpringEnableSkirtSolver = true;
-    [Tooltip("Dibuja en la SCENE VIEW los colisores del asset (solo editor). No afecta a la fisica.")]
-    public bool ColliderGizmosVisible = true;
-
     private BipedIK IK;
     private List<Transform> _humanoidBones;
     private UIHandleCharacterRoot handleRoot;
-
-    // Official CySpring runtime controller.
-    // CySpringDataContainer is only data; CySpringController owns simulation.
-    private CySpringController _cySpringController;
-    private bool _cySpringLoaded;
-    // Ancla del solver (ver BindCySpringOwnerAnchor) y su resolucion diferida.
-    private bool _cySpringAnchorResolved;
-    private Transform _cySpringHip;
-    private bool _cySpringPoseRebound;
-    // LoadPhysics se llamo antes de que el modelo estuviera montado (sin nodo "Position").
-    private bool _cySpringBindPending;
-    // SkirtParamDataAsset pendiente de crear (el modelo no estaba montado al cargar la falda).
-    private SkirtParamDataAsset _pendingSkirtParam;
-    // Acumulador del paso fijo del solver (30/60 Hz), no el del render.
-    private float _cySpringStepAccumulator;
-    // Estabilidad del modelo antes de ligar (ver IsModelReadyForCySpringBind).
-    private int _bindReadyFrames;
-    private int _bindLastContainerCount = -1;
-    private SkirtController _skirtController;
-    private CySpringOwner _cySpringOwner;
+    // Physics backend: master5 DynamicBone with skirt surface collision correction.
     private List<UmaDatabaseEntry> LoadedAssets = new List<UmaDatabaseEntry>();
+    public IReadOnlyList<UmaDatabaseEntry> SourceAssets => LoadedAssets.AsReadOnly();
 
     public class TextureList
     {
@@ -297,7 +238,6 @@ public class UmaContainerCharacter : UmaContainer
             public Texture2D Texture;
             public UmaDatabaseEntry Entry;
             public bool Used = false;
-
             public TextureSource(Texture2D texture, UmaDatabaseEntry entry)
             {
                 Texture = texture;
@@ -306,7 +246,6 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         private List<TextureSource> _list = new List<TextureSource>();
-
         public Texture2D Load(Func<Texture2D, bool> predicate)
         {
             var entry = _list.FirstOrDefault(t => predicate(t.Texture));
@@ -315,6 +254,7 @@ public class UmaContainerCharacter : UmaContainer
                 Debug.LogWarning("Texture not found");
                 return null;
             }
+
             entry.Used = true;
             return entry.Texture;
         }
@@ -349,24 +289,21 @@ public class UmaContainerCharacter : UmaContainer
         TrackTarget = new GameObject("TrackTarget").transform;
         TrackTarget.SetParent(transform);
         TrackTarget.position = HeadBone.transform.TransformPoint(0, 0, 10);
-
         UpBodyPosition = UpBodyBone.transform.localPosition;
         UpBodyRotation = UpBodyBone.transform.localRotation;
-
-        // æ­¤æ—¶å·²å®Œæˆæ¨¡åž‹åˆå¹¶å’Œèº«é«˜ç¼©æ”¾ï¼Œä¸”é¢„è§ˆåŠ¨ç”»å°šæœªåŠ è½½ï¼Œé€‚åˆä½œä¸ºç¨³å®šçš„å¯¼å‡ºå‚è€ƒå§¿åŠ¿ã€‚
+        // 此时已完成模型合并和身高缩放，且预览动画尚未加载，适合作为稳定的导出参考姿势。
         CaptureInitialBodyPose();
-
         //Models must be merged before handling extra morphs
         if (FaceDrivenKeyTarget && smile)
             FaceDrivenKeyTarget.ChangeMorphWeight(FaceDrivenKeyTarget.MouthMorphs[3], 1);
-
         CreateIK();
         SetShaderParameterRuntime();
     }
 
     public void MergeModel()
     {
-        if (!Body) return;
+        if (!Body)
+            return;
         RestoreMirrorChangedLayers();
         // Capture source identity before MergeModel reparents Head/Hair children.
         RegisterMirrorHeadRenderers(Head);
@@ -379,8 +316,8 @@ public class UmaContainerCharacter : UmaContainer
         {
             Body.transform.GetChild(0).SetParent(transform);
         }
-        Body.SetActive(false); //for debugging
 
+        Body.SetActive(false); //for debugging
         //MergeHead
         if (Head)
         {
@@ -389,6 +326,7 @@ public class UmaContainerCharacter : UmaContainer
             {
                 MergeBone(headskin, bodyBones, ref emptyBones);
             }
+
             var eyes = new GameObject("Eyes");
             eyes.transform.SetParent(transform);
             while (Head.transform.childCount > 0)
@@ -396,6 +334,7 @@ public class UmaContainerCharacter : UmaContainer
                 var child = Head.transform.GetChild(0);
                 child.SetParent(child.name.Contains("info") ? eyes.transform : transform);
             }
+
             Head.SetActive(false); //for debugging
         }
 
@@ -409,6 +348,7 @@ public class UmaContainerCharacter : UmaContainer
                 var child = Hair.transform.GetChild(0);
                 child.SetParent(transform);
             }
+
             Hair.SetActive(false); //for debugging
         }
 
@@ -422,34 +362,45 @@ public class UmaContainerCharacter : UmaContainer
                 var child = Tail.transform.GetChild(0);
                 child.SetParent(transform);
             }
+
             Tail.SetActive(false); //for debugging
         }
 
-
-        emptyBones.ForEach(a => { if (a) Destroy(a.gameObject); });
-
+        emptyBones.ForEach(a =>
+        {
+            if (a)
+                Destroy(a.gameObject);
+        });
         //MergeAvatar
         UmaAnimator = gameObject.AddComponent<Animator>();
         UmaAnimator.avatar = AvatarBuilder.BuildGenericAvatar(gameObject, gameObject.name);
         OverrideController = Instantiate(UmaViewerBuilder.Instance.OverrideController);
         UmaAnimator.runtimeAnimatorController = OverrideController;
+        // Native character skinned meshes keep their bounds updated while offscreen.
+        // With updateWhenOffscreen=false a character that leaves the frustum freezes
+        // its last bounds; when it re-enters later the stale bounds keep it culled
+        // (observed as heads/faces vanishing from ~100s in 1156).
+        foreach (var skinned in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            // Keep character culling stable across long camera moves.  A skinned
+            // renderer that got culled once can keep stale bounds after the model
+            // moves back into view; a stable local volume follows the transform.
+            skinned.updateWhenOffscreen = false;
+            skinned.localBounds = new Bounds(Vector3.zero, new Vector3(100f, 100f, 100f));
+        }
 
         //Materials
         Renderers = gameObject.GetComponentsInChildren<Renderer>().ToList();
         FaceRenderer = Renderers.FirstOrDefault(r => r != null && r.name == "M_Face");
-
         if (FaceRenderer != null)
         {
             _faceMaterials = FaceRenderer.materials;
-
             foreach (var mat in _faceMaterials)
             {
                 if (mat == null || mat.shader == null)
                     continue;
-
                 string matName = mat.name.ToLower();
                 string shaderName = mat.shader.name;
-
                 if (shaderName.Contains("ToonFace") || matName.Contains("face"))
                 {
                     FaceMaterial = mat;
@@ -457,12 +408,12 @@ public class UmaContainerCharacter : UmaContainer
                 }
             }
         }
+
         foreach (var rend in Renderers)
         {
             for (int i = 0; i < rend.sharedMaterials.Length; i++)
             {
                 Material mat = rend.sharedMaterials[i];
-
                 var matHlp = Materials.FirstOrDefault(m => m.Mat == mat);
                 if (matHlp == null)
                 {
@@ -470,10 +421,18 @@ public class UmaContainerCharacter : UmaContainer
                     {
                         Mat = mat,
                         Renderers = new Dictionary<Renderer, List<int>>(),
-                        Toggle = Instantiate(UI.UmaContainerTogglePrefab, UI.ModelSettings.MaterialsList.content)
+                        Toggle = IsLive ? null : Instantiate(UI.UmaContainerTogglePrefab, UI.ModelSettings.MaterialsList.content)
                     };
-                    matHlp.Toggle.Name = mat.name;
-                    matHlp.Toggle.Toggle.onValueChanged.AddListener((value) => { matHlp.ToggleMaterials(value); });
+                    if (matHlp.Toggle != null)
+                    {
+                        matHlp.Toggle.Name = mat.name;
+                        matHlp.Toggle.Toggle.onValueChanged.AddListener((value) =>
+                        {
+                            Debug.Log("e");
+                            matHlp.ToggleMaterials(value);
+                        });
+                    }
+
                     Materials.Add(matHlp);
                 }
 
@@ -487,26 +446,27 @@ public class UmaContainerCharacter : UmaContainer
                 }
             }
         }
+
         InvalidateMirrorLayerCache();
         PrepareMirrorLayerCache();
-
+        // Head/tail collision and spring roots were bound before MergeBone.
+        // Rebuild cached parents now that duplicate source bones are removed.
+        if (_cySpringLoaded && _cySpringController != null)
+            _cySpringController.RefreshHierarchyAfterMerge();
     }
 
     public void MergeHairModel()
     {
-        if (!Head || !Hair) return;
+        if (!Head || !Hair)
+            return;
         RestoreMirrorChangedLayers();
         RegisterMirrorHeadRenderers(Hair);
-
         var bodyBones = Head.GetComponentInChildren<SkinnedMeshRenderer>().bones.ToDictionary(bone => bone.name, bone => bone.transform);
         List<Transform> emptyBones = new List<Transform>();
-
         var headHolder = Head.GetComponent<AssetHolder>();
         var hairHolder = Hair.GetComponent<AssetHolder>();
-
         headHolder._assetTable.list.AddRange(hairHolder._assetTable.list);
         headHolder._assetTableValue.list.AddRange(hairHolder._assetTableValue.list);
-
         //MergeHair
         var hairskins = Hair.GetComponentsInChildren<SkinnedMeshRenderer>();
         foreach (SkinnedMeshRenderer hairskin in hairskins)
@@ -514,14 +474,50 @@ public class UmaContainerCharacter : UmaContainer
             hairskin.gameObject.transform.SetParent(Head.transform);
             MergeBone(hairskin, bodyBones, ref emptyBones);
         }
-        Hair.gameObject.SetActive(false);
 
-        emptyBones.ForEach(a => { if (a) Destroy(a.gameObject); });
+        Hair.gameObject.SetActive(false);
+        emptyBones.ForEach(a =>
+        {
+            if (a)
+                Destroy(a.gameObject);
+        });
         InvalidateMirrorLayerCache();
     }
 
     public void SetHeight(int scale = 0)
     {
+        bool useNativeLiveHeight = IsLive;
+#if UNITY_EDITOR
+        // Explicit diagnostic baseline only; player builds always use the game
+        // marker for Live. Ordinary model preview keeps its existing convention.
+        useNativeLiveHeight &= Environment.GetEnvironmentVariable("UMA_LIVE18_NATIVE_MODEL_HEIGHT") != "0";
+#endif
+        // Original ModelController.Init 0x52a06d3: assembled marker world Y,
+        // sampled once before installing the body's height scale.
+        if (useNativeLiveHeight)
+        {
+            var position = transform.Find("Position");
+            var holder = Head != null ? Head.GetComponent<Gallop.AssetHolder>() : null;
+            var marker = holder != null ? holder.Get<GameObject>("head_height") : null;
+            if (float.IsNaN(LiveModelBaseHeight))
+                LiveModelBaseHeight = marker != null ? marker.transform.position.y : 1.6f;
+            float height = scale == -1 ? Convert.ToInt32(CharaData[IsMob ? "chara_height" : "scale"]) : scale;
+            BodyScale = scale == 0 ? 1f : Gallop.Live.Cutt.LiveTimelineControl.MonitorFloat32(Gallop.Live.Cutt.LiveTimelineControl.MonitorFloat32(height * 0.01f) / LiveModelBaseHeight);
+            position.localScale = Vector3.one * BodyScale;
+            // Native ModelController establishes body height before loading
+            // CySpring. This host loads physics before merging the model and
+            // setting height, so refresh its existing geometry at that boundary.
+            // Otherwise tail/body collision radii retain the unscaled size.
+            if (_cySpringLoaded && _cySpringController != null)
+            {
+                for (int part = 0; part < 3; part++)
+                    _cySpringController.SetScale((Gallop.CySpringController.Parts)part);
+                _skirtController?.UpdateScale(LiveTotalScale);
+            }
+
+            return;
+        }
+
         if (scale == 0)
         {
             BodyScale = 1;
@@ -534,11 +530,12 @@ public class UmaContainerCharacter : UmaContainer
         {
             BodyScale = (scale / 160.7529f);
         }
+
         transform.Find("Position").localScale = new Vector3(BodyScale, BodyScale, BodyScale);
-
-
     }
 
+    [NonSerialized]
+    public float LiveModelBaseHeight = float.NaN;
     public void MergeBone(SkinnedMeshRenderer from, Dictionary<string, Transform> targetBones, ref List<Transform> emptyBones)
     {
         if (targetBones.TryGetValue(from.rootBone.name, out Transform rootbone))
@@ -555,6 +552,7 @@ public class UmaContainerCharacter : UmaContainer
                     {
                         from.bones[i].transform.GetChild(0).SetParent(targetbone);
                     }
+
                     emptyBones.Add(from.bones[i]);
                 }
                 else
@@ -562,836 +560,195 @@ public class UmaContainerCharacter : UmaContainer
                     tmpBone[i] = from.bones[i];
                 }
             }
+
             from.bones = tmpBone;
-        }
-        ;
-    }
-
-    private sealed class UmaViewerCySpringOwner : CySpringOwner
-    {
-        private readonly UmaContainerCharacter _chara;
-
-        public UmaViewerCySpringOwner(UmaContainerCharacter chara)
-            : base(null)
-        {
-            _chara = chara;
-        }
-
-        public override bool IsCharaModel()
-        {
-            return true;
-        }
-
-        public override int GetCharaID()
-        {
-            return _chara != null && _chara.CharaEntry != null ? _chara.CharaEntry.Id : 0;
-        }
-
-        public override int GetDressID()
-        {
-            return 0;
-        }
-
-        public override int GetHeadID()
-        {
-            return 0;
-        }
-
-        public override float GetCySpringCorrectScale(bool isHead)
-        {
-            if (_chara == null || _chara.BodyScale <= 0.0f)
-                return 1.0f;
-
-            return _chara.BodyScale;
-        }
-
-        public override float GetBodyScale()
-        {
-            if (_chara == null || _chara.BodyScale <= 0.0f)
-                return 1.0f;
-
-            return _chara.BodyScale;
-        }
-
-        public override float GetTotalScale()
-        {
-            if (_chara == null || _chara.BodyScale <= 0.0f)
-                return 1.0f;
-
-            return _chara.BodyScale;
         }
     }
 
     public void LoadPhysics()
     {
-        if (IsMini)
-            return;
-
-        if (PhysicsContainer == null)
+        if (ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
         {
-            Debug.LogWarning("[UmaContainerCharacter] PhysicsContainer is null.");
+            if (!_cySpringLoaded)
+                LoadNativePhysics();
             return;
         }
 
-        // El modelo se monta por partes y puede NO estar completo aqui (medido: el nodo "Position"
-        // todavia no existe cuando el builder llama a LoadPhysics). Si se liga ahora, la pose de
-        // reposo del spring se captura a medias: los huesos del pelo quedan a 1,2 m de la cabeza
-        // en el "rest" y el solver los arrastra ahi toda la sesion (pelo/coletas flotando).
-        // En los personajes que se cargan a mitad de la cancion (streaming) el modelo sigue
-        // montandose varios frames despues, asi que se exige que este completo Y estable.
-        if (!IsModelReadyForCySpringBind())
-        {
-            _cySpringBindPending = true;
-            return;
-        }
-
-        cySpringDataContainers = new List<CySpringDataContainer>(
-            PhysicsContainer.GetComponentsInChildren<CySpringDataContainer>(true)
-        );
-
-        if (cySpringDataContainers == null || cySpringDataContainers.Count == 0)
-        {
-            Debug.LogWarning("[UmaContainerCharacter] No CySpringDataContainer found.");
-            return;
-        }
-
-        // Fisica (ropa, pelo y cola): UNA sola via, el puente nativo
-        // CySpringController + CySpringPlugin.dll, que es el mismo solver que usa el juego.
-        // Cada cadena se simula con los datos del asset (springParam / collisionParam) tal cual:
-        // no hay DynamicBone ni colisores o radios generados por el visor. El reparto de
-        // colisiones entre prendas lo hace el propio controller (Body y Tail comparten lista:
-        // CreateGetBodyRuntimeDataList / CreateGetTailRuntimeDataList).
-        Dictionary<string, Transform> transformCacheDic =
-            BuildCySpringTransformCache(transform, out HashSet<string> duplicateBoneNames);
-
-        if (duplicateBoneNames.Count > 0)
-        {
-            Debug.LogWarning(
-                $"[UmaContainerCharacter] Duplicate bone names detected before CySpring bind: {duplicateBoneNames.Count}\n" +
-                $"{string.Join("\n", duplicateBoneNames.Take(30))}"
-            );
-        }
-
-        Transform hip = FindCySpringTransform(transform, "Hip");
-
-        if (hip == null && UpBodyBone != null)
-            hip = UpBodyBone.transform;
-
-        if (hip == null)
-            hip = transform.Find("Position/Hip");
-
-        if (hip == null)
-        {
-            Debug.LogWarning("[UmaContainerCharacter] Hip bone not found. CySpring will use character root as fallback.");
-            hip = transform;
-        }
-
-        var slots = SplitCySpringContainers(cySpringDataContainers);
-
-        // (PENDIENTE) La falda declara su volumen de sector de cadera (Col_B_Hip_MSkirt_*) SOLO
-        // en el hueso raiz de cada cadena; los hijos solo nombran las capsulas del muslo, asi que
-        // sin el volumen de cadera la tela puede plegarse hacia dentro. Heredar los nombres de la
-        // raiz en los hijos es lo unico que queda del camino antiguo.
-        PropagateClothCollisionNames(slots.body);
-
-        _cySpringOwner = new UmaViewerCySpringOwner(this);
-        _cySpringController = CySpringController.AddController(gameObject, hip, _cySpringOwner);
-
-        if (_cySpringController == null)
-        {
-            Debug.LogError("[UmaContainerCharacter] Failed to create CySpringController.");
-            _cySpringLoaded = false;
-            return;
-        }
-
-        BindCySpringOwnerAnchor(_cySpringController, hip);
-        _cySpringController.EnableWind = CySpringEnableWind;
-
-        _cySpringController.LoadFromDataContainers(
-            transformCacheDic,
-            slots.head,
-            slots.body,
-            slots.bust,
-            slots.tail,
-            null,
-            null,
-            null,
-            BodyScale,
-            BodyScale,
-            BodyScale
-        );
-
-        _cySpringController.Reset();
-        _cySpringLoaded = true;
-
-        // Warm-up oficial: el juego asienta la cadena antes de mostrarla
-        // (CharaPropController.ReserveWarmingUpCySpring + TryUpdateWarmUp). Sin esto la pose
-        // simulada arranca clavada en la de carga.
-        if (CySpringWarmUpTime > 0.0f)
-        {
-            _cySpringController.ReserveWarmingUpCySpring(CySpringWarmUpTime);
-            _cySpringController.TryUpdateWarmUp();
-        }
-
-        LinkSkirtControllerToCySpring();
+        LoadDynamicBonePhysics();
     }
 
-    private Dictionary<string, Transform> BuildCySpringTransformCache(Transform root, out HashSet<string> duplicateBoneNames)
+    private void LoadDynamicBonePhysics()
     {
-        Dictionary<string, Transform> bones = new Dictionary<string, Transform>();
-        duplicateBoneNames = new HashSet<string>();
-
-        if (root == null)
-            return bones;
-
-        Transform[] allBones = root.GetComponentsInChildren<Transform>(true);
-
-        for (int i = 0; i < allBones.Length; i++)
+        if (IsMini || PhysicsContainer == null)
+            return;
+        cySpringDataContainers = new List<CySpringDataContainer>(PhysicsContainer.GetComponentsInChildren<CySpringDataContainer>());
+        var bones = new Dictionary<string, Transform>();
+        foreach (var bone in GetComponentsInChildren<Transform>())
         {
-            Transform bone = allBones[i];
-
-            if (bone == null || string.IsNullOrEmpty(bone.name))
-                continue;
-
             if (!bones.ContainsKey(bone.name))
-            {
                 bones.Add(bone.name, bone);
-            }
-            else
-            {
-                duplicateBoneNames.Add(bone.name);
-            }
         }
 
-        return bones;
-    }
-
-    private Transform FindCySpringTransform(Transform root, string boneName)
-    {
-        if (root == null || string.IsNullOrEmpty(boneName))
-            return null;
-
-        Transform[] allBones = root.GetComponentsInChildren<Transform>(true);
-
-        for (int i = 0; i < allBones.Length; i++)
+        var colliders = new Dictionary<string, Transform>();
+        for (int i = 0; i < cySpringDataContainers.Count; i++)
         {
-            if (allBones[i] != null && allBones[i].name == boneName)
-                return allBones[i];
+            colliders = UmaUtility.MergeDictionaries(colliders, cySpringDataContainers[i].InitiallizeCollider(bones));
         }
 
-        return null;
+        for (int i = 0; i < cySpringDataContainers.Count; i++)
+        {
+            cySpringDataContainers[i].InitializePhysics(bones, colliders);
+        }
+
+        SkirtSurfaceCollisionSolver surfaceSolver = GetComponent<SkirtSurfaceCollisionSolver>();
+        if (surfaceSolver == null)
+            surfaceSolver = gameObject.AddComponent<SkirtSurfaceCollisionSolver>();
+        bones.TryGetValue("Hip", out Transform skirtHip);
+        var skirtColliders = new List<DynamicBoneColliderBase>();
+        foreach (Transform transform in colliders.Values)
+        {
+            DynamicBoneColliderBase collider = transform.GetComponent<DynamicBoneColliderBase>();
+            if (collider != null)
+            {
+                if (IsBodySkirtCollider(collider) && collider.GetComponent<SkirtCollisionVisualizer>() == null)
+                    collider.gameObject.AddComponent<SkirtCollisionVisualizer>();
+                if (IsThighSkirtCollider(collider.ColliderName))
+                    skirtColliders.Add(collider);
+            }
+        }
+
+        surfaceSolver.Initialize(GetComponentsInChildren<DynamicBone>(true), skirtHip, skirtColliders);
     }
 
-    /// <summary>
-    /// Indica si el live ya ha posado al personaje (la animacion ya se ha aplicado al menos una
-    /// vez). Fuera de un live no se re-liga: el visor de personaje ya esta en su pose.
-    /// </summary>
-    private bool IsAnimatedPoseReadyForCySpring()
+    private static bool IsBodySkirtCollider(DynamicBoneColliderBase collider)
     {
-        Gallop.Live.Director director = Gallop.Live.Director.instance;
-
-        if (director == null || !director._isLiveSetup)
+        if (collider == null || string.IsNullOrEmpty(collider.ColliderName) || collider.ColliderName.IndexOf("Skirt", StringComparison.OrdinalIgnoreCase) < 0)
             return false;
-
-        return director._liveCurrentTime > 0.2f;
+        if (collider.ColliderName.IndexOf("Thigh", StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+        DynamicBoneCollider dynamicCollider = collider as DynamicBoneCollider;
+        bool isSideHip = collider.ColliderName.EndsWith("_L", StringComparison.OrdinalIgnoreCase) || collider.ColliderName.EndsWith("_R", StringComparison.OrdinalIgnoreCase);
+        return collider.ColliderName.IndexOf("Hip", StringComparison.OrdinalIgnoreCase) >= 0 && isSideHip && (dynamicCollider == null || dynamicCollider.m_Radius <= 0.25f);
     }
 
-    /// <summary>
-    /// Ancla del motor CySpring. El live coloca al personaje moviendo el nodo "Position" del rig,
-    /// no el contenedor; y el solver trabaja con el owner en el ORIGEN (UpdatePrevousPosture pone
-    /// a cero su posicion y EndSimulation la restaura). Si el owner es el contenedor, el rig queda
-    /// a metros del origen (medido: ~2,9 m) y el motor resuelve posiciones de colision y fuerzas
-    /// de desplazamiento en un espacio desplazado: el pelo atraviesa el cuerpo y "se sube" al
-    /// andar. Con el rig root como owner, el espacio del solver coincide con el del personaje.
-    /// </summary>
-    private void BindCySpringOwnerAnchor(CySpringController controller, Transform hip)
+    private static bool IsThighSkirtCollider(string colliderName)
     {
-        if (controller == null)
-            return;
-
-        _cySpringHip = hip;
-
-        Transform rigRoot = transform.Find("Position");
-
-        if (rigRoot == null)
-            rigRoot = hip != null ? hip : transform;
-
-        controller.SetOwner(rigRoot.gameObject, hip, _cySpringOwner);
-
-        // El plano de falda se coloca con `SkirtRootPos - RootPos` y se compara contra posiciones de
-        // hueso que estan en el espacio de este mismo owner (que en el step vale 0). Si RootPos se
-        // lee del contenedor, el plano queda desplazado por la posicion del personaje (medido en el
-        // live: hasta 8,5 m de empuje en un panel). Tiene que ser el ancla del motor.
-        if (_skirtController != null)
-            _skirtController.SetRootAnchor(rigRoot);
+        return !string.IsNullOrEmpty(colliderName) && colliderName.IndexOf("Thigh", StringComparison.OrdinalIgnoreCase) >= 0 && colliderName.IndexOf("MSkirt", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private void LinkSkirtControllerToCySpring()
+    public void LoadSchoolUniformSkirtCollision(UmaDatabaseEntry entry)
     {
-        if (!CySpringEnableSkirtSolver)
+        if (entry == null)
             return;
-        if (_cySpringController == null || _skirtController == null)
+        GameObject source = entry.Get<GameObject>();
+        if (source == null)
             return;
-
-    _cySpringController.CreateLinkSkirtController(_skirtController);
-    }
-
-
-    /// <summary>
-    /// Une a cada hijo de una cadena de falda los nombres de colision que declara la raiz.
-    /// La raiz nombra el volumen de su sector de cadera ademas de las capsulas del muslo; los
-    /// hijos solo nombran las capsulas, asi que la tela podia plegarse hacia dentro en el
-    /// gluteo. Con la herencia, todos los huesos de la cadena colisionan contra el mismo set.
-    /// </summary>
-    private static void PropagateClothCollisionNames(CySpringDataContainer container, bool onlySkirt = true)
-    {
-        if (container == null || container.springParam == null)
-            return;
-
-        for (int i = 0; i < container.springParam.Count; i++)
+        if (!PhysicsContainer)
         {
-            Gallop.CySpringParamDataElement spring = container.springParam[i];
-            if (spring == null || spring._boneName == null || spring._collisionNameList == null)
-                continue;
+            PhysicsContainer = new GameObject("PhysicsController");
+            PhysicsContainer.transform.SetParent(transform);
+        }
 
-            if (onlySkirt && spring._boneName.IndexOf("MSkirt", StringComparison.OrdinalIgnoreCase) < 0)
-                continue;
-
-            if (spring._childElements == null)
-                continue;
-
-            for (int j = 0; j < spring._childElements.Count; j++)
+        CySpringDataContainer destination = null;
+        if (ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
+            destination = PhysicsContainer.GetComponentsInChildren<CySpringDataContainer>(true).FirstOrDefault(c => c.name.StartsWith("pfb_bdy", StringComparison.OrdinalIgnoreCase) && c.name.IndexOf("bust", StringComparison.OrdinalIgnoreCase) < 0);
+        if (destination == null)
+            destination = PhysicsContainer.GetComponent<CySpringDataContainer>();
+        if (destination == null)
+            destination = PhysicsContainer.AddComponent<CySpringDataContainer>();
+        if (destination.collisionParam == null)
+            destination.collisionParam = new List<CySpringCollisionData>();
+        if (destination.springParam == null)
+            destination.springParam = new List<CySpringParamDataElement>();
+        foreach (CySpringDataContainer sourceContainer in source.GetComponentsInChildren<CySpringDataContainer>(true))
+        {
+            foreach (CySpringCollisionData collision in sourceContainer.collisionParam)
             {
-                Gallop.CySpringParamDataChildElement child = spring._childElements[j];
-                if (child == null)
+                if (!IsSchoolUniformSkirtCollider(collision))
                     continue;
-
-                if (child._collisionNameList == null)
-                    child._collisionNameList = new List<string>();
-
-                for (int k = 0; k < spring._collisionNameList.Count; k++)
-                {
-                    string name = spring._collisionNameList[k];
-                    if (string.IsNullOrEmpty(name))
-                        continue;
-                    if (!child._collisionNameList.Contains(name))
-                        child._collisionNameList.Add(name);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Reconstruye SOLO el puente nativo de tela (falda y ropa) sin recrear el personaje.
-    /// Permite aplicar en caliente datos de colision cambiados.
-    /// </summary>
-    public void ReloadClothPhysics()
-    {
-        CySpringDataContainer[] containers = GetComponentsInChildren<CySpringDataContainer>(true);
-
-        if (containers == null || containers.Length == 0)
-        {
-            Debug.LogWarning("[UmaContainerCharacter] ReloadClothPhysics: no hay contenedores CySpring.");
-            return;
-        }
-
-        // Igual que LoadPhysics: todas las cadenas van al puente nativo.
-        cySpringDataContainers = new List<CySpringDataContainer>(containers);
-
-        Dictionary<string, Transform> cache = BuildCySpringTransformCache(transform, out HashSet<string> duplicates);
-
-        Transform hip = FindCySpringTransform(transform, "Hip");
-        if (hip == null && UpBodyBone != null)
-            hip = UpBodyBone.transform;
-        if (hip == null)
-            hip = transform.Find("Position/Hip");
-        if (hip == null)
-            hip = transform;
-
-        var slots = SplitCySpringContainers(cySpringDataContainers);
-
-        PropagateClothCollisionNames(slots.body);
-
-        if (_cySpringController == null)
-        {
-            _cySpringOwner = new UmaViewerCySpringOwner(this);
-            _cySpringController = CySpringController.AddController(gameObject, hip, _cySpringOwner);
-        }
-
-        if (_cySpringController == null)
-        {
-            Debug.LogError("[UmaContainerCharacter] ReloadClothPhysics: no se pudo crear el controller.");
-            return;
-        }
-
-        BindCySpringOwnerAnchor(_cySpringController, hip);
-        _cySpringController.EnableWind = CySpringEnableWind;
-
-        _cySpringController.LoadFromDataContainers(
-            cache, slots.head, slots.body, slots.bust, slots.tail, null, null, null,
-            BodyScale, BodyScale, BodyScale);
-
-        _cySpringController.Reset();
-        _cySpringLoaded = true;
-        LinkSkirtControllerToCySpring();
-
-        if (CySpringWarmUpTime > 0.0f)
-        {
-            _cySpringController.ReserveWarmingUpCySpring(CySpringWarmUpTime);
-            _cySpringController.TryUpdateWarmUp();
-        }
-
-    }
-
-    private void LoadSkirtController(UmaDatabaseEntry bodyEntry)
-    {
-        if (IsMini || Body == null || bodyEntry == null)
-            return;
-
-        SkirtParamDataAsset skirtParam = LoadBestSkirtParamAsset(bodyEntry);
-        if (skirtParam == null)
-        {
-            Debug.LogWarning($"[UmaContainerCharacter] No SkirtParamDataAsset found for {bodyEntry.Name}.");
-            return;
-        }
-
-        _skirtController = GetComponent<SkirtController>();
-        if (_skirtController == null)
-            _skirtController = gameObject.AddComponent<SkirtController>();
-
-        _skirtController.CharaId = CharaEntry != null ? CharaEntry.Id : 0;
-        _skirtController.ModelScale = BodyScale > 0f ? BodyScale : 1f;
-
-        // Igual que la fisica: si el modelo aun no esta montado (sin nodo "Position"), la falda
-        // capturaria su pose de reposo a medias y luego "flota" al moverse. Se pospone el Create
-        // hasta el ligado diferido (AlterLateUpdateRuntime).
-        if (transform.Find("Position") == null)
-        {
-            _pendingSkirtParam = skirtParam;
-            return;
-        }
-
-        _skirtController.Create(skirtParam);
-
-        if (_cySpringController != null)
-            LinkSkirtControllerToCySpring();
-    }
-
-    /// <summary>
-    /// Crea el SkirtController que quedo pendiente porque el modelo no estaba montado.
-    /// </summary>
-    private void CreatePendingSkirtController()
-    {
-        if (_pendingSkirtParam == null || _skirtController == null)
-            return;
-
-        SkirtParamDataAsset skirtParam = _pendingSkirtParam;
-        _pendingSkirtParam = null;
-        _skirtController.Create(skirtParam);
-    }
-
-    private SkirtParamDataAsset LoadBestSkirtParamAsset(UmaDatabaseEntry bodyEntry)
-    {
-        List<UmaDatabaseEntry> candidates = FindSkirtParamEntries(bodyEntry).ToList();
-        if (candidates.Count == 0)
-            return null;
-
-        int charaId = CharaEntry != null ? CharaEntry.Id : 0;
-        SkirtParamDataAsset best = null;
-        int bestScore = -1;
-        bool bestHasCharaOverride = false;
-
-        for (int i = 0; i < candidates.Count; i++)
-        {
-            UmaDatabaseEntry entry = candidates[i];
-            if (entry == null)
-                continue;
-
-            AssetBundle bundle = UmaAssetManager.LoadAssetBundle(entry, false, true);
-            if (bundle == null)
-                continue;
-
-            SkirtParamDataAsset asset = LoadSkirtParamAssetFromBundle(bundle, entry);
-            if (asset == null)
-            {
-                Debug.LogWarning($"[UmaContainerCharacter] Skirt AB has no SkirtParamDataAsset: {entry.Name}");
-                continue;
-            }
-
-            int score = ScoreSkirtParamAsset(asset);
-            bool hasCharaOverride = charaId > 0 && asset.GetOverrideData(charaId) != null;
-
-            if (score > bestScore || (score == bestScore && hasCharaOverride && !bestHasCharaOverride))
-            {
-                best = asset;
-                bestScore = score;
-                bestHasCharaOverride = hasCharaOverride;
-            }
-        }
-
-        return best;
-    }
-
-    private IEnumerable<UmaDatabaseEntry> FindSkirtParamEntries(UmaDatabaseEntry bodyEntry)
-    {
-        if (Main == null || Main.AbChara == null || bodyEntry == null)
-            yield break;
-
-        HashSet<string> bodyTokens = GetSkirtBodyTokens(bodyEntry);
-        if (bodyTokens.Count == 0)
-            yield break;
-
-        foreach (UmaDatabaseEntry entry in Main.AbChara)
-        {
-            if (entry == null || !entry.IsAssetBundle)
-                continue;
-
-            string assetName = Path.GetFileName(entry.Name);
-            if (string.IsNullOrEmpty(assetName))
-                continue;
-
-            string lower = assetName.ToLowerInvariant();
-            if (!lower.Contains("_skirt"))
-                continue;
-
-            foreach (string bodyToken in bodyTokens)
-            {
-                string expectedPrefix = "ast_" + bodyToken.ToLowerInvariant() + "_skirt";
-                if (lower.StartsWith(expectedPrefix))
-                {
-                    yield return entry;
-                    break;
-                }
-            }
-        }
-    }
-
-    private HashSet<string> GetSkirtBodyTokens(UmaDatabaseEntry bodyEntry)
-    {
-        HashSet<string> result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        string prefabName = Path.GetFileName(bodyEntry.Name);
-        if (!string.IsNullOrEmpty(prefabName) && prefabName.StartsWith("pfb_", StringComparison.OrdinalIgnoreCase))
-        {
-            string token = prefabName.Substring(4);
-            AddBodyTokenVariants(result, token);
-        }
-
-        string directoryName = Path.GetFileName(Path.GetDirectoryName(bodyEntry.Name));
-        AddBodyTokenVariants(result, directoryName);
-
-        return result;
-    }
-
-    private void AddBodyTokenVariants(HashSet<string> result, string token)
-    {
-        if (result == null || string.IsNullOrEmpty(token))
-            return;
-
-        if (!token.StartsWith("bdy", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        result.Add(token);
-
-        string[] parts = token.Split('_');
-        if (parts.Length >= 2)
-            result.Add(parts[0] + "_" + parts[1]);
-    }
-
-    private SkirtParamDataAsset LoadSkirtParamAssetFromBundle(AssetBundle bundle, UmaDatabaseEntry entry)
-    {
-        if (bundle == null)
-            return null;
-
-        //(P1) ANTES se intentaba bundle.LoadAsset<SkirtParamDataAsset>(nombreDelAsset) y, si
-        //fallaba, se cogÃ­a allAssets[0] a ciegas. La bÃºsqueda por nombre NO puede funcionar:
-        //el asset viene del juego con el GUID de script ORIGINAL, que no existe en este
-        //proyecto, asÃ­ que Unity no puede asociarlo a nuestro tipo y avisa
-        //"No script asset for SkirtParamDataAsset". AdemÃ¡s Cogear el primero a ciegas puede
-        //elegir un asset que no corresponde a este cuerpo, y de ahÃ­ el "poco peso".
-        //Ahora: se carga por TIPO y se puntÃºa el que mÃ¡s huesos de falda resuelva.
-        SkirtParamDataAsset[] allAssets = bundle.LoadAllAssets<SkirtParamDataAsset>();
-
-        if (allAssets == null || allAssets.Length == 0)
-            return null;
-
-        if (allAssets.Length == 1)
-            return allAssets[0];
-
-        SkirtParamDataAsset best = null;
-        int bestScore = -1;
-
-        for (int i = 0; i < allAssets.Length; i++)
-        {
-            SkirtParamDataAsset candidate = allAssets[i];
-            if (candidate == null) continue;
-
-            int score = ScoreSkirtParamAsset(candidate);
-
-            if (score > bestScore)
-            {
-                bestScore = score;
-                best = candidate;
-            }
-        }
-
-        return best != null ? best : allAssets[0];
-    }
-
-    private int ScoreSkirtParamAsset(SkirtParamDataAsset asset)
-    {
-        if (asset == null || asset._skirtBone == null || Body == null)
-            return 0;
-
-        int score = 0;
-        Transform root = Body.transform;
-
-        for (int i = 0; i < asset._skirtBone.Count; i++)
-        {
-            SkirtParamDataElement element = asset._skirtBone[i];
-            if (element == null)
-                continue;
-
-            if (FindCySpringTransform(root, element._rootBoneName) != null &&
-                FindCySpringTransform(root, element._childBoneName) != null)
-            {
-                score++;
-            }
-        }
-
-        return score;
-    }
-
-    private (
-        CySpringDataContainer head,
-        CySpringDataContainer body,
-        CySpringDataContainer bust,
-        CySpringDataContainer tail
-    ) SplitCySpringContainers(List<CySpringDataContainer> containers)
-    {
-        CySpringDataContainer head = null;
-        CySpringDataContainer body = null;
-        CySpringDataContainer bust = null;
-        CySpringDataContainer tail = null;
-
-        if (containers == null)
-            return (head, body, bust, tail);
-
-        for (int i = 0; i < containers.Count; i++)
-        {
-            CySpringDataContainer container = containers[i];
-
-            if (container == null)
-                continue;
-
-            int kind = GuessCySpringContainerKind(container);
-
-            switch (kind)
-            {
-                case 0:
-                    if (head == null)
-                        head = container;
-                    else
-                        Debug.LogWarning($"[UmaContainerCharacter] Extra head CySpringDataContainer ignored: {container.name}");
-                    break;
-
-                case 1:
-                    if (body == null)
-                        body = container;
-                    else
-                        Debug.LogWarning($"[UmaContainerCharacter] Extra body CySpringDataContainer ignored: {container.name}");
-                    break;
-
-                case 2:
-                    if (bust == null)
-                        bust = container;
-                    else
-                        Debug.LogWarning($"[UmaContainerCharacter] Extra bust CySpringDataContainer ignored: {container.name}");
-                    break;
-
-                case 3:
-                    if (tail == null)
-                        tail = container;
-                    else
-                        Debug.LogWarning($"[UmaContainerCharacter] Extra tail CySpringDataContainer ignored: {container.name}");
-                    break;
-            }
-        }
-
-        if (body == null && containers.Count == 1)
-            body = containers[0];
-
-        return (head, body, bust, tail);
-    }
-
-    /// <summary>
-    /// (FIX cabello) Decide a quÃ© parte (head=0, body=1, bust=2, tail=3) pertenece un
-    /// contenedor. La fuente PRIMARIA son los HUESOS de sus resortes (prefijos del juego:
-    /// `Sp_He_Hair`, `Sp_Hi_Tail`, `Sp_Ch_Bust`, `Sp_Hi_MSkirt`â€¦). El nombre del
-    /// GameObject/prefab NO basta: el pelo vive en `pfb_chrâ€¦_cloth00`, cuyo path contiene
-    /// "cloth" y por eso la versiÃ³n anterior lo casaba como "body" ANTES de mirar los
-    /// huesos â†’ el pelo se descartaba como "Extra body ignored" y quedaba RÃGIDO. Ahora se
-    /// miran los huesos primero (autoritativos) y el path sÃ³lo sirve de apoyo si no hay
-    /// huesos reconocibles.
-    /// </summary>
-    private int GuessCySpringContainerKind(CySpringDataContainer container)
-    {
-        if (container == null)
-            return 1;
-
-        // 1) Huesos: fuente autoritativa.
-        if (container.springParam != null)
-        {
-            for (int i = 0; i < container.springParam.Count; i++)
-            {
-                //(Fase 0.5: fully-qualified. Hay DOS clases llamadas CySpringParamDataElement: la de
-                //namespace Gallop (Gallop\Cyspring\CySpringParamDataElement.cs) y la del namespace
-                //global (Gallop\StageScript\CySpring\CySpringParamDataElement.cs). Con 'using Gallop;'
-                //gana la del namespace global, y container.springParam es List<Gallop.CySpringâ€¦> â†’
-                //CS0029. container es CySpringDataContainer (Gallop), asÃ­ que el tipo correcto es el
-                //de Gallop. Sin este cambio: error CS0029 en la lÃ­nea 848.)
-                Gallop.CySpringParamDataElement element = container.springParam[i];
-
-                if (element == null)
+                if (destination.collisionParam.Any(c => c._collisionName == collision._collisionName))
                     continue;
-
-                int kind = GuessCySpringBoneKind(element._boneName);
-
-                if (kind >= 0)
-                    return kind;
-
-                if (element._childElements == null)
-                    continue;
-
-                for (int j = 0; j < element._childElements.Count; j++)
-                {
-                    //(Fase 0.5: mismo choque que en la lÃ­nea 848, una lÃ­nea mÃ¡s abajo. Hay DOS
-                    //clases CySpringParamDataChildElement: Gallop\Cyspring\â€¦ (namespace Gallop) y
-                    //Gallop\StageScript\CySpring\â€¦ (namespace global). Con 'using Gallop;' gana la
-                    //global, y element._childElements es List<Gallop.â€¦> â†’ CS0029. Sin este cambio:
-                    //error CS0029 en la lÃ­nea 869.)
-                    Gallop.CySpringParamDataChildElement child = element._childElements[j];
-
-                    if (child == null)
-                        continue;
-
-                    kind = GuessCySpringBoneKind(child._boneName);
-
-                    if (kind >= 0)
-                        return kind;
-                }
+                destination.collisionParam.Add(CloneCollisionData(collision));
             }
         }
-
-        // 2) Sin huesos reconocibles: nombre del GameObject/prefab como apoyo.
-        string path = GetTransformPath(container.transform).ToLowerInvariant();
-
-        if (path.Contains("tail"))
-            return 3;
-
-        if (path.Contains("bust") || path.Contains("breast") || path.Contains("mune"))
-            return 2;
-
-        if (path.Contains("head") || path.Contains("hair") || path.Contains("ear"))
-            return 0;
-
-        if (path.Contains("body") || path.Contains("cloth") || path.Contains("skirt"))
-            return 1;
-
-        return 1;
     }
 
-    private int GuessCySpringBoneKind(string boneName)
+    private static bool IsSchoolUniformSkirtCollider(CySpringCollisionData collision)
     {
-        if (string.IsNullOrEmpty(boneName))
-            return -1;
-
-        string name = boneName.ToLowerInvariant();
-
-        if (name.Contains("tail"))
-            return 3;
-
-        if (name.Contains("bust") || name.Contains("breast") || name.Contains("mune"))
-            return 2;
-
-        if (name.Contains("head") || name.Contains("hair") || name.Contains("ear"))
-            return 0;
-
-        if (name.Contains("skirt") || name.Contains("cloth") || name.Contains("body"))
-            return 1;
-
-        return -1;
+        if (collision == null)
+            return false;
+        return string.Equals(collision._collisionName, "Col_B_Thigh_L_MSkirt_L", StringComparison.OrdinalIgnoreCase) || string.Equals(collision._collisionName, "Col_B_Thigh_R_MSkirt_R", StringComparison.OrdinalIgnoreCase) || string.Equals(collision._collisionName, "Col_B_Hip_MSkirt_L", StringComparison.OrdinalIgnoreCase) || string.Equals(collision._collisionName, "Col_B_Hip_MSkirt_R", StringComparison.OrdinalIgnoreCase);
     }
 
-    private string GetTransformPath(Transform t)
+    private static CySpringCollisionData CloneCollisionData(CySpringCollisionData source)
     {
-        if (t == null)
-            return string.Empty;
-
-        string path = t.name;
-        Transform parent = t.parent;
-
-        while (parent != null)
+        return new CySpringCollisionData
         {
-            path = parent.name + "/" + path;
-            parent = parent.parent;
-        }
-
-        return path;
+            _collisionName = source._collisionName,
+            _targetObjectName = source._targetObjectName,
+            _isOtherTarget = source._isOtherTarget,
+            _offset = source._offset,
+            _offset2 = source._offset2,
+            _radius = source._radius,
+            _distance = source._distance,
+            _normal = source._normal,
+            _type = source._type,
+            _isInner = source._isInner
+        };
     }
 
-    // (NOMBRE LEGADO) Lo usan la UI (UISettingsModel) y el exportador, y la escena lo tiene
-    // enganchado por nombre en el Toggle de fisica. Ya no hay DynamicBone: conmuta todas las
-    // cadenas del puente nativo.
     public void SetDynamicBoneEnable(bool isOn)
     {
         if (IsMini)
             return;
-
         EnablePhysics = isOn;
-
-        if (_cySpringController != null)
+        if (ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
         {
-            _cySpringController.SetEnableAllCySpringBones(isOn);
+            if (_cySpringController != null)
+                _cySpringController.SetEnableAllCySpringBones(isOn);
+            if (_skirtController != null)
+                _skirtController.IsEnableSkirt = isOn;
+            return;
+        }
 
-            if (isOn)
-                _cySpringController.Reset();
+        var surfaceSolver = GetComponent<SkirtSurfaceCollisionSolver>();
+        if (surfaceSolver != null)
+            surfaceSolver.enabled = isOn;
+        if (cySpringDataContainers == null)
+            return;
+        foreach (CySpringDataContainer cySpring in cySpringDataContainers)
+        {
+            cySpring.EnablePhysics(isOn);
         }
     }
 
     public void ConfigureLivePhysics()
     {
-        if (!IsLive || IsMini || cySpringDataContainers == null) return;
-
-        EnablePhysics = true;
-        SetDynamicBoneEnable(true);
+        if (ActivePhysicsBackend != CharacterPhysicsBackend.DynamicBone || !IsLive || IsMini || cySpringDataContainers == null)
+            return;
+        var profile = GetComponent<Gallop.Live.Master5LivePhysicsProfile>();
+        if (profile == null)
+            profile = gameObject.AddComponent<Gallop.Live.Master5LivePhysicsProfile>();
+        profile.ApplyToNewPhysics();
     }
+
     public void ResetDynamicBone()
     {
         if (IsMini)
             return;
+        if (ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
+        {
+            if (_cySpringController != null)
+                _cySpringController.Reset();
+            return;
+        }
 
-        if (_cySpringController != null)
-            _cySpringController.Reset();
-    }
-
-    /// <summary>
-    /// Colisiones de entorno del cutt: colisores fijados al mundo (suelo, atrezzo) que el timeline
-    /// entrega a cada cadena. Cabeza, cuerpo y cola se resuelven por separado, igual que en el juego.
-    /// </summary>
-    public void ApplyEnvCySpringCollisionToHead(CySpringCollisionRuntimeData[] envColArray)
-    {
-        _cySpringController?.ApplyEnvCySpringCollisionToHead(envColArray);
-    }
-
-    public void ApplyEnvCySpringCollisionToBody(CySpringCollisionRuntimeData[] envColArray)
-    {
-        _cySpringController?.ApplyEnvCySpringCollisionToBody(envColArray);
-    }
-
-    public void ApplyEnvCySpringCollisionToTail(CySpringCollisionRuntimeData[] envColArray)
-    {
-        _cySpringController?.ApplyEnvCySpringCollisionToTail(envColArray);
+        if (cySpringDataContainers == null)
+            return;
+        foreach (CySpringDataContainer cySpring in cySpringDataContainers)
+        {
+            cySpring.ResetPhysics();
+        }
     }
 
     public void SetEyeTracking(bool isOn)
@@ -1404,10 +761,41 @@ public class UmaContainerCharacter : UmaContainer
         FaceOverrideData?.SetEnable(isOn);
     }
 
+    private int _liveSpringPhaseFrame = -1;
+    // Called after this model's Late components, and after its AfterLate
+    // components, respectively, by Director's existing model registry.
+    internal void BeginLiveModelLateUpdate()
+    {
+        _liveSpringPhaseFrame = Time.frameCount;
+        AlterLateUpdateRuntime();
+    }
+
+    internal void EndLiveModelLateUpdate()
+    {
+        {
+            EndSpringSimulationRuntime();
+        }
+
+        {
+            UpdateFaceLightRuntime();
+        }
+
+        _liveModelOriginalDeltaTime = null;
+    }
+
     private void LateUpdate()
     {
         if (IsMini)
             return;
+        if (IsLive)
+            Gallop.Live.Director.instance?.ApplyDeferredLiveTimelineLateUpdate();
+        if (IsLive && _liveSpringPhaseFrame == Time.frameCount)
+        {
+            // The registry already completed this model's spring pair. Camera
+            // publication completes in the shared scene/model LateUpdate phase.
+            ApplyLiveEyeTraceAfterSpring();
+            return;
+        }
 
         AlterLateUpdateRuntime();
         AlterLateUpdatePostRuntime();
@@ -1417,142 +805,70 @@ public class UmaContainerCharacter : UmaContainer
     {
         InitFaceLightRuntime();
         UpdateFaceLightRuntime();
-
-        // å®˜æ–¹è¿™é‡ŒåŽé¢è¿˜ä¼šåšï¼š
-        // EyeHighlightController.DefaultEyeMaterial()
-        // RendererHolder.SetShaderKeyword()
-        // CharaPartsHolder.SetHairCutOff()
-        // çŽ°åœ¨å…ˆä¸è¡¥ï¼Œå…ˆä¿® FaceLightã€‚
+    // 官方这里后面还会做：
+    // EyeHighlightController.DefaultEyeMaterial()
+    // RendererHolder.SetShaderKeyword()
+    // CharaPartsHolder.SetHairCutOff()
     }
 
-    /// <summary>
-    /// Comprueba que el modelo esta montado y estable para ligar la fisica: el nodo "Position"
-    /// existe y el numero de contenedores CySpring no cambia entre frames. Los personajes que se
-    /// cargan a mitad de live montan sus piezas varios frames despues; ligar antes deja la pose de
-    /// reposo a medias (medido: falda desviada 0,97 m respecto al cuerpo).
-    /// </summary>
-    private bool IsModelReadyForCySpringBind()
-    {
-        if (transform.Find("Position") == null)
-        {
-            _bindReadyFrames = 0;
-            _bindLastContainerCount = -1;
-            return false;
-        }
-
-        int containerCount = GetComponentsInChildren<CySpringDataContainer>(true).Length;
-
-        if (containerCount == 0 || containerCount != _bindLastContainerCount)
-        {
-            _bindLastContainerCount = containerCount;
-            _bindReadyFrames = 0;
-            return false;
-        }
-
-        _bindReadyFrames++;
-        return _bindReadyFrames >= 2;
-    }
-
+    bool _springSimulationBegun;
     private void AlterLateUpdateRuntime()
     {
-        // Ligado pendiente: el modelo no estaba montado cuando el builder llamo a LoadPhysics.
-        // Se liga en el primer frame en que ya existe el rig completo, que es cuando la pose de
-        // reposo del spring tiene sentido.
-        if (_cySpringBindPending)
+        _springSimulationBegun = false;
+        if (EnablePhysics && _cySpringLoaded && _cySpringController != null && !(IsLive && LiveModelComponentsPaused))
         {
-            if (!IsModelReadyForCySpringBind())
-                return;
-
-            _cySpringBindPending = false;
-            CreatePendingSkirtController();
-            LoadPhysics();
-            return;
-        }
-
-        // La pose de reposo del spring (InitLocalRotation / BoneAxis / FirstPosition /
-        // InitBoneDistance) se captura en LoadPhysics, cuando el personaje aun esta en la pose del
-        // prefab. En el live la primera pose animada llega despues, asi que el spring perseguiria
-        // para siempre una pose que no es la del personaje. Se vuelve a ligar UNA sola vez en cuanto
-        // el live ya ha posado al personaje (medido: con la pose del prefab el pelo queda flotando
-        // y atravesando brazos/hombros incluso con la fisica desactivada).
-        if (CySpringRebindOnAnimatedPose && !_cySpringPoseRebound && _cySpringLoaded &&
-            _cySpringController != null && IsAnimatedPoseReadyForCySpring())
-        {
-            _cySpringPoseRebound = true;
-            ReloadClothPhysics();
-        }
-
-        // El rig root ("Position") lo crea el cargador DESPUES de LoadPhysics, asi que el ancla se
-        // resuelve aqui la primera vez que ya existe. Hasta entonces el controller ancla en el Hip,
-        // que tambien es autoconsistente (se pone a cero el mismo transform del que se toma
-        // _previousPos), pero el rig root es el equivalente real del "character root" del juego.
-        if (!_cySpringAnchorResolved && _cySpringController != null && transform.Find("Position") != null)
-        {
-            _cySpringAnchorResolved = true;
-            BindCySpringOwnerAnchor(_cySpringController, _cySpringHip);
-        }
-
-        // (DATAMINE) UN paso por frame con el dt del frame, igual que el juego
-        // (CySpringUpdater.BeginSimulation -> CySpring.BeginSimulation(Time.deltaTime)).
-        //
-        // Motivo MEDIDO: es un solver Verlet y su energÃ­a viene del desplazamiento del hueso
-        // respecto al frame anterior (d = PrevTargetPosition - TargetPosition), pero el ANCLA
-        // (SelfPosition) solo cambia UNA vez por frame (al recoger la pose animada en Begin).
-        // Si se meten varios sub-pasos por frame, los sub-pasos extra resuelven con el ancla
-        // quieta: la restriccion de longitud + la rigidez devuelven la cadena a la pose de
-        // reposo y la tela/pelo se queda RIGIDA (medido: huesos con localRotation constante).
-        if (EnablePhysics && _cySpringLoaded && _cySpringController != null)
-        {
-            float dt = Time.deltaTime;
-            if (dt <= 0.0f)
-                dt = Time.unscaledDeltaTime;
-            dt = Mathf.Clamp(dt, 0.0f, 0.25f);
-
-            // Cadencia del juego: el solver es un Verlet calibrado para pasos fijos
-            // (GetTargetCySpringFPS -> 30 / 60). Alimentarlo en CADA frame de render (120 fps en
-            // este proyecto) lo acelera x2 y el pelo/falda se sienten "ligeros" y se mueven de mas.
-            float targetFps = _cySpringController.TargetCySpringFPS;
-            float fixedStep = targetFps > 0.0f ? 1.0f / targetFps : 0.0f;
-
-            if (fixedStep <= 0.0f)
+            _cySpringController.TryUpdateWarmUp();
+            float delta = IsLive ? LiveModelOriginalDeltaTime ?? Time.smoothDeltaTime : Time.deltaTime;
+            // CySpringUpdater.BeginSimulation (0x5310bc0): a held model clock
+            // must not advance native history while PostSpring holds its pose.
+            if (!IsLive || delta > 1e-6f)
             {
-                _cySpringController.BeginSimulation(dt, false);
-                _cySpringController.EndSimulation();
-                return;
+                bool parallel = IsLive && LiveCpuScheduling.Enabled && Gallop.Live.Director.instance != null
+                    && Gallop.Live.Director.instance.CharaContainerScript.Count >= 4 && Environment.ProcessorCount >= 4;
+                _cySpringController.BeginSimulation(delta, parallel);
+                _springSimulationBegun = true;
             }
-
-            _cySpringStepAccumulator += dt;
-
-            int steps = 0;
-            while (_cySpringStepAccumulator >= fixedStep && steps < 4)
-            {
-                _cySpringStepAccumulator -= fixedStep;
-                _cySpringController.BeginSimulation(fixedStep, false);
-                _cySpringController.EndSimulation();
-                steps++;
-            }
-
-            // Si el frame fue muy largo (carga, hitch) no acumulamos deuda infinita.
-            if (_cySpringStepAccumulator > fixedStep * 2.0f)
-                _cySpringStepAccumulator = fixedStep;
         }
     }
 
     private void AlterLateUpdatePostRuntime()
     {
-        // (TEMP) Interruptor de gizmos de colision, cada frame y barato (un flag estatico): asi
-        // el check del Inspector enciende/apaga las esferas al momento.
-        CySpringColliderVisualizer.CollidersEnabled = ColliderGizmosVisible;
+        EndLiveModelLateUpdate();
+        ApplyLiveEyeTraceAfterSpring();
+    }
 
-        // (AlterLateUpdatePost del original) Tras EndSimulation: UpdateBodyLightDir / UpdateFaceLight.
-        UpdateFaceLightRuntime();
+    private void EndSpringSimulationRuntime()
+    {
+        if (EnablePhysics && _cySpringLoaded && _cySpringController != null && !(IsLive && LiveModelComponentsPaused))
+        {
+            if (_springSimulationBegun)
+            {
+                _cySpringController.EndSimulation();
+                if (IsLive)
+                    FaceDrivenKeyTarget?.ApplyLiveEarVirtualParents();
+                _springSimulationBegun = false;
+            }
+
+            _cySpringController.TryUpdateWarmUp();
+            // Linked skirt chains are solved by NativeClothSkirtUpdate. This
+            // post pass handles only skirt columns without an active spring.
+            _skirtController?.UpdateSkirt();
+        }
+    }
+
+    private void ApplyLiveEyeTraceAfterSpring()
+    {
+        // Original EyeTraceController.AfterEndCySpringSimulation writes the eye
+        // nodes after physics. Director queued the elapsed time after camera
+        // sampling; resolve its final selected camera here, after UpdateMainCamera.
+        if (IsLive)
+            FaceDrivenKeyTarget?.LiveEyeTrace?.AfterEndCySpringSimulation();
     }
 
     private void InitFaceLightRuntime()
     {
         if (_faceLightInitialized && FaceRenderer != null && HeadToonBaseTransform != null)
             return;
-
         if (FaceRenderer == null)
         {
             FaceRenderer = FindRendererByName(transform, "M_Face");
@@ -1561,16 +877,13 @@ public class UmaContainerCharacter : UmaContainer
         if (FaceRenderer != null)
         {
             _faceMaterials = FaceRenderer.materials;
-
             FaceMaterial = null;
             foreach (var mat in _faceMaterials)
             {
                 if (mat == null || mat.shader == null)
                     continue;
-
                 string matName = mat.name.ToLower();
                 string shaderName = mat.shader.name;
-
                 if (shaderName.Contains("ToonFace") || matName.Contains("face"))
                 {
                     FaceMaterial = mat;
@@ -1581,7 +894,7 @@ public class UmaContainerCharacter : UmaContainer
 
         if (HeadToonBaseTransform == null)
         {
-            // å®˜æ–¹ InitFaceLight é»˜è®¤å°±æ˜¯ GetHeadTransformï¼Œä¸æ˜¯ Position_lightã€‚
+            // 官方 InitFaceLight 默认就是 GetHeadTransform，不是 Position_light。
             if (HeadBone != null)
             {
                 HeadToonBaseTransform = HeadBone.transform;
@@ -1601,13 +914,13 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         _faceLightInitialized = FaceRenderer != null && HeadToonBaseTransform != null;
+        Debug.Log($"[FaceLight] init={_faceLightInitialized}, " + $"FaceRenderer={(FaceRenderer ? FaceRenderer.name : "null")}, " + $"FaceMaterial={(FaceMaterial ? FaceMaterial.name : "null")}, " + $"HeadToonBase={(HeadToonBaseTransform ? HeadToonBaseTransform.name : "null")}");
     }
 
     private void UpdateFaceLightRuntime()
     {
         if (IsMini)
             return;
-
         if (!_faceLightInitialized || FaceRenderer == null || HeadToonBaseTransform == null)
         {
             InitFaceLightRuntime();
@@ -1615,84 +928,36 @@ public class UmaContainerCharacter : UmaContainer
 
         if (FaceRenderer == null || HeadToonBaseTransform == null)
             return;
-
         if (_faceMaterials == null || _faceMaterials.Length == 0)
             _faceMaterials = FaceRenderer.materials;
-
         Vector3 pos = HeadToonBaseTransform.position;
         Vector3 up = HeadToonBaseTransform.up.normalized;
         Vector3 forward = HeadToonBaseTransform.forward.normalized;
-
         if (FlipFaceForward)
             forward = -forward;
-
-        Vector3 faceCenter =
-            pos +
-            up * FaceCenterUpOffset +
-            forward * FaceCenterForwardOffset;
-
+        Vector3 faceCenter = pos + up * FaceCenterUpOffset + forward * FaceCenterForwardOffset;
         Matrix4x4 headMat = HeadToonBaseTransform.worldToLocalMatrix;
-
         foreach (var mat in _faceMaterials)
         {
             if (mat == null || mat.shader == null)
                 continue;
-
             string matName = mat.name.ToLower();
             string shaderName = mat.shader.name;
-
             if (!shaderName.Contains("ToonFace") && !matName.Contains("face"))
                 continue;
-
             mat.SetVector(ID_FaceCenterPos, faceCenter);
             mat.SetVector(ID_FaceUp, up);
             mat.SetVector(ID_FaceForward, forward);
             mat.SetMatrix(ID_FaceShadowHeadMat, headMat);
         }
-    }
 
-    // (DATAMINE) Aplica la pista FacialToon del live al material de la cara. El cliente deriva
-    // _NoseVisibility del umbral: con NosePretenseThreshold = 0 la sombra falsa de la nariz se
-    // apaga (asi no aparece a saltos cuando el angulo cruza el umbral del shader).
-    public void ApplyFacialToon(ref FacialToonDataUpdateInfo info)
-    {
-        if (IsMini)
-            return;
-
-        if (_faceMaterials == null || _faceMaterials.Length == 0)
-        {
-            if (FaceRenderer == null)
-                return;
-            _faceMaterials = FaceRenderer.materials;
-        }
-
-        float noseVisibility = info.NosePretenseThreshold > 0.0001f ? 1f : 0f;
-
-        for (int i = 0; i < _faceMaterials.Length; i++)
-        {
-            var mat = _faceMaterials[i];
-            if (mat == null || mat.shader == null)
-                continue;
-
-            string shaderName = mat.shader.name;
-            string matName = mat.name.ToLower();
-
-            if (!shaderName.Contains("ToonFace") && !matName.Contains("face"))
-                continue;
-
-            mat.SetFloat(ID_CheekPretenseThreshold, info.CheekPretenseThreshold);
-            mat.SetFloat(ID_NosePretenseThreshold, info.NosePretenseThreshold);
-            mat.SetFloat(ID_NoseVisibility, noseVisibility);
-            mat.SetFloat(ID_CylinderBlend, info.CylinderBlend);
-            mat.SetFloat(ID_HairNormalBlend, info.HairNormalBlend);
-        }
+        UpdateLiveFacialToonMaterialRuntime();
     }
 
     private static Transform FindTransformByName(Transform root, string name)
     {
         if (root == null)
             return null;
-
         var list = root.GetComponentsInChildren<Transform>(true);
         for (int i = 0; i < list.Length; i++)
         {
@@ -1707,7 +972,6 @@ public class UmaContainerCharacter : UmaContainer
     {
         if (root == null)
             return null;
-
         var list = root.GetComponentsInChildren<Renderer>(true);
         for (int i = 0; i < list.Length; i++)
         {
@@ -1717,10 +981,11 @@ public class UmaContainerCharacter : UmaContainer
 
         return null;
     }
+
     private void FixedUpdate()
     {
-        if (IsMini) return;
-
+        if (IsMini)
+            return;
         if (TrackTarget && EnableEyeTracking && !isAnimatorControl)
         {
             if (IK && !IK.enabled)
@@ -1730,14 +995,9 @@ public class UmaContainerCharacter : UmaContainer
 
             var finalRotation = FaceDrivenKeyTarget.GetEyeTrackRotation(TrackTarget.transform.position);
             FaceDrivenKeyTarget.SetEyeTrack(finalRotation);
-
             var cam = Camera.main;
             //LookAt Camera
-            // Camera.main puede ser null (p. ej. en el live, con las camaras gestionadas por Director):
-            // sin esta guarda se lanzaba NullReferenceException en cada FixedUpdate y el look-at se quedaba
-            // congelado en el ultimo valor.
-            if (cam)
-                TrackTarget.position = Vector3.Lerp(TrackTarget.position, cam.transform.position, Time.fixedDeltaTime * 3);
+            TrackTarget.position = Vector3.Lerp(TrackTarget.position, cam.transform.position, Time.fixedDeltaTime * 3);
         }
         else
         {
@@ -1752,21 +1012,9 @@ public class UmaContainerCharacter : UmaContainer
             FaceDrivenKeyTarget.ProcessLocator();
         }
 
-        
-
         TearControllers.ForEach(a => a.UpdateOffset());
-
         //Apply UV Animation
-
-        if (HeadShaderEffectData != null)
-        {
-            HeadShaderEffectData.updateUV(Time.fixedDeltaTime);
-        }
-
-        if (BodyShaderEffectData != null)
-        {
-            BodyShaderEffectData.updateUV(Time.fixedDeltaTime);
-        }
+        UpdatePreviewShaderEffects(Time.fixedDeltaTime);
     }
 
     public void UpBodyReset()
@@ -1780,17 +1028,21 @@ public class UmaContainerCharacter : UmaContainer
 
     public void CreateIK()
     {
-        if (IsMini) return;
+        if (IsMini)
+            return;
         var container = this;
         var animator = UmaAnimator;
         BipedRagdollReferences r = BipedRagdollReferences.FromAvatar(animator);
         BipedRagdollCreator.Options options = BipedRagdollCreator.AutodetectOptions(r);
         options.spine = true;
-
         var ik = container.gameObject.AddComponent<BipedIK>();
         ik.references.root = container.transform;
         ik.references.pelvis = r.hips;
-        ik.references.spine = new Transform[] { r.spine, r.chest };
+        ik.references.spine = new Transform[]
+        {
+            r.spine,
+            r.chest
+        };
         ik.references.leftThigh = r.leftUpperLeg;
         ik.references.leftCalf = r.leftLowerLeg;
         ik.references.leftFoot = r.leftFoot;
@@ -1804,7 +1056,6 @@ public class UmaContainerCharacter : UmaContainer
         ik.references.rightForearm = r.rightLowerArm;
         ik.references.rightHand = r.rightHand;
         ik.references.head = r.head;
-
         new List<IKSolver>(ik.solvers.ikSolvers).ForEach(i => i.IKPositionWeight = 0);
         new List<IKSolverLimb>(ik.solvers.limbs).ForEach(i => i.IKRotationWeight = 0);
         ik.solvers.lookAt.IKPositionWeight = 1;
@@ -1822,10 +1073,13 @@ public class UmaContainerCharacter : UmaContainer
         BipedRagdollReferences r = BipedRagdollReferences.FromAvatar(UmaAnimator);
         BipedReferences pr = new BipedReferences();
         var ik = container.gameObject.AddComponent<FullBodyBipedIK>();
-
         pr.root = r.root;
         pr.pelvis = r.hips;
-        pr.spine = new Transform[] { r.spine, r.chest };
+        pr.spine = new Transform[]
+        {
+            r.spine,
+            r.chest
+        };
         pr.leftThigh = r.leftUpperLeg;
         pr.leftCalf = r.leftLowerLeg;
         pr.leftFoot = r.leftFoot;
@@ -1840,7 +1094,6 @@ public class UmaContainerCharacter : UmaContainer
         pr.rightHand = r.rightHand;
         pr.head = r.head;
         ik.SetReferences(pr, r.hips);
-
         foreach (var effector in ik.solver.effectors)
         {
             var handle = handleRoot.ChildHandles.Find(h => h.Owner.transform.parent == effector.bone && (h as UIHandleBone).Tags.Contains(BoneTags.IK));
@@ -1884,7 +1137,6 @@ public class UmaContainerCharacter : UmaContainer
     {
         Body = InstantiateEntry(entry, transform);
         UmaAnimator = Body.GetComponent<Animator>();
-
         if (IsMini)
         {
             UpBodyBone = Body.transform.Find("Position/Hip").gameObject;
@@ -1894,32 +1146,25 @@ public class UmaContainerCharacter : UmaContainer
             UpBodyBone = Body.GetComponent<AssetHolder>()._assetTable["upbody_ctrl"] as GameObject;
         }
 
-        LoadSkirtController(entry);
-
+        ActivePhysicsBackend = Config.Instance != null ? Config.Instance.PhysicsBackend : CharacterPhysicsBackend.CySpringNative;
+        if (ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
+            LoadSkirtController(entry);
         if (IsGeneric)
         {
             TextureList textures = GenericBodyTextures;
-            string costumeIdShort = VarCostumeIdShort,
-                   costumeIdLong = VarCostumeIdLong,
-                   height = VarHeight,
-                   skin = VarSkin,
-                   socks = VarSocks,
-                   bust = VarBust;
-
+            string costumeIdShort = VarCostumeIdShort, costumeIdLong = VarCostumeIdLong, height = VarHeight, skin = VarSkin, socks = VarSocks, bust = VarBust;
             foreach (Renderer r in Body.GetComponentsInChildren<Renderer>())
             {
                 foreach (Material m in r.materials)
                 {
                     m.name = m.name.Replace(" (Instance)", "");
                     string mainTex = "", toonMap = "", tripleMap = "", optionMap = "", zekkenNumberTex = "";
-
                     if (IsMini)
                     {
                         m.SetTexture("_MainTex", textures.Load(0));
                     }
                     else
                     {
-
                         if (m.shader.name.Contains("Noline") && m.shader.name.Contains("TSER"))
                         {
                             var s = Builder.ShaderList.Find(a => a.name == m.shader.name.Replace("Noline", "")); //Generic costume shader need to change manually.
@@ -1930,9 +1175,7 @@ public class UmaContainerCharacter : UmaContainer
                         }
 
                         //BodyAlapha's shader need to change manually.
-
-
-                        //ä¿®æ”¹(è½½å…¥é€šç”¨æœè£…ColorSetç›¸å…³)
+                        //修改(载入通用服装ColorSet相关)
                         if (m.name.Contains("bdy"))
                         {
                             if (m.name.Contains("Alpha"))
@@ -1941,7 +1184,6 @@ public class UmaContainerCharacter : UmaContainer
                             }
                             else
                             {
-
                                 var areaTexCandidates = UmaViewerMain.Instance.AbChara.Where(a => a.Name.StartsWith(UmaDatabaseController.BodyPath + $"bdy{costumeIdShort}/textures") && a.Name.EndsWith("area")).ToList();
                                 if (areaTexCandidates.Count > 0)
                                 {
@@ -1949,11 +1191,13 @@ public class UmaContainerCharacter : UmaContainer
                                     {
                                         LoadTextures(areaEntry);
                                     }
+
                                     var defaultAreaTex = GenericBodyTextures.Load(t => t.name.Contains(costumeIdShort) && t.name.EndsWith("0_area"));
                                     if (defaultAreaTex != null)
                                     {
                                         m.SetTexture("_MaskColorTex", defaultAreaTex);
                                     }
+
                                     if (IsMob)
                                     {
                                         SetMaskColor(m, MobDressColor, true);
@@ -1965,12 +1209,6 @@ public class UmaContainerCharacter : UmaContainer
                                 }
                             }
                         }
-
-
-
-                        // Indice de color del traje comun (0 = el de siempre). Antes iba fijo a "00",
-                        // por eso solo se veia el primer color (p.ej. la camisa blanca del 0015).
-                        string colorIndex = (VarColorIndex < 0 ? 0 : VarColorIndex).ToString("D2");
 
                         switch (costumeIdShort.Split('_')[0]) //costume ID
                         {
@@ -2009,10 +1247,8 @@ public class UmaContainerCharacter : UmaContainer
                             case "0006":
                             case "0009":
                             case "0015":
-                                // (_diff y _shad_c son los unicos que cambian de color; _base/_ctrl
-                                //  solo existen en "00", asi que se quedan fijos.)
-                                mainTex = $"tex_bdy{costumeIdLong}_{skin}_{bust}_{colorIndex}_diff";
-                                toonMap = $"tex_bdy{costumeIdLong}_{skin}_{bust}_{colorIndex}_shad_c";
+                                mainTex = $"tex_bdy{costumeIdLong}_{skin}_{bust}_{"00"}_diff";
+                                toonMap = $"tex_bdy{costumeIdLong}_{skin}_{bust}_{"00"}_shad_c";
                                 tripleMap = $"tex_bdy{costumeIdLong}_0_{bust}_00_base";
                                 optionMap = $"tex_bdy{costumeIdLong}_0_{bust}_00_ctrl";
                                 break;
@@ -2023,11 +1259,12 @@ public class UmaContainerCharacter : UmaContainer
                                 optionMap = $"tex_bdy{costumeIdLong}_0_{bust}_ctrl";
                                 break;
                         }
+
+                        Debug.Log("Looking for texture " + mainTex);
                         m.SetTexture("_MainTex", textures.Load(t => t.name == mainTex));
                         m.SetTexture("_ToonMap", textures.Load(t => t.name == toonMap));
                         m.SetTexture("_TripleMaskMap", textures.Load(t => t.name == tripleMap));
                         m.SetTexture("_OptionMaskMap", textures.Load(t => t.name == optionMap));
-
                         if (!string.IsNullOrEmpty(zekkenNumberTex))
                             m.SetTexture("_ZekkenNumberTex", textures.Load(t => t.name == zekkenNumberTex));
                     }
@@ -2058,16 +1295,17 @@ public class UmaContainerCharacter : UmaContainer
                 BodyShaderEffectData.Initialize();
             }
         }
+
         InvalidateMirrorLayerCache();
     }
 
     public void LoadHead(UmaDatabaseEntry entry)
     {
+        LiveHeadResourceName = entry.Name;
         var textures = MobHeadTextures;
         GameObject head = InstantiateEntry(entry, transform);
         Head = head;
         RegisterMirrorHeadRenderers(head);
-
         AssetTable table = null;
         if (!IsMini)
         {
@@ -2076,13 +1314,13 @@ public class UmaContainerCharacter : UmaContainer
 
         //Some setting for Head
         EnableEyeTracking = UI.ModelSettings.EnableEyeTracking;
-
         foreach (Renderer r in head.GetComponentsInChildren<Renderer>())
         {
             if (!IsMini && r.name == "M_Face")
             {
                 FaceRenderer = r;
             }
+
             foreach (Material m in r.materials)
             {
                 m.name = m.name.Replace(" (Instance)", "");
@@ -2093,23 +1331,28 @@ public class UmaContainerCharacter : UmaContainer
                     {
                         Hair = head;
                     }
+
                     if (r.name == "M_Face")
                     {
                         m.SetTexture("_MainTex", MiniHeadTextures.Load(t => t.name.Contains("face") && t.name.Contains("diff")));
                     }
+
                     if (r.name == "M_Cheek")
                     {
                         m.CopyPropertiesFromMaterial(Builder.TransMaterialCharas);
                         m.SetTexture("_MainTex", MiniHeadTextures.Load(t => t.name.Contains("cheek")));
                     }
+
                     if (r.name == "M_Mouth")
                     {
                         m.SetTexture("_MainTex", MiniHeadTextures.Load(t => t.name.Contains("mouth")));
                     }
+
                     if (r.name == "M_Eye")
                     {
                         m.SetTexture("_MainTex", MiniHeadTextures.Load(t => t.name.Contains("eye")));
                     }
+
                     if (r.name.StartsWith("M_Mayu_"))
                     {
                         m.SetTexture("_MainTex", MiniHeadTextures.Load(t => t.name.Contains("mayu")));
@@ -2128,6 +1371,7 @@ public class UmaContainerCharacter : UmaContainer
                             m.SetTexture("_MaskColorTex", textures.LoadLast(t => t.name.Contains("_eye") && t.name.EndsWith("area")));
                             SetMaskColor(m, MobHeadColor, "eye", false);
                         }
+
                         if (m.name.EndsWith("face"))
                         {
                             m.SetTexture("_MainTex", textures.LoadLast(t => t.name.Contains("_face") && t.name.EndsWith("diff")));
@@ -2137,6 +1381,7 @@ public class UmaContainerCharacter : UmaContainer
                             m.SetTexture("_MaskColorTex", textures.LoadLast(t => t.name.Contains("_face") && t.name.EndsWith("area") && !t.name.Contains("_eye")));
                             SetMaskColor(m, MobHeadColor, "mayu", true);
                         }
+
                         if (m.name.EndsWith("mayu"))
                         {
                             m.SetTexture("_MainTex", textures.LoadLast(t => t.name.Contains("_face") && t.name.EndsWith("diff")));
@@ -2184,7 +1429,7 @@ public class UmaContainerCharacter : UmaContainer
                     switch (m.shader.name)
                     {
                         case "Gallop/3D/Chara/MultiplyCheek":
-                            m.shader = UmaAssetManager.CheekShader; ;
+                            m.shader = UmaAssetManager.CheekShader;
                             break;
                         case "Gallop/3D/Chara/ToonFace/TSER":
                             m.shader = UmaAssetManager.FaceShader;
@@ -2204,23 +1449,23 @@ public class UmaContainerCharacter : UmaContainer
                             m.renderQueue += 1; //fix eyebrows disappearing sometimes
                             break;
                         default:
+                            Debug.Log(m.shader.name);
                             // m.shader = Shader.Find("Nars/UmaMusume/Body");
                             break;
                     }
+
                     if (!IsMini && r.name == "M_Face")
                     {
                         string matName = m.name.ToLower();
                         string shaderName = m.shader != null ? m.shader.name : "";
-
                         if (shaderName.Contains("ToonFace") || matName.Contains("face"))
                         {
                             FaceMaterial = m;
                         }
                     }
-
                 }
 
-                m.SetFloat("_StencilMask", StencilId);
+                m.SetFloat("_StencilMask", CharaEntry.Id);
             }
         }
 
@@ -2279,6 +1524,7 @@ public class UmaContainerCharacter : UmaContainer
                         m.SetFloat("_CylinderBlend", 0.25f);
                         break;
                     default:
+                        Debug.Log(m.shader.name);
                         // m.shader = Shader.Find("Nars/UmaMusume/Body");
                         break;
                 }
@@ -2286,17 +1532,13 @@ public class UmaContainerCharacter : UmaContainer
         }
     }
 
-
-
-    //ä¿®æ”¹(è½½å…¥ä¸“ç”¨å°¾å·´ç›¸å…³)
+    //修改(载入专用尾巴相关)
     public void LoadExclusiveTail(UmaDatabaseEntry entry)
     {
         GameObject go = entry.Get<GameObject>();
         Tail = Instantiate(go, transform);
         InvalidateMirrorLayerCache();
     }
-
-
 
     public void LoadTail(UmaDatabaseEntry entry)
     {
@@ -2317,6 +1559,7 @@ public class UmaContainerCharacter : UmaContainer
                 }
             }
         }
+
         InvalidateMirrorLayerCache();
     }
 
@@ -2333,16 +1576,14 @@ public class UmaContainerCharacter : UmaContainer
         }
     }
 
-
-
-    //ä¿®æ”¹(è½½å…¥é€šç”¨æœè£…ColorSetç›¸å…³)
+    //修改(载入通用服装ColorSet相关)
     public void RefreshDressColor()
     {
         foreach (var materialHelper in Materials)
         {
             var mat = materialHelper.Mat;
-            if (mat == null) continue;
-
+            if (mat == null)
+                continue;
             if (mat.name.Contains("bdy") && !mat.name.Contains("Alpha"))
             {
                 if (mat.HasProperty("_MaskColorTex"))
@@ -2360,47 +1601,39 @@ public class UmaContainerCharacter : UmaContainer
         }
     }
 
-
-
-    //ä¿®æ”¹(è½½å…¥é€šç”¨æœè£…ColorSetç›¸å…³)
+    //修改(载入通用服装ColorSet相关)
     private void ApplyDressColorAndArea(Material mat)
     {
         var uma = Builder.CurrentUMAContainer;
-        if (uma == null || string.IsNullOrEmpty(uma.VarCostumeIdShort)) return;
-
+        if (uma == null || string.IsNullOrEmpty(uma.VarCostumeIdShort))
+            return;
         string selectedId = UmaViewerUI.CurrentSelectedColorSetId;
         var parts = uma.VarCostumeIdShort.Split('_');
-        if (parts.Length < 2) return;
-
-        if (!int.TryParse(parts[0], out int bodyType)) return;
-        if (!int.TryParse(parts[1], out int bodyTypeSub)) return;
-
+        if (parts.Length < 2)
+            return;
+        if (!int.TryParse(parts[0], out int bodyType))
+            return;
+        if (!int.TryParse(parts[1], out int bodyTypeSub))
+            return;
         DataRow charaColor = null;
-        var dressRow = UmaDatabaseController.Instance.DressData.FirstOrDefault(row =>
-            int.Parse(row["body_type"].ToString()) == bodyType &&
-            int.Parse(row["body_type_sub"].ToString()) == bodyTypeSub);
-
+        var dressRow = UmaDatabaseController.Instance.DressData.FirstOrDefault(row => int.Parse(row["body_type"].ToString()) == bodyType && int.Parse(row["body_type_sub"].ToString()) == bodyTypeSub);
         if (dressRow != null && dressRow["body_setting"].ToString() == "4")
         {
             string dressId = dressRow["id"].ToString();
-            var colorSetRows = UmaDatabaseController.Instance.CharaDressColor
-                .Where(row => row["dress_id"].ToString() == dressId).ToList();
-
-            charaColor = !string.IsNullOrEmpty(selectedId)
-                ? colorSetRows.FirstOrDefault(row => row["id"].ToString() == selectedId)
-                : null;
-            if (charaColor == null && colorSetRows.Count > 0) charaColor = colorSetRows.First();
+            var colorSetRows = UmaDatabaseController.Instance.CharaDressColor.Where(row => row["dress_id"].ToString() == dressId).ToList();
+            charaColor = !string.IsNullOrEmpty(selectedId) ? colorSetRows.FirstOrDefault(row => row["id"].ToString() == selectedId) : null;
+            if (charaColor == null && colorSetRows.Count > 0)
+                charaColor = colorSetRows.First();
         }
         else
         {
-            charaColor = !string.IsNullOrEmpty(selectedId)
-                ? UmaDatabaseController.Instance.CharaDressColor.FirstOrDefault(row => row["id"].ToString() == selectedId)
-                : null;
-            if (charaColor == null) charaColor = UmaDatabaseController.Instance.CharaDressColor.FirstOrDefault();
+            charaColor = !string.IsNullOrEmpty(selectedId) ? UmaDatabaseController.Instance.CharaDressColor.FirstOrDefault(row => row["id"].ToString() == selectedId) : null;
+            if (charaColor == null)
+                charaColor = UmaDatabaseController.Instance.CharaDressColor.FirstOrDefault();
         }
 
-        if (charaColor == null) return;
-
+        if (charaColor == null)
+            return;
         Texture2D areaTex = null;
         try
         {
@@ -2411,13 +1644,14 @@ public class UmaContainerCharacter : UmaContainer
                 areaTex = GenericBodyTextures.Load(t => t.name.EndsWith(suffix));
             }
         }
-        catch { }
+        catch
+        {
+        }
 
-        if (areaTex != null) mat.SetTexture("_MaskColorTex", areaTex);
+        if (areaTex != null)
+            mat.SetTexture("_MaskColorTex", areaTex);
         SetMaskColor(mat, charaColor, false);
     }
-
-
 
     private void SetMaskColor(Material mat, DataRow colordata, bool IsMob)
     {
@@ -2440,9 +1674,7 @@ public class UmaContainerCharacter : UmaContainer
         }
         else
         {
-
-
-            //ä¿®æ”¹(è½½å…¥é€šç”¨æœè£…ColorSetç›¸å…³)
+            //修改(载入通用服装ColorSet相关)
             ColorUtility.TryParseHtmlString(colordata["color_r1"].ToString(), out c1);
             ColorUtility.TryParseHtmlString(colordata["color_r2"].ToString(), out c2);
             ColorUtility.TryParseHtmlString(colordata["color_g1"].ToString(), out c3);
@@ -2455,8 +1687,6 @@ public class UmaContainerCharacter : UmaContainer
             ColorUtility.TryParseHtmlString(colordata["toon_color_g2"].ToString(), out t4);
             ColorUtility.TryParseHtmlString(colordata["toon_color_b1"].ToString(), out t5);
             ColorUtility.TryParseHtmlString(colordata["toon_color_b2"].ToString(), out t6);
-
-
         }
 
         mat.SetColor("_MaskColorR1", c1);
@@ -2508,11 +1738,14 @@ public class UmaContainerCharacter : UmaContainer
 
     public void LoadPhysics(UmaDatabaseEntry entry)
     {
+        if (IsLive && ActivePhysicsBackend == CharacterPhysicsBackend.CySpringNative)
+            return;
         if (!PhysicsContainer)
         {
             PhysicsContainer = new GameObject("PhysicsController");
             PhysicsContainer.transform.SetParent(transform);
         }
+
         InstantiateEntry(entry, PhysicsContainer.transform);
     }
 
@@ -2524,7 +1757,6 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         var aClip = entry.Get<AnimationClip>();
-
         if (UmaAnimator)
         {
             //Debug.Log("LiveTime" + UI.LiveTime.ToString());
@@ -2551,24 +1783,28 @@ public class UmaContainerCharacter : UmaContainer
         }
         else if (clip.name.Contains("tail"))
         {
-            if (IsMini) return;
+            if (IsMini)
+                return;
             UpBodyReset();
             OverrideController["clip_t"] = clip;
             UmaAnimator.Play("motion_t", 1, 0);
         }
         else if (clip.name.EndsWith("_face"))
         {
-            if (IsMini) return;
+            if (IsMini)
+                return;
             LoadFaceAnimation(clip);
         }
         else if (clip.name.Contains("_ear"))
         {
-            if (IsMini) return;
+            if (IsMini)
+                return;
             LoadEarAnimation(clip);
         }
         else if (clip.name.EndsWith("_pos"))
         {
-            if (IsMini) return;
+            if (IsMini)
+                return;
             OverrideController["clip_p"] = clip;
             UmaAnimator.Play("motion_p", 2, 0);
         }
@@ -2603,7 +1839,7 @@ public class UmaContainerCharacter : UmaContainer
 
             if (OverrideController["clip_2"].name.Contains("_loop"))
             {
-                if (!OverrideController["clip_2"].name.Contains("hom_"))//home end animation not for interpolation
+                if (!OverrideController["clip_2"].name.Contains("hom_")) //home end animation not for interpolation
                 {
                     if (Main.AbList.TryGetValue(OverrideController["clip_2"].name.Replace("_loop", "_e"), out motion_e))
                     {
@@ -2625,13 +1861,13 @@ public class UmaContainerCharacter : UmaContainer
                 FaceDrivenKeyTarget.ResetLocator();
                 isAnimatorControl = false;
             }
+
             UpBodyReset();
             var pos_weight = UmaAnimator.GetLayerWeight(2);
             UmaAnimator.Rebind();
             UmaAnimator.SetLayerWeight(2, pos_weight); //keep position layer weight
             OverrideController["clip_2"] = clip;
             // If Cut-in, play immediately without state interpolation
-
             if (Main.AbList.TryGetValue($"{clip.name.Replace("/body", "/facial")}_face", out UmaDatabaseEntry facialMotion))
             {
                 LoadAnimation(facialMotion);
@@ -2667,7 +1903,6 @@ public class UmaContainerCharacter : UmaContainer
 
             if (clip.name.Contains("crd") || clip.name.Contains("res_chr"))
             {
-
                 if (clip.name.Contains("_cti_crd"))
                 {
                     ResetDynamicBone();
@@ -2687,7 +1922,8 @@ public class UmaContainerCharacter : UmaContainer
                                     UmaAssetManager.LoadAssetBundle(result);
                                     cur++;
                                 }
-                                else break;
+                                else
+                                    break;
                             }
                         }
 
@@ -2705,7 +1941,6 @@ public class UmaContainerCharacter : UmaContainer
                         }
                     }
                 }
-
             }
 
             UmaAnimator.Play("motion_2", 0, 0);
@@ -2735,7 +1970,7 @@ public class UmaContainerCharacter : UmaContainer
 
             if (FaceOverrideController["clip_2"].name.Contains("_loop"))
             {
-                if (!FaceOverrideController["clip_2"].name.Contains("hom_"))//home end animation not for interpolation
+                if (!FaceOverrideController["clip_2"].name.Contains("hom_")) //home end animation not for interpolation
                 {
                     if (Main.AbList.TryGetValue(FaceOverrideController["clip_2"].name.Replace("_loop", "_e"), out motion_e))
                     {
@@ -2779,7 +2014,7 @@ public class UmaContainerCharacter : UmaContainer
 
             if (FaceOverrideController["clip_2_ear"].name.Contains("_loop"))
             {
-                if (!FaceOverrideController["clip_2_ear"].name.Contains("hom_"))//home end animation not for interpolation
+                if (!FaceOverrideController["clip_2_ear"].name.Contains("hom_")) //home end animation not for interpolation
                 {
                     if (Main.AbList.TryGetValue(FaceOverrideController["clip_2_ear"].name.Replace("_loop", "_e"), out motion_e))
                     {
@@ -2800,6 +2035,7 @@ public class UmaContainerCharacter : UmaContainer
                 isAnimatorControl = true;
                 FaceDrivenKeyTarget.ResetLocator();
             }
+
             FaceOverrideController["clip_2_ear"] = clip;
             UmaFaceAnimator.Play("motion_2", 1, 0);
         }
@@ -2818,17 +2054,16 @@ public class UmaContainerCharacter : UmaContainer
 
     public void LoadFaceMorph(int id, string costumeId)
     {
-        if (!Head) return;
+        if (!Head)
+            return;
         var locatorEntry = Main.AbList["3d/animator/drivenkeylocator"];
         LoadedAssets.Add(locatorEntry);
         var bundle = UmaAssetManager.LoadAssetBundle(locatorEntry);
         var locator = Instantiate(bundle.LoadAsset("DrivenKeyLocator"), transform) as GameObject;
         locator.name = "DrivenKeyLocator";
-
         var headBone = (GameObject)Head.GetComponent<AssetHolder>()._assetTable["head"];
         var eyeLocator_L = headBone.transform.Find("Eye_target_locator_L");
         var eyeLocator_R = headBone.transform.Find("Eye_target_locator_R");
-
         var mangaEntry = new List<UmaDatabaseEntry>()
         {
             Main.AbList["3d/effect/charaemotion/pfb_eff_chr_emo_eye_000"],
@@ -2843,36 +2078,36 @@ public class UmaContainerCharacter : UmaContainer
             AssetBundle ab = UmaAssetManager.LoadAssetBundle(entry);
             var obj = ab.LoadAsset(Path.GetFileNameWithoutExtension(entry.Name)) as GameObject;
             obj.SetActive(false);
-
             var leftObj = Instantiate(obj, eyeLocator_L.transform);
-            new List<Renderer>(leftObj.GetComponentsInChildren<Renderer>(true)).ForEach(a => {
-                a.material.SetFloat("_StencilMask", StencilId);
+            new List<Renderer>(leftObj.GetComponentsInChildren<Renderer>(true)).ForEach(a =>
+            {
+                a.material.SetFloat("_StencilMask", id);
                 a.material.SetFloat("_StencilComp", (float)UnityEngine.Rendering.CompareFunction.Equal);
                 a.material.SetFloat("_StencilOp", (float)UnityEngine.Rendering.StencilOp.Keep);
                 a.material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
             });
             LeftMangaObject.Add(leftObj);
-
             var RightObj = Instantiate(obj, eyeLocator_R.transform);
             if (RightObj.TryGetComponent<AssetHolder>(out var holder))
             {
                 if (holder._assetTableValue["invert"] > 0)
                     RightObj.transform.localScale = new Vector3(-1, 1, 1);
             }
-            new List<Renderer>(RightObj.GetComponentsInChildren<Renderer>(true)).ForEach(a => {
-                a.material.SetFloat("_StencilMask", StencilId);
+
+            new List<Renderer>(RightObj.GetComponentsInChildren<Renderer>(true)).ForEach(a =>
+            {
+                a.material.SetFloat("_StencilMask", id);
                 a.material.SetFloat("_StencilComp", (float)UnityEngine.Rendering.CompareFunction.Equal);
                 a.material.SetFloat("_StencilOp", (float)UnityEngine.Rendering.StencilOp.Keep);
                 a.material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
             });
             RightMangaObject.Add(RightObj);
         });
-
-        var tearEntry = new List<UmaDatabaseEntry>() {
+        var tearEntry = new List<UmaDatabaseEntry>()
+        {
             Main.AbList["3d/chara/common/tear/tear000/pfb_chr_tear000"],
             Main.AbList["3d/chara/common/tear/tear001/pfb_chr_tear001"],
         };
-
         if (tearEntry.Count > 0)
         {
             tearEntry.ForEach(a => LoadTear(a));
@@ -2883,19 +2118,17 @@ public class UmaContainerCharacter : UmaContainer
             var p0 = TearPrefab_0;
             var p1 = TearPrefab_1;
             var t = headBone.transform;
-            TearControllers.Add(new TearController(StencilId, t, Instantiate(p0, t), Instantiate(p1, t), 0, 1));
-            TearControllers.Add(new TearController(StencilId, t, Instantiate(p0, t), Instantiate(p1, t), 1, 1));
-            TearControllers.Add(new TearController(StencilId, t, Instantiate(p0, t), Instantiate(p1, t), 0, 0));
-            TearControllers.Add(new TearController(StencilId, t, Instantiate(p0, t), Instantiate(p1, t), 1, 0));
+            TearControllers.Add(new TearController(CharaEntry.Id, t, Instantiate(p0, t), Instantiate(p1, t), 0, 1));
+            TearControllers.Add(new TearController(CharaEntry.Id, t, Instantiate(p0, t), Instantiate(p1, t), 1, 1));
+            TearControllers.Add(new TearController(CharaEntry.Id, t, Instantiate(p0, t), Instantiate(p1, t), 0, 0));
+            TearControllers.Add(new TearController(CharaEntry.Id, t, Instantiate(p0, t), Instantiate(p1, t), 1, 0));
         }
 
         var firsehead = Head;
         var faceDriven = Instantiate(firsehead.GetComponent<AssetHolder>()._assetTable["facial_target"]) as FaceDrivenKeyTarget;
-
         //Need Instantiate or not?
         var earDriven = firsehead.GetComponent<AssetHolder>()._assetTable["ear_target"] as DrivenKeyTarget;
         var faceOverride = firsehead.GetComponent<AssetHolder>()._assetTable["face_override"] as FaceOverrideData;
-
         faceDriven._earTarget = earDriven._targetFaces;
         FaceDrivenKeyTarget = faceDriven;
         FaceDrivenKeyTarget.Container = this;
@@ -2903,7 +2136,6 @@ public class UmaContainerCharacter : UmaContainer
         faceOverride?.SetEnable(UI.ModelSettings.EnableFaceOverride);
         faceDriven.DrivenKeyLocator = locator.transform;
         faceDriven.Initialize(UmaUtility.ConvertArrayToDictionary(firsehead.GetComponentsInChildren<Transform>()));
-
         var emotionDriven = ScriptableObject.CreateInstance<FaceEmotionKeyTarget>();
         emotionDriven.name = $"char{id}_{costumeId}_emotion_target";
         FaceEmotionKeyTarget = emotionDriven;
@@ -2916,17 +2148,28 @@ public class UmaContainerCharacter : UmaContainer
 
     public void SetupBoneHandles()
     {
-        if (IsLive) return;
+        if (IsLive)
+            return;
         UIHandleCharacterRoot rootHandle = UIHandleCharacterRoot.CreateAsChild(this);
-
         var humanBones = GetHumanBones();
-        var ikNames = new[] { "Hip", "Wrist_L", "Wrist_R", "Ankle_L", "Ankle_R" };
+        var ikNames = new[]
+        {
+            "Hip",
+            "Wrist_L",
+            "Wrist_R",
+            "Ankle_L",
+            "Ankle_R"
+        };
         foreach (var bone in humanBones)
         {
-            List<BoneTags> tags = new List<BoneTags>() { BoneTags.Humanoid };
-            if (bone.name.EndsWith("_L")) tags.Add(BoneTags.Left);
-            if (bone.name.EndsWith("_R")) tags.Add(BoneTags.Right);
-
+            List<BoneTags> tags = new List<BoneTags>()
+            {
+                BoneTags.Humanoid
+            };
+            if (bone.name.EndsWith("_L"))
+                tags.Add(BoneTags.Left);
+            if (bone.name.EndsWith("_R"))
+                tags.Add(BoneTags.Right);
             if (ikNames.Any(x => x == bone.name))
             {
                 var go = new GameObject(bone.name + "_IK_Handle");
@@ -2955,8 +2198,11 @@ public class UmaContainerCharacter : UmaContainer
         {
             if (fingerBone.name.StartsWith("Index") || fingerBone.name.StartsWith("Middle") || fingerBone.name.StartsWith("Ring") || fingerBone.name.StartsWith("Pinky") || fingerBone.name.StartsWith("Thumb"))
             {
-                List<BoneTags> tags = new List<BoneTags>() { BoneTags.Left, BoneTags.Finger };
-
+                List<BoneTags> tags = new List<BoneTags>()
+                {
+                    BoneTags.Left,
+                    BoneTags.Finger
+                };
                 var handle = UIHandleBone.CreateAsChild(fingerBone, tags).SetScale(0.25f).WithLineRenderer();
                 rootHandle.ChildHandles.Add(handle);
             }
@@ -2967,8 +2213,11 @@ public class UmaContainerCharacter : UmaContainer
         {
             if (fingerBone.name.StartsWith("Index") || fingerBone.name.StartsWith("Middle") || fingerBone.name.StartsWith("Ring") || fingerBone.name.StartsWith("Pinky") || fingerBone.name.StartsWith("Thumb"))
             {
-                List<BoneTags> tags = new List<BoneTags>() { BoneTags.Right, BoneTags.Finger };
-
+                List<BoneTags> tags = new List<BoneTags>()
+                {
+                    BoneTags.Right,
+                    BoneTags.Finger
+                };
                 var handle = UIHandleBone.CreateAsChild(fingerBone, tags).SetScale(0.25f).WithLineRenderer();
                 rootHandle.ChildHandles.Add(handle);
             }
@@ -2987,9 +2236,7 @@ public class UmaContainerCharacter : UmaContainer
     public List<SerializableBone> SaveBones()
     {
         var boneList = new List<SerializableBone>();
-
         GatherSerializableBonesRecursive(Position, boneList, 0);
-
         return boneList;
     }
 
@@ -3004,7 +2251,6 @@ public class UmaContainerCharacter : UmaContainer
         //and generating a list of tags beforehand
         //otherwise getComponentInParent() is called for every bone
         var bone = new SerializableBone(current, true);
-
         if (depth == 0)
         {
             //make it independent from character name
@@ -3017,12 +2263,12 @@ public class UmaContainerCharacter : UmaContainer
     public bool LoadBones(PoseData data, PoseLoadOptions options)
     {
         var currentBones = SaveBones();
-
         foreach (var bone in currentBones)
         {
-            if (!options.Root && bone.ParentName == "root") continue;
-            if (!options.Physics && bone.Tags.Contains(BoneTags.Dynamic)) continue;
-
+            if (!options.Root && bone.ParentName == "root")
+                continue;
+            if (!options.Physics && bone.Tags.Contains(BoneTags.Dynamic))
+                continue;
             if (bone.Bone == null)
             {
                 Debug.LogError($"Target bone {bone.Name} does not reference a bone in the scene.");
@@ -3030,8 +2276,8 @@ public class UmaContainerCharacter : UmaContainer
             }
 
             var savedBone = data.Bones.FirstOrDefault(b => b.Name == bone.Name && b.ParentName == bone.ParentName);
-            if (savedBone == null) continue;
-
+            if (savedBone == null)
+                continue;
             savedBone.Transform.ApplyTo(bone.Bone, options);
         }
 
@@ -3044,9 +2290,7 @@ public class UmaContainerCharacter : UmaContainer
         if (_humanoidBones == null)
         {
             var animator = UmaAnimator;
-
             List<Transform> list = new List<Transform>(animator.gameObject.GetComponentsInChildren<Transform>());
-
             _humanoidBones = new List<Transform>()
             {
                 list.Find(t => t.name.Equals("Hip")),
@@ -3055,22 +2299,18 @@ public class UmaContainerCharacter : UmaContainer
                 list.Find(t => t.name.Equals("Chest")),
                 list.Find(t => t.name.Equals("Neck")),
                 list.Find(t => t.name.Equals("Head")),
-
                 list.Find(t => t.name.Equals("Shoulder_L")),
                 list.Find(t => t.name.Equals("Arm_L")),
                 list.Find(t => t.name.Equals("Elbow_L")),
                 list.Find(t => t.name.Equals("Wrist_L")),
-
                 list.Find(t => t.name.Equals("Shoulder_R")),
                 list.Find(t => t.name.Equals("Arm_R")),
                 list.Find(t => t.name.Equals("Elbow_R")),
                 list.Find(t => t.name.Equals("Wrist_R")),
-
                 list.Find(t => t.name.Equals("Thigh_L")),
                 list.Find(t => t.name.Equals("Knee_L")),
                 list.Find(t => t.name.Equals("Ankle_L")),
                 list.Find(t => t.name.Equals("Toe_L")),
-
                 list.Find(t => t.name.Equals("Thigh_R")),
                 list.Find(t => t.name.Equals("Knee_R")),
                 list.Find(t => t.name.Equals("Ankle_R")),
@@ -3101,7 +2341,6 @@ public class UmaContainerCharacter : UmaContainer
     public bool LoadMorphs(PoseData data)
     {
         var currentMorphs = SaveMorphs(false);
-
         foreach (var morph in currentMorphs)
         {
             var savedMorph = data.Morphs.FirstOrDefault(b => b.Name == morph.Name);
@@ -3116,16 +2355,13 @@ public class UmaContainerCharacter : UmaContainer
         }
 
         this.FaceDrivenKeyTarget.ChangeMorph();
-
         return true;
     }
 
     private void CaptureInitialBodyPose()
     {
-        InitBoneTransform =
-            new Dictionary<Transform, (Vector3 localPosition, Quaternion localRotation, Vector3 localScale)>();
-
-        // è¦†ç›–æ‰€æœ‰å¯èƒ½è¢« Animator é©±åŠ¨çš„æ¨¡åž‹èŠ‚ç‚¹ï¼Œé¿å…ç‰¹æ®ŠåŠ¨ä½œæ®‹ç•™åœ¨æŽ§åˆ¶èŠ‚ç‚¹æˆ–è¾…åŠ©éª¨éª¼ä¸­ã€‚
+        InitBoneTransform = new Dictionary<Transform, (Vector3 localPosition, Quaternion localRotation, Vector3 localScale)>();
+        // 覆盖所有可能被 Animator 驱动的模型节点，避免特殊动作残留在控制节点或辅助骨骼中。
         foreach (Transform modelTransform in GetComponentsInChildren<Transform>(true))
         {
             if (modelTransform == transform)
@@ -3133,10 +2369,7 @@ public class UmaContainerCharacter : UmaContainer
                 continue;
             }
 
-            InitBoneTransform[modelTransform] = (
-                modelTransform.localPosition,
-                modelTransform.localRotation,
-                modelTransform.localScale);
+            InitBoneTransform[modelTransform] = (modelTransform.localPosition, modelTransform.localRotation, modelTransform.localScale);
         }
     }
 
@@ -3147,7 +2380,7 @@ public class UmaContainerCharacter : UmaContainer
             return;
         }
 
-        // ä½¿ç”¨æœ¬åœ°å˜æ¢æ¢å¤ï¼Œé¿å…çˆ¶èŠ‚ç‚¹ç¼©æ”¾æˆ–æ—‹è½¬ä½¿å­éª¨éª¼çš„ä¸–ç•Œåæ ‡å‘ç”ŸäºŒæ¬¡åç§»ã€‚
+        // 使用本地变换恢复，避免父节点缩放或旋转使子骨骼的世界坐标发生二次偏移。
         foreach (var pair in InitBoneTransform)
         {
             if (pair.Key == null)
@@ -3163,12 +2396,7 @@ public class UmaContainerCharacter : UmaContainer
 
     public List<UmaDatabaseEntry> GetAssetsList()
     {
-        return LoadedAssets
-            .Concat(TailTextures.GetLoadedAssets())
-            .Concat(GenericBodyTextures.GetLoadedAssets())
-            .Concat(MiniHeadTextures.GetLoadedAssets())
-            .Concat(MobHeadTextures.GetLoadedAssets())
-            .Distinct().ToList();
+        return LoadedAssets.Concat(TailTextures.GetLoadedAssets()).Concat(GenericBodyTextures.GetLoadedAssets()).Concat(MiniHeadTextures.GetLoadedAssets()).Concat(MobHeadTextures.GetLoadedAssets()).Distinct().ToList();
     }
 
     private GameObject InstantiateEntry(UmaDatabaseEntry entry, Transform parent)
@@ -3183,8 +2411,7 @@ public class UmaContainerCharacter : UmaContainer
                 }
             }
         }
+
         return Instantiate(entry.Get<GameObject>(), parent.transform);
     }
 }
-
-

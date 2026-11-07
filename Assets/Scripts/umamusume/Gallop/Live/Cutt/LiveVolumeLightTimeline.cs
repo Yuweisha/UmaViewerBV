@@ -77,7 +77,7 @@ namespace Gallop.Live.Cutt
             info.Alpha = Vector4.LerpUnclamped(a.alpha, b.alpha, t);
             info.Alpha2 = Vector4.LerpUnclamped(a.alpha2, b.alpha2, t);
             info.MaskAlpha = Vector4.LerpUnclamped(a.maskAlpha, b.maskAlpha, t);
-            info.Alpha.z = GetFlareAlpha(frame, a.frame, a.maskAnimTime, a.maskAlphaRange);
+            info.Alpha.z = GetFlareAlpha(frame, a.frame, a.maskAnimeTime, a.maskAlphaRange);
             // IsAdjustScale exists in serialized data but this native routine never reads it.
             info.Scale = Mathf.LerpUnclamped(a.scale, b.scale, t);
             return true;

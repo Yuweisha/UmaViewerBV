@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using TMPro;
 using UnityEngine;
@@ -31,17 +31,17 @@ public class UmaSceneController:MonoBehaviour
         UmaAssetManager.OnLoadProgressChange += LoadingProgressChange;
     }
 
-    public static void LoadScene(string name, Action OnSceneloaded = null, Action OnPrevSceneUnloaded = null)
+    public static void LoadScene(string name, Action OnSceneloaded = null, Action OnPrevSceneUnloaded = null, Func<bool> isReady = null)
     {
-        instance.StartCoroutine(instance.LoadLiveSceneAsync(name, OnSceneloaded, OnPrevSceneUnloaded));
+        instance.StartCoroutine(instance.LoadLiveSceneAsync(name, OnSceneloaded, OnPrevSceneUnloaded, isReady));
     }
 
-    IEnumerator LoadLiveSceneAsync(string sceneName, Action OnSceneloaded, Action OnPrevSceneUnloaded)
+    IEnumerator LoadLiveSceneAsync(string sceneName, Action OnSceneloaded, Action OnPrevSceneUnloaded, Func<bool> isReady)
     {
 
         if (CavansInstance)
         {
-            //Destroy(CavansInstance);
+            Destroy(CavansInstance);
         }
         CavansInstance = Instantiate(CavansPrefab, transform);
         var animation = CavansInstance.GetComponent<Animation>();
@@ -63,7 +63,9 @@ public class UmaSceneController:MonoBehaviour
         AsyncOperation asyncUnLoad = SceneManager.UnloadSceneAsync(currentScene);
         yield return new WaitUntil(() => asyncUnLoad.isDone);
 
+        SceneManager.SetActiveScene(SceneManager.GetSceneByName(sceneName));
         OnPrevSceneUnloaded?.Invoke();
+        if (isReady != null) yield return new WaitUntil(() => isReady());
 
         animation.Play("SceneTransition_e");
         yield return new WaitUntil(() => !animation.isPlaying);

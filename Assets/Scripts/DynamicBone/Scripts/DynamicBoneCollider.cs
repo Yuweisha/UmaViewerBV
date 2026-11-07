@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 [AddComponentMenu("Dynamic Bone/Dynamic Bone Collider")]
 public class DynamicBoneCollider : DynamicBoneColliderBase
@@ -13,80 +13,82 @@ public class DynamicBoneCollider : DynamicBoneColliderBase
 #endif		
     public float m_Height = 0;
 
-    // =========================================================================================
-    // (RENDIMIENTO) Cache por frame de la geometria en MUNDO.
-    //
-    // `Collide` lee `transform.lossyScale` y `transform.TransformPoint(...)` en CADA llamada, y un
-    // acceso a Transform desde script es una llamada nativa cara. En el pase de colision final se
-    // llama por particula x colisor x iteracion (cientos de miles por frame en el live), y ahi se
-    // iba casi todo el tiempo. Aqui se lee UNA vez por colisor y frame y el resto es matematica pura.
-    // =========================================================================================
-    [System.NonSerialized] public Vector3 CachedWorldCenter;
-    [System.NonSerialized] public float CachedWorldRadius;
-    [System.NonSerialized] public int CachedFrame = -1;
-
-    /// <summary>Refresca la cache si el frame es distinto (deduplicado por frame; lo llama el pase de colision).</summary>
-    public void UpdateWorldCache(int frame)
-    {
-        if (CachedFrame == frame)
-            return;
-
-        CachedFrame = frame;
-        CachedWorldCenter = transform.TransformPoint(m_Center);
-        CachedWorldRadius = m_Radius * Mathf.Abs(transform.lossyScale.x);
-    }
-
-    /// <summary>
-    /// Version rapida para ESFERAS con `Bound.Outside` (las que genera el cargador) usando la cache:
-    /// sin accesos a Transform ni a Time. El que llama DEBE haber refrescado la cache este frame
-    /// (`UpdateWorldCache(frame)`). Devuelve true si movio la particula.
-    /// </summary>
-    public bool CollideCachedSphere(ref Vector3 particlePosition, float particleRadius)
-    {
-        float r = CachedWorldRadius + particleRadius;
-        Vector3 d = particlePosition - CachedWorldCenter;
-        float len2 = d.sqrMagnitude;
-        if (len2 >= r * r)
-            return false;
-
-        float len = Mathf.Sqrt(len2);
-        if (len > 1e-6f)
-            particlePosition = CachedWorldCenter + d * (r / len);
-        else
-            particlePosition = CachedWorldCenter + Vector3.up * r;
-
-        return true;
-    }
-
     void OnValidate()
     {
         m_Radius = Mathf.Max(m_Radius, 0);
         m_Height = Mathf.Max(m_Height, 0);
     }
 
-    // (RENDIMIENTO) Frame actual para la cache. Lo fija `DynamicBone.UpdateDynamicBones` una vez por
-    // cadena y frame (barato) para que `Collide` no tenga que leer `Time.frameCount` en cada llamada.
-    [System.NonSerialized] public static int s_FrameStamp = -1;
+    // A batch ends BEFORE particle poses are written back to Transforms. Never cache
+    // across bones or frames: one chain can move a collider used by the next chain.
+    public static bool UseGeometryCache = true;
+    private static ulong nextBatch;
+    private static ulong activeBatch;
+    private ulong geometryBatch;
+    private float worldRadius;
+    private bool isSphere;
+    private Vector3 worldStart, worldEnd;
+
+    public struct CollisionBatch : System.IDisposable
+    {
+        private readonly ulong previous;
+        internal CollisionBatch(ulong previousBatch) { previous = previousBatch; }
+        public void Dispose() { activeBatch = previous; }
+    }
+
+    public static CollisionBatch BeginCollisionBatch()
+    {
+        var scope = new CollisionBatch(activeBatch);
+        activeBatch = ++nextBatch;
+        if (activeBatch == 0) activeBatch = ++nextBatch;
+        return scope;
+    }
 
     public override bool Collide(ref Vector3 particlePosition, float particleRadius)
     {
-        // La geometria (centro y radio en mundo) se refresca 1 vez por colisor y frame. Antes se
-        // leian `transform.lossyScale` y `TransformPoint` en CADA llamada (llamada nativa), y esto
-        // se invoca por particula x colisor: medido 362 ns vs 62 ns (x5,9).
-        UpdateWorldCache(s_FrameStamp);
+        if (!UseGeometryCache || activeBatch == 0)
+            return CollideUncached(ref particlePosition, particleRadius);
+        if (geometryBatch != activeBatch)
+        {
+            worldRadius = m_Radius * Mathf.Abs(transform.lossyScale.x);
+            float halfSpan = m_Height * 0.5f - m_Radius;
+            isSphere = halfSpan <= 0f;
+            Vector3 start = m_Center, end = m_Center;
+            if (!isSphere)
+            {
+                switch (m_Direction)
+                {
+                    case Direction.X: start.x -= halfSpan; end.x += halfSpan; break;
+                    case Direction.Y: start.y -= halfSpan; end.y += halfSpan; break;
+                    case Direction.Z: start.z -= halfSpan; end.z += halfSpan; break;
+                }
+            }
+            worldStart = transform.TransformPoint(start);
+            worldEnd = isSphere ? worldStart : transform.TransformPoint(end);
+            geometryBatch = activeBatch;
+        }
+        if (isSphere)
+            return m_Bound == Bound.Outside
+                ? OutsideSphere(ref particlePosition, particleRadius, worldStart, worldRadius)
+                : InsideSphere(ref particlePosition, particleRadius, worldStart, worldRadius);
+        return m_Bound == Bound.Outside
+            ? OutsideCapsule(ref particlePosition, particleRadius, worldStart, worldEnd, worldRadius)
+            : InsideCapsule(ref particlePosition, particleRadius, worldStart, worldEnd, worldRadius);
+    }
 
-        float radius = CachedWorldRadius;
+    private bool CollideUncached(ref Vector3 particlePosition, float particleRadius)
+    {
+        float radius = m_Radius * Mathf.Abs(transform.lossyScale.x);
         float h = m_Height * 0.5f - m_Radius;
         if (h <= 0)
         {
             if (m_Bound == Bound.Outside)
-                return OutsideSphere(ref particlePosition, particleRadius, CachedWorldCenter, radius);
+                return OutsideSphere(ref particlePosition, particleRadius, transform.TransformPoint(m_Center), radius);
             else
-                return InsideSphere(ref particlePosition, particleRadius, CachedWorldCenter, radius);
+                return InsideSphere(ref particlePosition, particleRadius, transform.TransformPoint(m_Center), radius);
         }
         else
         {
-            // Capsula: los extremos dependen de la rotacion del transform, se quedan como estaban.
             Vector3 c0 = m_Center;
             Vector3 c1 = m_Center;
 

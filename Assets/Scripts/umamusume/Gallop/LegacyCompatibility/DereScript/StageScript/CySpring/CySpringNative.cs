@@ -42,7 +42,7 @@ public struct CySpringNative
         }
         int num = clothWorkings.Length;
 
-        /* Native(dll)‚É‚æ‚é•¨—‰‰Z‚Í–³Œø‰»
+        /* Native(dll)åµå‚›å‚æš”æ£Ÿå¢˜å¶¼å¼æŸå² å£”
         if (isNative)
         {
             UpdateNativeClothInternal(clothWorkings, collisions, clothParam, parentCollisionWorldPosition, _collisionParentWorldRotation);

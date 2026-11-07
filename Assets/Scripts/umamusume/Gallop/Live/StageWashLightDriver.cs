@@ -36,13 +36,20 @@ namespace Gallop.Live
 
         private void LateUpdate()
         {
+            // The Live owner dispatches WashLight before FakeLight/LensFlare,
+            // matching StageController.AlterLateUpdate @ 4ff8a3f/4ff8b05.
+            if (Director.instance != null && Director.instance._isLiveSetup) return;
+            AlterLateUpdateForLive(ResolveCamera());
+        }
+
+        internal void AlterLateUpdateForLive(Camera camera)
+        {
             if (_ctl == null || _stage == null)
                 BindIfPossible();
 
             if (_controllers.Count <= 0)
                 return;
 
-            Camera camera = ResolveCamera();
             if (camera == null)
                 return;
 
@@ -106,16 +113,25 @@ namespace Gallop.Live
 
         private void OnWashLight(ref WashLightUpdateInfo updateInfo)
         {
+            // Native Stage.UpdateWashLight 0x500cc60 checks this flag before
+            // looking up NameHash; an all-settings group normally has hash 0.
+            if (updateInfo.IsAllSettings)
+            {
+                foreach (var target in _controllers)
+                {
+                    if (target == null) continue;
+                    if (!target.IsInitialized) target.Initialize();
+                    target.SetUpdateInfo(ref updateInfo);
+                }
+                return;
+            }
             if (updateInfo.NameHash == 0)
                 return;
 
+            // Native StageController.UpdateWashLight 0x500cc60 does a single
+            // Dictionary.TryGetValue and returns on a miss. It never rebuilds
+            // the controller cache from the per-frame update callback.
             if (!_controllerMap.TryGetValue(updateInfo.NameHash, out WashLightController controller) || controller == null)
-            {
-                RebuildCache();
-                _controllerMap.TryGetValue(updateInfo.NameHash, out controller);
-            }
-
-            if (controller == null)
                 return;
 
             if (!controller.IsInitialized)
@@ -157,29 +173,11 @@ namespace Gallop.Live
             if (string.IsNullOrEmpty(objectName) || controller == null)
                 return;
 
+            // Native CollectWashLightController 0x4ff9ba0 keys the cache with
+            // FNVHash.Generate(controller.name) only. Unity's Instantiate may
+            // append "(Clone)"; keep that one alias so stage/timeline names match.
             AddHash(objectName, controller);
-
-            string noClone = objectName.Replace("(Clone)", "");
-            AddHash(noClone, controller);
-
-            string core = noClone;
-
-            if (core.StartsWith("washlight_", StringComparison.OrdinalIgnoreCase))
-                core = core.Substring("washlight_".Length);
-
-            AddHash(core, controller);
-
-            AddHash(core + "_billboard", controller);
-
-            // timeline 常见名：
-            // light000_truss_roof_b_back_003_billboard
-            // scene 常见名：
-            // washlight_truss_roof_b_back_003
-            for (int i = 0; i <= generateLightPrefixMax; i++)
-            {
-                string timelineName = "light" + i.ToString("D3") + "_" + core + "_billboard";
-                AddHash(timelineName, controller);
-            }
+            AddHash(objectName.Replace("(Clone)", ""), controller);
         }
 
         private void AddHash(string name, WashLightController controller)
@@ -187,7 +185,7 @@ namespace Gallop.Live
             if (string.IsNullOrEmpty(name) || controller == null)
                 return;
 
-            int hash = Animator.StringToHash(name);
+            int hash = FNVHash.Generate(name);
 
             if (!_controllerMap.ContainsKey(hash))
                 _controllerMap.Add(hash, controller);

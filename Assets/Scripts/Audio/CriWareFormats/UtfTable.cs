@@ -1,4 +1,4 @@
-﻿using CriWareFormats.Common;
+using CriWareFormats.Common;
 using System;
 using System.IO;
 using System.Linq;
@@ -39,7 +39,6 @@ namespace CriWareFormats
         public ColumnType Type;
         public string Name;
         public uint Offset;
-
         public override string ToString()
         {
             return Name;
@@ -50,7 +49,6 @@ namespace CriWareFormats
     {
         public uint Offset;
         public uint Size;
-
         public override string ToString()
         {
             return $"Offset: {Offset}, Length: {Size}";
@@ -67,45 +65,37 @@ namespace CriWareFormats
     {
         private readonly BinaryReaderEndian binaryReader;
         private readonly uint tableOffset;
-
         private readonly uint tableSize;
         private readonly ushort version;
         private readonly ushort rowsOffset;
         private readonly uint stringsOffset;
         private readonly uint dataOffset;
         private readonly uint nameOffset;
-
         private readonly ushort columns;
         private readonly ushort rowWidth;
         private readonly uint rows;
-
         private readonly byte[] schemaBuffer;
         private readonly Column[] schema;
-
         private readonly uint schemaOffset;
         private readonly uint schemaSize;
         private readonly uint rowsSize;
         private readonly uint dataSize;
         private readonly uint stringsSize;
-
         private readonly byte[] stringTable;
         private readonly string tableName;
+        public UtfTable(Stream utfTableStream, out int utfTableRows, out string utfTableRowName) : this(utfTableStream, 0, out utfTableRows, out utfTableRowName)
+        {
+        }
 
-        public UtfTable(Stream utfTableStream, out int utfTableRows, out string utfTableRowName) :
-            this(utfTableStream, 0, out utfTableRows, out utfTableRowName)
-        { }
-
-        public UtfTable(Stream utfTableStream, uint offset) :
-            this(utfTableStream, offset, out int _, out string _)
-        { }
+        public UtfTable(Stream utfTableStream, uint offset) : this(utfTableStream, offset, out int _, out string _)
+        {
+        }
 
         public UtfTable(Stream utfTableStream, uint offset, out int utfTableRows, out string rowName)
         {
             binaryReader = new BinaryReaderEndian(utfTableStream);
             tableOffset = offset;
-
             binaryReader.BaseStream.Position = offset;
-
             if (!binaryReader.ReadChars(4).SequenceEqual("@UTF".ToCharArray()))
                 throw new InvalidDataException("Incorrect magic.");
             tableSize = binaryReader.ReadUInt32BE() + 0x08;
@@ -117,13 +107,11 @@ namespace CriWareFormats
             columns = binaryReader.ReadUInt16BE();
             rowWidth = binaryReader.ReadUInt16BE();
             rows = binaryReader.ReadUInt32BE();
-
             schemaOffset = 0x20;
             schemaSize = rowsOffset - schemaOffset;
             rowsSize = stringsOffset - rowsOffset;
             stringsSize = dataOffset - stringsOffset;
             dataSize = tableSize - dataOffset;
-
             if (version != 0x00 && version != 0x01)
                 throw new InvalidDataException("Unknown @UTF version.");
             if (tableOffset + tableSize > utfTableStream.Length)
@@ -134,38 +122,28 @@ namespace CriWareFormats
                 throw new InvalidDataException("Invalid string table size.");
             if (Columns <= 0)
                 throw new InvalidDataException("Table has no columns.");
-
             schemaBuffer = new byte[schemaSize];
             binaryReader.BaseStream.Position = tableOffset + schemaOffset;
             if (binaryReader.Read(schemaBuffer, 0, (int)schemaSize) != schemaSize)
                 throw new InvalidDataException("Failed to read schema.");
-
             stringTable = new byte[stringsSize];
             binaryReader.BaseStream.Position = tableOffset + stringsOffset;
             if (binaryReader.Read(stringTable, 0, (int)stringsSize) != stringsSize)
                 throw new InvalidDataException("Failed to read string table.");
-
             uint columnOffset = 0;
             uint schemaPos = 0;
-
             tableName = GetStringFromTable(nameOffset);
-
             schema = new Column[columns];
-
             BinaryReaderEndian bytesReader = new BinaryReaderEndian(new MemoryStream(schemaBuffer) { Position = 0 });
             for (int i = 0; i < columns; i++)
             {
                 bytesReader.BaseStream.Position = schemaPos;
-
                 byte info = bytesReader.ReadByte();
                 uint nameOffset = bytesReader.ReadUInt32BE();
-
                 if (nameOffset > stringsSize)
                     throw new InvalidDataException("String offset out of bounds.");
                 schemaPos += 0x1 + 0x4;
-
                 bytesReader.BaseStream.Position = schemaPos;
-
                 schema[i] = new Column()
                 {
                     Flag = (ColumnFlag)(info & 0xF0),
@@ -173,14 +151,9 @@ namespace CriWareFormats
                     Name = "",
                     Offset = 0
                 };
-
-                if (schema[i].Flag == 0 ||
-                    !schema[i].Flag.HasFlag(ColumnFlag.Name) ||
-                     schema[i].Flag.HasFlag(ColumnFlag.Default) && schema[i].Flag.HasFlag(ColumnFlag.Row) ||
-                     schema[i].Flag.HasFlag(ColumnFlag.Undefined))
+                if (schema[i].Flag == 0 || !schema[i].Flag.HasFlag(ColumnFlag.Name) || schema[i].Flag.HasFlag(ColumnFlag.Default) && schema[i].Flag.HasFlag(ColumnFlag.Row) || schema[i].Flag.HasFlag(ColumnFlag.Undefined))
                     throw new InvalidDataException("Unknown column flag combo found.");
-
-                uint valueSize; 
+                uint valueSize;
                 switch (schema[i].Type)
                 {
                     case ColumnType.Byte:
@@ -204,18 +177,15 @@ namespace CriWareFormats
                         break;
                     default:
                         throw new InvalidDataException("Invalid column type.");
-                };
+                }
 
                 if (schema[i].Flag.HasFlag(ColumnFlag.Name))
                     schema[i].Name = GetStringFromTable(nameOffset);
-
                 if (schema[i].Flag.HasFlag(ColumnFlag.Default))
                 {
                     schema[i].Offset = schemaPos;
                     schemaPos += valueSize;
-
                     bytesReader.BaseStream.Position = schemaPos;
-
                 }
 
                 if (schema[i].Flag.HasFlag(ColumnFlag.Row))
@@ -227,16 +197,12 @@ namespace CriWareFormats
 
             utfTableRows = (int)rows;
             rowName = GetStringFromTable(nameOffset);
-
             bytesReader.Dispose();
         }
 
         public ushort Columns => columns;
-
         public uint Rows => rows;
-
         public Column[] Schema => schema;
-
         public string TableName => tableName;
 
         public int GetColumn(string columnName)
@@ -244,10 +210,8 @@ namespace CriWareFormats
             for (int i = 0; i < columns; i++)
             {
                 Column column = schema[i];
-
                 if (column.Name is null || !column.Name.Equals(columnName))
                     continue;
-
                 return i;
             }
 
@@ -257,20 +221,16 @@ namespace CriWareFormats
         private bool Query(int row, int column, out Result result)
         {
             result = new Result();
-
             if (row >= rows || row < 0)
                 //throw new ArgumentOutOfRangeException(nameof(row));
                 return false;
             if (column >= columns || column < 0)
                 //throw new ArgumentOutOfRangeException(nameof(column));
                 return false;
-
             Column col = schema[column];
             uint dataOffset = 0;
             BinaryReaderEndian bytesReader = null;
-
             result.Type = col.Type;
-
             if (col.Flag.HasFlag(ColumnFlag.Default))
             {
                 if (schemaBuffer != null)
@@ -289,9 +249,7 @@ namespace CriWareFormats
             }
             else
                 throw new InvalidDataException("Invalid flag.");
-
             binaryReader.BaseStream.Position = dataOffset;
-
             switch (col.Type)
             {
                 case ColumnType.Byte:
@@ -346,6 +304,7 @@ namespace CriWareFormats
                             Size = binaryReader.ReadUInt32BE()
                         };
                     }
+
                     break;
                 //case ColumnType.UInt128:
                 //    break;
@@ -359,9 +318,7 @@ namespace CriWareFormats
         public bool Query<T>(int row, int column, out T value)
         {
             bool valid = Query(row, column, out Result result);
-
             bool enumParseResult = Enum.TryParse<ColumnType>(typeof(T).Name, out ColumnType type);
-
             if (!valid || !enumParseResult || result.Type != type)
             {
                 value = default;
@@ -369,7 +326,6 @@ namespace CriWareFormats
             }
 
             value = (T)result.Value;
-
             if (value is VLData vlData)
             {
                 vlData.Offset += tableOffset + dataOffset;
@@ -379,40 +335,33 @@ namespace CriWareFormats
             return true;
         }
 
-        public bool Query<T>(int row, string columnName, out T value) =>
-            Query(row, GetColumn(columnName), out value);
-
+        public bool Query<T>(int row, string columnName, out T value) => Query(row, GetColumn(columnName), out value);
         public bool Query(int row, int column, out uint offset, out uint size)
         {
             if (!Query(row, column, out VLData data))
             {
                 offset = 0;
                 size = 0;
-
                 return false;
             }
 
             offset = data.Offset;
             size = data.Size;
-
             return true;
         }
 
-        public bool Query(int row, string columnName, out uint offset, out uint size)
-            => Query(row, GetColumn(columnName), out offset, out size);
-
+        public bool Query(int row, string columnName, out uint offset, out uint size) => Query(row, GetColumn(columnName), out offset, out size);
         private string GetStringFromTable(uint offset)
         {
             if (offset > stringsSize)
                 throw new InvalidDataException("Invalid string offset.");
-
             StringBuilder stringBuilder = new StringBuilder();
-
             int i = 0;
             while (i < stringsSize)
             {
                 stringBuilder.Append((char)stringTable[offset + i++]);
-                if (stringTable[offset + i] == '\0') break;
+                if (stringTable[offset + i] == '\0')
+                    break;
             }
 
             return stringBuilder.ToString();
@@ -422,14 +371,8 @@ namespace CriWareFormats
         {
             if (!Query(0, tableName, out VLData tableValueData))
                 throw new ArgumentException("Subtable does not exist.");
-
             binaryReader.BaseStream.Position = tableValueData.Offset;
-
-            return new UtfTable(
-                binaryReader.BaseStream,
-                tableValueData.Offset,
-                out int _,
-                out string _);
+            return new UtfTable(binaryReader.BaseStream, tableValueData.Offset, out int _, out string _);
         }
     }
 }

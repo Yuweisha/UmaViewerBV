@@ -1,4 +1,4 @@
-﻿namespace Gallop.RenderPipeline
+namespace Gallop.RenderPipeline
 {
     public enum CutoffType
     {

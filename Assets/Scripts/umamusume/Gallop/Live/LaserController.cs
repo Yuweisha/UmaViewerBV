@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
@@ -165,13 +165,18 @@ namespace Gallop.Live
 
             _randomBlinkArray = new bool[RANDOM_BLINK_ARRAY_MAX];
             for (int i = 0; i < _randomBlinkArray.Length; i++)
-                _randomBlinkArray[i] = UnityEngine.Random.Range(0, 2) == 0;
+                _randomBlinkArray[i] = LiveRandomBoundary.RangeInt(0, 2) == 0;
 
             _isDisabledRootLight = false;
             _isEnabledRaycast = false;
             _raycastDistance = 0f;
             _isInitialized = true;
 
+            Debug.Log(
+                $"[LaserController] initialized: {_instance.name}, " +
+                $"rays={_rayControllerArray?.Length ?? 0}, " +
+                $"lights={_lightRendererArray?.Length ?? 0}, " +
+                $"rayNames={GetRayNameList()}");
         }
         private static GameObject[] GetIndexedObjects(Component holder,string prefix, int maxCount)
         {
@@ -291,13 +296,14 @@ namespace Gallop.Live
 
             _randomBlinkArray = new bool[RANDOM_BLINK_ARRAY_MAX];
             for (int i = 0; i < _randomBlinkArray.Length; i++)
-                _randomBlinkArray[i] = UnityEngine.Random.Range(0, 2) == 0;
+                _randomBlinkArray[i] = LiveRandomBoundary.RangeInt(0, 2) == 0;
 
             _isDisabledRootLight = false;
             _isEnabledRaycast = false;
             _raycastDistance = 0f;
             _isInitialized = true;
 
+            Debug.Log($"[LaserController] bound existing: {_instance.name}, rays={_rayControllerArray?.Length ?? 0}, lights={_lightRendererArray?.Length ?? 0}");
         }
 
         private static GameObject[] FindRayObjectsFromHierarchy(Transform controllerTransform)
@@ -449,8 +455,7 @@ namespace Gallop.Live
             if (!_isInitialized || _instance == null)
                 return;
 
-            if (_instance.activeSelf != updateInfo.isEnabledRender)
-                _instance.SetActive(updateInfo.isEnabledRender);
+            _instance.SetActive(updateInfo.isEnabledRender);
 
             if (!updateInfo.isEnabledRender)
                 return;

@@ -1,0 +1,492 @@
+{
+  "fonts": [
+    {
+      "name": "FOT-Skip Std D",
+      "localizations": [
+        {
+          "target": "",
+          "path": "Fonts/FOT-SkipStd-D",
+          "common": false,
+          "quality": [
+            0,
+            0,
+            0,
+            0.0
+          ],
+          "sizes": [
+            {
+              "size": 29,
+              "left": 2.0,
+              "center": 2.0,
+              "right": 0.0,
+              "upper": -9.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.029999999329447746,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FOT-Humming Std D",
+      "localizations": [
+        {
+          "target": "",
+          "path": "Fonts/Dynamic01",
+          "common": false,
+          "quality": [
+            0,
+            0,
+            0,
+            0.0
+          ],
+          "sizes": [
+            {
+              "size": 18,
+              "left": 2.0,
+              "center": 0.0,
+              "right": -2.0,
+              "upper": -7.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.0,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FOT-Yuruka Std UB",
+      "localizations": [
+        {
+          "target": "",
+          "path": "Fonts/Dynamic01",
+          "common": false,
+          "quality": [
+            0,
+            0,
+            0,
+            0.0
+          ],
+          "sizes": [
+            {
+              "size": 18,
+              "left": 2.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -7.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.03999999910593033,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 26,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -2.0,
+              "upper": -10.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.04500000178813934,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 30,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -2.0,
+              "upper": -12.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.04500000178813934,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 50,
+              "left": 2.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -18.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.03999999910593033,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 64,
+              "left": 2.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -25.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.029999999329447746,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 70,
+              "left": 2.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -26.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": 0.05000000074505806,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FOT-RodinWanpaku Pro EB",
+      "localizations": [
+        {
+          "target": "",
+          "path": "Fonts/Dynamic01",
+          "common": false,
+          "quality": [
+            0,
+            0,
+            0,
+            0.0
+          ],
+          "sizes": [
+            {
+              "size": 12,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -4.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.07999999821186066,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 18,
+              "left": 4.0,
+              "center": 0.0,
+              "right": -4.0,
+              "upper": -5.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 20,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -7.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 25,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -6.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10999999940395355,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 26,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -7.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 28,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -8.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 30,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -8.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.09000000357627869,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 32,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -5.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.09000000357627869,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 35,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -9.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 40,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -3.0,
+              "upper": -9.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 50,
+              "left": 3.0,
+              "center": -1.0,
+              "right": -4.0,
+              "upper": -11.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 60,
+              "left": 3.0,
+              "center": -1.0,
+              "right": -4.0,
+              "upper": -14.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 70,
+              "left": 3.0,
+              "center": -1.0,
+              "right": -3.0,
+              "upper": -14.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FOT-TsukuMin Pro E",
+      "localizations": [
+        {
+          "target": "",
+          "path": "Fonts/Dynamic01",
+          "common": false,
+          "quality": [
+            0,
+            0,
+            0,
+            0.0
+          ],
+          "sizes": [
+            {
+              "size": 36,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -12.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 44,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -14.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 52,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -17.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 75,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -22.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 90,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -26.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 100,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -31.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            },
+            {
+              "size": 125,
+              "left": 3.0,
+              "center": 0.0,
+              "right": -1.0,
+              "upper": -37.0,
+              "middle": 0.0,
+              "lower": 0.0,
+              "lineSpacing": -0.10000000149011612,
+              "sizeOffset": 0,
+              "iconX": 0.0,
+              "iconY": 0.0,
+              "iconSize": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "quality": [
+    24,
+    50,
+    24,
+    5
+  ]
+}

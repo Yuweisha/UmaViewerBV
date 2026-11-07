@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 namespace LibMMD.Unity3D.ImageLoader
 {

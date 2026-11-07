@@ -1,4 +1,4 @@
-﻿namespace LibMMD.Util
+namespace LibMMD.Util
 {
     using UnityEngine;
  

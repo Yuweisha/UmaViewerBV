@@ -1,5 +1,8 @@
 using UnityEngine;
 
+namespace Gallop.Live
+{
+[UnityEngine.Scripting.Preserve]
 public class LiveTimelineCamera : MonoBehaviour
 {
     private bool _applyNoise = true;
@@ -174,4 +177,5 @@ public class LiveTimelineCamera : MonoBehaviour
             attachedCamera.worldToCameraMatrix = lhs * attachedCamera.transform.worldToLocalMatrix;
         }
     }
+}
 }

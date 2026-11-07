@@ -32,6 +32,7 @@ namespace Gallop
         private Transform _transform;
 
         public bool IsWorld;
+        public bool IsEnabled { get; set; } = true;
 
         public float Radius
         {
@@ -99,6 +100,19 @@ namespace Gallop
             _defaultOffset2 = _offset2;
         }
 
+        // Timeline component setters update both current and default fields
+        // (original 0x4a60730/770/7b0), keeping this RuntimeData identity alive.
+        public void SetTimelineGeometry(float radius, Vector3 offset2)
+        {
+            _radius = _defaultRadius = radius;
+            _offset = _defaultOffset = Vector3.zero;
+            _offset2 = _defaultOffset2 = offset2;
+        }
+
+        internal void SetComponentRadius(float value) => _radius = _defaultRadius = value;
+        internal void SetComponentOffset(Vector3 value) => _offset = _defaultOffset = value;
+        internal void SetComponentOffset2(Vector3 value) => _offset2 = _defaultOffset2 = value;
+
         public void SetTransform(float distance, Vector3 normal)
         {
             // Official Plane setup:
@@ -118,10 +132,7 @@ namespace Gallop
             nativeCollision.Radius = _radius;
             nativeCollision.Type = (int)CollisionType;
             nativeCollision.IsInnerBool = IsInner;
-            // The solver (CySpringPlugin.dll) skips a collider whose IsEnable is 0. The collision
-            // data carries no such flag, so every typed collider is live; without this the cloth
-            // never collides with the body and a skirt folds through a raised thigh.
-            nativeCollision.IsEnable = CollisionType != CySpringCollisionData.CollisionType.None ? 1 : 0;
+            nativeCollision.IsEnableBool = IsEnabled;
         }
 
         public void UpdateNativeCollision(
@@ -160,29 +171,12 @@ namespace Gallop
                         if (rootParentWorkArray == null)
                             return;
 
-                        Vector3 forward = _transform != null ? _transform.forward : Vector3.forward;
-
-                        // Colision de ENTORNO (pista CharaCollision del cutt): el plano lo define el
-                        // propio colisionador, que vive en el escenario y NO cuelga de un hueso. Hay
-                        // que usar su posicion, no la del hueso padre: el solver trabaja con el owner
-                        // a cero, asi que se resta `characterPosition` (la posicion del owner) para
-                        // pasarlo a ese espacio.
-                        // Medido en el live 1081: con la posicion del hueso padre el "suelo" (y=-0,11)
-                        // llegaba al nativo como y=1,32 y empujaba pelo, cola y falda hacia arriba.
-                        if (IsWorld)
-                        {
-                            Vector3 worldPosition = _transform != null ? _transform.position : Vector3.zero;
-
-                            nativeCollision.Distance = Vector3.Dot(worldPosition - characterPosition, forward);
-                            nativeCollision.Normal = forward;
-                            break;
-                        }
-
                         int parentWorkIndex = nativeCollision.ParentWorkIndex;
                         if ((uint)parentWorkIndex >= (uint)rootParentWorkArray.Length)
                             return;
 
                         Vector3 parentPos = rootParentWorkArray[parentWorkIndex].WorldPosition;
+                        Vector3 forward = _transform != null ? _transform.forward : Vector3.forward;
 
                         nativeCollision.Distance = Vector3.Dot(parentPos - characterPosition, forward);
                         nativeCollision.Normal = forward;
@@ -220,7 +214,7 @@ namespace Gallop
         {
             // 官方:
             // if IsWorld:
-            //   parentRot = rootParentWorkArray[nativeCollision.ParentWorkIndex + 1].WorldRotation
+            //   parentRot = rootParentWorkArray[nativeCollision.ParentWorkIndex].WorldRotation
             //   return inverse(parentRot) * (-characterPosition)
             // else:
             //   return Vector3.zero
@@ -229,7 +223,9 @@ namespace Gallop
                 if (rootParentWorkArray == null)
                     throw new NullReferenceException();
 
-                int arrayIndex = nativeCollision.ParentWorkIndex + 1;
+                // Native INC then SHL includes the IL2CPP array header (0x20),
+                // not an extra managed array element.
+                int arrayIndex = nativeCollision.ParentWorkIndex;
                 if ((uint)arrayIndex >= (uint)rootParentWorkArray.Length)
                     throw new IndexOutOfRangeException();
 
@@ -299,32 +295,6 @@ namespace Gallop
             NativeRootParentWork[] rootParentWorkArray)
         {
             UpdateNativeCollisionEnv(ref nativeCollision, ref characterPosition, rootParentWorkArray);
-        }
-
-        /// <summary>
-        /// El motor recalcula radio y posicion de cada colisor a partir de sus valores POR DEFECTO
-        /// (ScaleParams_*) cuando cambia la escala del personaje. Para que un ajuste hecho en
-        /// caliente no se pierda en ese recalculo, hay que mover tambien el valor por defecto.
-        /// </summary>
-        public void SetDefaultParams(float radius, Vector3 offset)
-        {
-            _defaultRadius = radius;
-            _defaultOffset = offset;
-        }
-
-        public void SetDefaultRadius(float radius)
-        {
-            _defaultRadius = radius;
-        }
-
-        public void SetDefaultOffset(Vector3 offset)
-        {
-            _defaultOffset = offset;
-        }
-
-        public void SetDefaultOffset2(Vector3 offset2)
-        {
-            _defaultOffset2 = offset2;
         }
 
         public void ScaleParams(float legacyScale)

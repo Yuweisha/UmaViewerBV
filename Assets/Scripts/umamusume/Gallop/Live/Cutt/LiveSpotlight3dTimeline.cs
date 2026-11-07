@@ -29,11 +29,15 @@ namespace Gallop.Live.Cutt
             info.characterFlag = 1 << group.CharacterIndex;
             info.isActive = a.isActive;
             info.IsEnabledBillboard = a.IsEnabledBillboard;
+            info.EnableLookAt = a.EnableLookAt;
+            info.PositionType = a.PositionTypeValue;
+            info.TargetNodeName = a.TargetNodeName;
             info.color = Color.LerpUnclamped(a.color, b.color, t);
             info.colorPower = Mathf.LerpUnclamped(a.colorPower, b.colorPower, t);
             info.localHeight = Mathf.LerpUnclamped(a.localHeight, b.localHeight, t);
-            info.position = Vector3.LerpUnclamped(a.position, b.position, t) +
-                Vector3.LerpUnclamped(a.characterPosition, b.characterPosition, t);
+            info.position = Vector3.LerpUnclamped(a.position, b.position, t);
+            if (a.PositionTypeValue == LiveTimelineKeySpotlight3dData.PositionType.Key)
+                info.position += Vector3.LerpUnclamped(a.characterPosition, b.characterPosition, t);
             info.rotation = Vector3.LerpUnclamped(a.rotation, b.rotation, t);
             info.scale = Vector3.LerpUnclamped(a.scale, b.scale, t);
             info.TargetCameraTransform = mainCamera;

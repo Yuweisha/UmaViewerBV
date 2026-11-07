@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -13,19 +13,10 @@ public class UmaDatabaseEntry
     public string Prerequisites;
     public long Key;
     private byte[] fKey;
-
-    /// <summary>
-    /// True when the payload must be decrypted with <see cref="Key"/> (the `e` column).
-    /// The game's bundles keep a plain "UnityFS" header even though every block after it is
-    /// encrypted, so a header check cannot tell plain from encrypted — trusting it here made
-    /// the loader skip the decryptor and fail with "&lt;path&gt; exists and doesn't work".
-    /// Every bundle shipped by the game/CDN with a non-zero key is encrypted.
-    /// </summary>
     public bool IsEncrypted => Key != 0;
 
     [NonSerialized]
     public List<UmaDatabaseEntry> CachedPrerequisites = null;
-
     public byte[] FKey
     {
         get
@@ -34,14 +25,13 @@ public class UmaDatabaseEntry
             {
                 var baseKeys = Config.Instance.ABKey;
                 int baseLen = baseKeys.Length;
-
                 var keys = new byte[baseLen * 8];
-
                 byte[] keyBytes = BitConverter.GetBytes(Key);
                 if (!BitConverter.IsLittleEndian)
                 {
                     Array.Reverse(keyBytes);
                 }
+
                 for (int i = 0; i < baseLen; ++i)
                 {
                     byte b = baseKeys[i];
@@ -54,6 +44,7 @@ public class UmaDatabaseEntry
 
                 fKey = keys;
             }
+
             return fKey;
         }
     }
@@ -62,12 +53,11 @@ public class UmaDatabaseEntry
     {
         get
         {
-            if (Config.Instance.DownloadMissingResources
-                && !File.Exists(Path)
-                && !UmaMissingAssets.IsMissing(Url))
+            if ((Config.Instance.DownloadMissingResources || Config.Instance.WorkMode == WorkMode.Standalone) && !File.Exists(Path) && !UmaMissingAssets.IsMissing(Url))
             {
                 DownloadAsset(this);
             }
+
             return Path;
         }
     }
@@ -76,18 +66,6 @@ public class UmaDatabaseEntry
     {
         get
         {
-            // Android root 模式没有搬运 dat/，命中缓存就返回缓存路径，否则用 su 取一份。
-            if (AndroidRootSource.IsRootMode && !string.IsNullOrEmpty(Url) && Url.Length >= 2)
-            {
-                string cached = AndroidRootSource.EnsureBundle(
-                    UnityEngine.Application.persistentDataPath, Url);
-
-                if (!string.IsNullOrEmpty(cached))
-                {
-                    return cached;
-                }
-            }
-
             return $"{Config.Instance.MainPath.Replace("\\", "/")}/dat/{Url.Substring(0, 2)}/{Url}";
         }
     }
@@ -104,16 +82,12 @@ public class UmaDatabaseEntry
     {
         Object[] loaded = UmaAssetManager.LoadAssetBundle(this, isRecursive: withDependencies).LoadAllAssets();
         Object asset = loaded.FirstOrDefault(a => a.GetType() == typeof(T));
-        if (Gallop.Live.LiveRuntimeDiagnostics.Enabled)
-            Gallop.Live.LiveRuntimeDiagnostics.RecordAssetLoad(Name, "Get", typeof(T), loaded, asset);
         return (T)System.Convert.ChangeType(asset, typeof(T));
     }
 
     public IEnumerable<T> GetAll<T>(bool withDependencies = true)
     {
         Object[] loaded = UmaAssetManager.LoadAssetBundle(this, isRecursive: withDependencies).LoadAllAssets();
-        if (Gallop.Live.LiveRuntimeDiagnostics.Enabled)
-            Gallop.Live.LiveRuntimeDiagnostics.RecordAssetLoad(Name, "GetAll", typeof(T), loaded);
         IEnumerable<Object> assets = loaded.Where(a => a.GetType() == typeof(T));
         return assets.Select(asset => (T)System.Convert.ChangeType(asset, typeof(T)));
     }
@@ -126,5 +100,4 @@ public class UmaDatabaseEntry
             UmaViewerUI.Instance.ShowMessage(msg, type);
         });
     }
-
 }

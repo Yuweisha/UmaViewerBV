@@ -1,4 +1,4 @@
-﻿using CriWareFormats.Common;
+using CriWareFormats.Common;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -41,6 +41,14 @@ namespace CriWareFormats
         public AwbReader GetAwb()
         {
             return new AwbReader(new SpliceStream(outerStream, awbOffset, awbLength), true);
+        }
+
+        public string GetStreamingAwbName()
+        {
+            var header=new UtfTable(outerStream,(uint)positionOffset);
+            if (!header.Query(0,"StreamAwbHash",out VLData data) || data.Size==0) return null;
+            var table=new UtfTable(outerStream,data.Offset);
+            return table.Query(0,"Name",out string name)?name:null;
         }
 
         public string GetWaveName(int waveId, int port, bool memory)

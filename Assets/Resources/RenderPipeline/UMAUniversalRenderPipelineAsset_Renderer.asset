@@ -11,7 +11,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 826554af496dc473e888fd32d17ba3f9, type: 3}
   m_Name: Gallop Live Post Effects
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier:
   m_Active: 1
   _enableRendering: 1
 --- !u!114 &-53754397225917022
@@ -25,7 +25,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 6b3d386ba5cd94485973aee1479b272e, type: 3}
   m_Name: UmaCharacter
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier:
   m_Active: 1
   settings:
     passTag: UmaCharacter
@@ -68,7 +68,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: de640fe3d0db1804a85f9fc8f5cadab6, type: 3}
   m_Name: UMAUniversalRenderPipelineAsset_Renderer
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier:
   debugShaders:
     debugReplacementPS: {fileID: 4800000, guid: cf852408f2e174538bcd9b7fda1c5ae7,
       type: 3}
@@ -138,7 +138,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1e6578d3419414d9d86c37d481263769, type: 3}
   m_Name: CopyCameraToRTFeature
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier:
   m_Active: 1
   settings:
     target: {fileID: 8400000, guid: c70d1b3875c224e5784ec6d613e6cd44, type: 2}

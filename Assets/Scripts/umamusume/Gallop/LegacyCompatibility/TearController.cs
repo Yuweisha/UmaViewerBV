@@ -1,4 +1,4 @@
-﻿using Gallop;
+using Gallop;
 using UnityEngine;
 
 public class TearController
@@ -150,9 +150,8 @@ public class TearController
         int wCount = w / pw;
         int hCount = h / ph;
         int index = (int)(time * (wCount * hCount));
-        return new Vector2((index % wCount) / (float)wCount,(index/wCount)/(float)hCount); 
+        return new Vector2((index % wCount) / (float)wCount,(index/wCount)/(float)hCount);
     }
 
-    
-} 
 
+}

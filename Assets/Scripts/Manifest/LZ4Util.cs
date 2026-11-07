@@ -1,4 +1,4 @@
-﻿using K4os.Compression.LZ4;
+using K4os.Compression.LZ4;
 using K4os.Compression.LZ4.Streams;
 using System;
 using System.IO;

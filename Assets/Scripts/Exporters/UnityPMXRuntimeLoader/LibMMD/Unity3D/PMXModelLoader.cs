@@ -1,4 +1,4 @@
-﻿using LibMMD.Unity3D;
+using LibMMD.Unity3D;
 using System;
 using System.Collections;
 using System.Collections.Generic;

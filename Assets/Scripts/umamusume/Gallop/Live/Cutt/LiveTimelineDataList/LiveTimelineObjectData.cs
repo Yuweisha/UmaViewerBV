@@ -77,6 +77,16 @@ namespace Gallop.Live.Cutt
         public OffsetType OffsetValueType;
         public LayerType LayerTypeValue;
         public bool IsLayerTypeRecursively;
+        public bool IsAttachProps;
+        public int PropsIndex;
+        public bool UseScreenCapture;
+        public int ScreenCaptureId;
+        public bool Use2dBackground;
+        public int BgId;
+        public int BgSubId;
+        public ScreenCaptureAspectType UseCaptureAspectType;
+
+        public enum ScreenCaptureAspectType { Normal = 0, LSize = 1 }
     }
 
     [Serializable]

@@ -3,11 +3,11 @@ using UnityEngine;
 namespace Gallop.Live.Cutt
 {
     /// <summary>
-    /// °´ controller µÄÔ­°æÏû·Ñ·½Ê½¸Ä³É±âÆ½½á¹¹£º
-    /// controller Ö±½Ó´ÓÕâÀï¿½±´ÑÕÉ« / power / offset / speed / elapsed / texture / enable¡£
+    /// æŒ‰ controller çš„åŸç‰ˆæ¶ˆè´¹æ–¹å¼æ”¹æˆæ‰å¹³ç»“æ„ï¼š
+    /// controller ç›´æ¥ä»è¿™é‡Œæ‹·è´é¢œè‰² / power / offset / speed / elapsed / texture / enableã€‚
     ///
-    /// ÎªÁË¼æÈİÄãÏÖÔÚµÄ driver »¹±£ÁôÁË data£¬±ãÓÚÓÃ data.name ÕÒÄ¿±ê²ÄÖÊ¡£
-    /// Èç¹ûÄãºóÃæ°ÑÔ­°æ stage °ó¶¨Á´ÍêÈ«²¹Æë£¬¿ÉÒÔÔÙ°Ñ data ´ÓÕâ¸ö struct Å²×ß¡£
+    /// ä¸ºäº†å…¼å®¹ä½ ç°åœ¨çš„ driver è¿˜ä¿ç•™äº† dataï¼Œä¾¿äºç”¨ data.name æ‰¾ç›®æ ‡æè´¨ã€‚
+    /// å¦‚æœä½ åé¢æŠŠåŸç‰ˆ stage ç»‘å®šé“¾å®Œå…¨è¡¥é½ï¼Œå¯ä»¥å†æŠŠ data ä»è¿™ä¸ª struct æŒªèµ°ã€‚
     /// </summary>
     public struct UVScrollLightUpdateInfo
     {
@@ -25,9 +25,9 @@ namespace Gallop.Live.Cutt
         public bool isEnabledTexture;
 
         /// <summary>
-        /// ¼æÈİ helper£º
-        /// ÄãÏÖÔÚÈç¹û timeline ²à»¹ÊÇÏÈÄÃ key£¬ÔÙ×éÊÂ¼ş£¬
-        /// ¿ÉÒÔÖ±½ÓÓÃÕâ¸ö·½·¨°Ñ key ´òÆ½³É controller ÕæÕıĞèÒªµÄ updateInfo¡£
+        /// å…¼å®¹ helperï¼š
+        /// ä½ ç°åœ¨å¦‚æœ timeline ä¾§è¿˜æ˜¯å…ˆæ‹¿ keyï¼Œå†ç»„äº‹ä»¶ï¼Œ
+        /// å¯ä»¥ç›´æ¥ç”¨è¿™ä¸ªæ–¹æ³•æŠŠ key æ‰“å¹³æˆ controller çœŸæ­£éœ€è¦çš„ updateInfoã€‚
         /// </summary>
         public static UVScrollLightUpdateInfo Create(
             LiveTimelineUVScrollLightData data,

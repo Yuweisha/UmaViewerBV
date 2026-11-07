@@ -31,8 +31,8 @@ namespace Gallop
         [FieldOffset(0x0DC)] public float HorizontalWindRateSlow;
         [FieldOffset(0x0E0)] public float HorizontalWindRateFast;
 
-        // dummy ÀïÊÇ bool£¬µ«Êµ¼ÊÆ«ÒÆ°´ 4 ×Ö½Ú¶ÔÆë¡£
-        // ÕâÀïÓÃ int£¬±£Ö¤ blittable£¬·½±ã GCHandle pinned array Ö±½Ó´« DLL¡£
+        // dummy é‡Œæ˜¯ boolï¼Œä½†å®é™…åç§»æŒ‰ 4 å­—èŠ‚å¯¹é½ã€‚
+        // è¿™é‡Œç”¨ intï¼Œä¿è¯ blittableï¼Œæ–¹ä¾¿ GCHandle pinned array ç›´æ¥ä¼  DLLã€‚
         [FieldOffset(0x0E4)] public int CheckCharaCollision;
         [FieldOffset(0x0E8)] public int IsSkip;
         [FieldOffset(0x0EC)] public int IsLimit;
@@ -54,7 +54,7 @@ namespace Gallop
         [FieldOffset(0x118)] public Vector3 SkirtKneeNormal;
         [FieldOffset(0x128)] public Vector3 SkirtNormalPos;
 
-        // dummy ÀïÊÇ bool£¬Æ«ÒÆ 0x138£¬ºóÃæ 0x13C ÊÇ float¡£
+        // dummy é‡Œæ˜¯ boolï¼Œåç§» 0x138ï¼Œåé¢ 0x13C æ˜¯ floatã€‚
         [FieldOffset(0x138)] public int IsCheckSkirtKnee;
 
         [FieldOffset(0x13C)] public float MoveSpringApplyRate;

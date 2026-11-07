@@ -13,15 +13,13 @@ namespace Gallop
         private const int PARTS_NUM = 3;
         private int _targetCySpringFpsMode = 1;
         private static volatile bool _simulationTimeOutError;
-
+        private CySpringNative.PreparedSimulation _preparedSimulation;
         public enum Parts
         {
             [InspectorName("头部")]
             Head = 0,
-
             [InspectorName("身体")]
             Body = 1,
-
             [InspectorName("尾巴")]
             Tail = 2
         }
@@ -30,10 +28,8 @@ namespace Gallop
         {
             [InspectorName("正常更新")]
             ModeNormal = 0,
-
             [InspectorName("强制更新")]
             ModeForceUpdate = 1,
-
             [InspectorName("停止更新")]
             ModeStop = 2
         }
@@ -41,66 +37,51 @@ namespace Gallop
         [Header("官方数据容器输入")]
         [SerializeField, InspectorName("头部数据容器")]
         private CySpringDataContainer _headDataContainerAsset;
-
         [SerializeField, InspectorName("身体数据容器")]
         private CySpringDataContainer _bodyDataContainerAsset;
-
         [SerializeField, InspectorName("胸部数据容器")]
         private CySpringDataContainer _bustDataContainerAsset;
-
         [SerializeField, InspectorName("尾巴数据容器")]
         private CySpringDataContainer _tailDataContainerAsset;
+        private GameObject _loadHeadObject, _loadBustObject, _loadBodyObject, _loadTailObject;
 
         [Header("运行时设置")]
         [SerializeField, InspectorName("髋部骨骼")]
         private Transform _hipTransform;
-
         [SerializeField, InspectorName("在 LateUpdate 中自动更新")]
         private bool _autoUpdateInLateUpdate = false;
-
         [SerializeField, InspectorName("使用线程")]
         private bool _useThread; // kept for API compatibility; this bridge runs single-thread by default.
-
         private CySpring[] _springArray;
         private CySpringCollision[] _collisionArray;
         private CySpringCollisionRuntimeData[] _envColArray;
-
         // Official owner fields. Kept as object so this can compile even when CySpringOwner is not restored yet.
         private CySpringOwner _modelController;
         private GameObject _ownerObject;
         private Transform _ownerTransform;
-
         private Vector3 _ownerPrePosition;
         private Quaternion _ownerPreRotation;
         private Vector3 _hipPrePosition;
         private float _hipMoveDistance;
-
         private float[] _springRateArray;
         private float _springRate = 1.0f;
         private Vector3 _previousPos;
         private Quaternion _previousRot;
         private Vector3 _prevLocalScale;
-
         [Header("角色变换与更新设置")]
         [InspectorName("影响角色位置")]
         public bool IsAffectOwnerPotision;
-
         [InspectorName("影响角色旋转")]
         public bool IsAffectOwnerRotation;
-
         [InspectorName("影响角色缩放")]
         public bool IsAffectOwnerScale;
-
         [InspectorName("应用尾巴变换")]
         public bool IsApplyTailTransform = true;
-
         [InspectorName("跳过预更新")]
         public bool IsSkipUpdatePre;
-
         private Vector3 _ownerTransformPosition;
         private Quaternion _ownerTransformRotation;
         private Vector3 _ownerTransformLocalScale;
-
         private SkirtController _skirtController;
         private volatile bool _doneUpdate;
         private bool _isUseThread;
@@ -109,30 +90,41 @@ namespace Gallop
         private readonly bool[] _resetPartsFlag = new bool[PARTS_NUM];
         private readonly bool[] _nonResetPartsFlag = new bool[PARTS_NUM];
         private bool _isPlaying;
-
         private string[] _ignoredCySpringRootBoneArray;
         private float _timescale = 1.0f;
         private float _windPowerRate = 1.0f;
-        private float[] _windPowerScaleArrayRate;
+        private float[] _windPowerScaleArrayRate =
+        {
+            1f,
+            1f,
+            1f
+        };
         private readonly bool[] _hasWindArray = new bool[PARTS_NUM];
         private readonly CySpringWindParam[] _windParamArray = new CySpringWindParam[PARTS_NUM];
         private readonly CySpringWindParam[] _addWindParamArray = new CySpringWindParam[PARTS_NUM];
-        private readonly bool[] _shouldBlendWindParamArray = new bool[PARTS_NUM];
+        private readonly bool[] _shouldBlendWindParamArray =
+        {
+            true,
+            true,
+            true
+        };
         private bool _isEnableDummyWind;
         private Vector3 _dummyWindDir;
         private bool _isCalcCorrectScale;
-
         private readonly List<CySpringBoneBase> _tmpSpringBoneList = new List<CySpringBoneBase>();
+        readonly List<CySpringBoneBase> _liveGravityBones = new List<CySpringBoneBase>();
+        string _liveGravityName;
+        bool _liveGravityReset = true;
+        float _liveGravityMultiply = 1f, _liveGravityAdd, _liveGravitySet = -1f;
         private bool _isWarmingUpCySpringReserved;
         private float _warmingUpTimeReserved;
         private int _springResetDelayFrame;
         private Action _onCompleteWarmingUpCySpringReserve;
-
+        private Action _onBeforeBeginWarmUpStepReserve;
+        private Action _onBeforeEndWarmUpStepReserve;
         private CySpring.RootParentWork _rootBoneParentWork;
         private bool _validRootBoneParentWork;
-
         private Dictionary<string, Transform> _transformCacheDic;
-
         /// <summary>
         /// Optional scale resolver matching the owner virtual scale function in the official controller.
         /// Argument true is used for Head/Tail collision scale; false is used for Body scale.
@@ -154,28 +146,15 @@ namespace Gallop
             }
         }
 
-        public Vector3 PreviousPos
-        {
-            get => _previousPos;
-            set => _previousPos = value;
-        }
-
-        public Quaternion PreviousRot
-        {
-            get => _previousRot;
-            set => _previousRot = value;
-        }
-
+        public Vector3 PreviousPos { get => _previousPos; set => _previousPos = value; }
+        public Quaternion PreviousRot { get => _previousRot; set => _previousRot = value; }
         public bool IsPlaying => _isPlaying;
-        public SpringUpdateMode UpdateMode { get; set; }
+        public long SimulationStepCount { get; private set; }
+        // Native controller +0x158 is shared by UpdateMode, the solver's
+        // calc60FPS flag and GetTargetCySpringFPS used by warmup.
+        public SpringUpdateMode UpdateMode { get => (SpringUpdateMode)_targetCySpringFpsMode; set => _targetCySpringFpsMode = (int)value; }
         public bool IsUpdateScale { get; set; }
-
-        public float TimeScale
-        {
-            get => _timescale;
-            set => _timescale = value;
-        }
-
+        public float TimeScale { get => _timescale; set => _timescale = value; }
         public float AdditionalWindTimeScale { get; set; } = 1.0f;
 
         public float BlendRate
@@ -184,7 +163,6 @@ namespace Gallop
             {
                 if (_springArray == null)
                     return;
-
                 for (int i = 0; i < _springArray.Length; i++)
                 {
                     if (_springArray[i] != null)
@@ -193,23 +171,9 @@ namespace Gallop
             }
         }
 
-        public float StiffnessRate
-        {
-            set => SetStiffnessRate(value);
-        }
-
-        public float WindPowerRate
-        {
-            get => _windPowerRate;
-            set => _windPowerRate = value;
-        }
-
-        public float[] WindPowerScaleArrayRate
-        {
-            get => _windPowerScaleArrayRate;
-            set => _windPowerScaleArrayRate = value;
-        }
-
+        public float StiffnessRate { set => SetStiffnessRate(value); }
+        public float WindPowerRate { get => _windPowerRate; set => _windPowerRate = value; }
+        public float[] WindPowerScaleArrayRate { get => _windPowerScaleArrayRate; set => _windPowerScaleArrayRate = value; }
         public CySpringOwner OwnerModelController => _modelController;
         public GameObject OwnerGameObject => _ownerObject;
 
@@ -222,11 +186,9 @@ namespace Gallop
         {
             if (character == null)
                 return null;
-
             CySpringController controller = character.GetComponent<CySpringController>();
             if (controller == null)
                 controller = character.AddComponent<CySpringController>();
-
             controller.SetOwner(character, hip, ownerCltr);
             return controller;
         }
@@ -235,7 +197,6 @@ namespace Gallop
         {
             if (_ownerObject == null)
                 SetOwner(gameObject, _hipTransform, _modelController);
-
             Init();
         }
 
@@ -243,7 +204,6 @@ namespace Gallop
         {
             if (!_autoUpdateInLateUpdate)
                 return;
-
             BeginSimulation(Time.deltaTime, false);
             EndSimulation();
         }
@@ -254,7 +214,6 @@ namespace Gallop
             _ownerObject = owner != null ? owner : gameObject;
             _ownerTransform = _ownerObject != null ? _ownerObject.transform : transform;
             _hipTransform = hip;
-
             if (_ownerTransform != null)
             {
                 _ownerPrePosition = _ownerTransform.position;
@@ -271,10 +230,8 @@ namespace Gallop
         {
             if (_springArray == null || _springArray.Length != PARTS_NUM)
                 _springArray = new CySpring[PARTS_NUM];
-
             if (_collisionArray == null || _collisionArray.Length != PARTS_NUM)
                 _collisionArray = new CySpringCollision[PARTS_NUM];
-
             if (_springRateArray == null || _springRateArray.Length != PARTS_NUM)
             {
                 _springRateArray = new float[PARTS_NUM];
@@ -286,14 +243,12 @@ namespace Gallop
             {
                 if (_windParamArray[i] == null)
                     _windParamArray[i] = new CySpringWindParam();
-
                 if (_addWindParamArray[i] == null)
                     _addWindParamArray[i] = new CySpringWindParam();
             }
 
             if (_ownerTransform == null)
                 _ownerTransform = transform;
-
             _isPlaying = true;
             if (_timescale == 0.0f)
                 _timescale = 1.0f;
@@ -305,54 +260,65 @@ namespace Gallop
         /// Official-style direct bridge for projects that already have DataContainer components in the scene/prefab.
         /// This bypasses the official owner resource table, but keeps the official Head+Bust / Body / Tail loading order.
         /// </summary>
-        public void LoadFromDataContainers(
-            Dictionary<string, Transform> transformCacheDic,
-            CySpringDataContainer head,
-            CySpringDataContainer body,
-            CySpringDataContainer bust,
-            CySpringDataContainer tail,
-            CySpringCollisionRuntimeData[] envHead = null,
-            CySpringCollisionRuntimeData[] envBody = null,
-            CySpringCollisionRuntimeData[] envTail = null,
-            float headScale = -1.0f,
-            float bodyScale = -1.0f,
-            float tailScale = -1.0f)
+        public void LoadFromDataContainers(Dictionary<string, Transform> transformCacheDic, CySpringDataContainer head, CySpringDataContainer body, CySpringDataContainer bust, CySpringDataContainer tail, CySpringCollisionRuntimeData[] envHead = null, CySpringCollisionRuntimeData[] envBody = null, CySpringCollisionRuntimeData[] envTail = null, float headScale = -1.0f, float bodyScale = -1.0f, float tailScale = -1.0f)
         {
             BeginLoadDirect(head, body, bust, tail, transformCacheDic);
+            LoadPreparedContainers(headScale, bodyScale, tailScale, envHead, envBody, envTail);
+        }
 
+        public void LoadFromOwner(Dictionary<string, Transform> transformCacheDic, CySpringCollisionRuntimeData[] envHead = null, CySpringCollisionRuntimeData[] envBody = null, CySpringCollisionRuntimeData[] envTail = null)
+        {
+            BeginLoadFromOwner(transformCacheDic);
+            LoadPreparedContainers(-1f, -1f, -1f, envHead, envBody, envTail);
+        }
+
+        public void BeginLoadFromOwner(Dictionary<string, Transform> transformCacheDic)
+        {
+            ReleaseLoadObject();
+            Init();
+            _transformCacheDic = transformCacheDic;
+            var cloth = _modelController.ClothAsset;
+            void Clone(GameObject prefab, int part, ref GameObject instance, ref CySpringDataContainer data)
+            {
+                if (prefab == null)
+                    return;
+                instance = UnityEngine.Object.Instantiate(prefab);
+                data = instance.GetComponent<CySpringDataContainer>();
+
+            }
+
+            Clone(cloth.HeadClothAsset, 0, ref _loadHeadObject, ref _headDataContainerAsset);
+            Clone(cloth.BustClothAsset, 3, ref _loadBustObject, ref _bustDataContainerAsset);
+            Clone(cloth.BodyClothAsset, 1, ref _loadBodyObject, ref _bodyDataContainerAsset);
+            Clone(cloth.TailClothAsset, 2, ref _loadTailObject, ref _tailDataContainerAsset);
+        }
+
+        private void LoadPreparedContainers(float headScale, float bodyScale, float tailScale, CySpringCollisionRuntimeData[] envHead, CySpringCollisionRuntimeData[] envBody, CySpringCollisionRuntimeData[] envTail)
+        {
             if (headScale < 0.0f)
                 headScale = GetOwnerScale(true);
             if (bodyScale < 0.0f)
                 bodyScale = GetOwnerScale(false);
             if (tailScale < 0.0f)
                 tailScale = GetOwnerScale(true);
-
             LoadHeadCollisionParamSequence(_transformCacheDic, headScale, bodyScale);
             LoadHeadSpringParamSequence(envHead, headScale, bodyScale);
             LoadBodyCollisionParamSequence(_transformCacheDic, bodyScale);
             LoadBodySpringParamSequence(envBody, bodyScale);
             LoadTailCollisionParamSequence(_transformCacheDic, tailScale);
             LoadTailSpringParamSequence(envTail, bodyScale);
-
             EndLoad();
         }
 
-        public void BeginLoadDirect(
-            CySpringDataContainer head,
-            CySpringDataContainer body,
-            CySpringDataContainer bust,
-            CySpringDataContainer tail,
-            Dictionary<string, Transform> transformCacheDic = null)
+        public void BeginLoadDirect(CySpringDataContainer head, CySpringDataContainer body, CySpringDataContainer bust, CySpringDataContainer tail, Dictionary<string, Transform> transformCacheDic = null)
         {
             ReleaseLoadObject();
             Init();
-
             _transformCacheDic = transformCacheDic ?? BuildTransformCache(_ownerTransform != null ? _ownerTransform : transform);
             _headDataContainerAsset = head;
             _bodyDataContainerAsset = body;
             _bustDataContainerAsset = bust;
             _tailDataContainerAsset = tail;
-
             // Official flag copied from Bust.UseCorrectScaleCalc in LoadHeadCollisionParamSequence.
             _isCalcCorrectScale = _bustDataContainerAsset != null && _bustDataContainerAsset.UseCorrectScaleCalc;
         }
@@ -371,29 +337,17 @@ namespace Gallop
 
         private void LoadHeadCollisionParamSequence(Dictionary<string, Transform> transformCacheDic, float headScale, float bodyScale)
         {
-            // Sin CABEZA (pelo simulado por DynamicBone) el BUSTO no puede perderse: la ropa
-            // interior vive en el contenedor de bust, y en el flujo oficial llega como asset
-            // SECUNDARIO de esta secuencia. Si no hay head, el busto pasa a ser el principal y
-            // se carga igual (colisores + resortes) para que la ropa interior tenga fisica.
-            if (_headDataContainerAsset == null && _bustDataContainerAsset == null)
+            if (_headDataContainerAsset == null)
                 return;
-
-            bool headAsMain = _headDataContainerAsset != null;
-
-            CySpringCollisionDataAsset main = ToCollisionAsset(headAsMain ? _headDataContainerAsset : _bustDataContainerAsset);
+            CySpringCollisionDataAsset main = ToCollisionAsset(_headDataContainerAsset);
             CySpringCollisionDataAsset add = null;
             float addScale = headScale;
-
-            if (headAsMain && _bustDataContainerAsset != null)
+            if (_bustDataContainerAsset != null)
             {
                 add = ToCollisionAsset(_bustDataContainerAsset);
                 _isCalcCorrectScale = _bustDataContainerAsset.UseCorrectScaleCalc;
                 if (_isCalcCorrectScale)
                     addScale = bodyScale;
-            }
-            else if (!headAsMain && _bustDataContainerAsset != null)
-            {
-                _isCalcCorrectScale = _bustDataContainerAsset.UseCorrectScaleCalc;
             }
 
             LoadCollisionParam(Parts.Head, main, add, headScale, addScale, transformCacheDic);
@@ -406,21 +360,9 @@ namespace Gallop
 
         private void LoadHeadSpringParamSequence(CySpringCollisionRuntimeData[] envCollisionArray, float headScale, float bodyScale)
         {
-            // Igual que en la secuencia de colisores: sin CABEZA el BUSTO entra como asset
-            // PRINCIPAL, no como secundario, para no quedarse sin fisica de ropa interior.
-            if (_headDataContainerAsset == null && _bustDataContainerAsset == null)
+            if (_headDataContainerAsset == null)
                 return;
-
-            bool headAsMain = _headDataContainerAsset != null;
-
-            LoadSpringParam(
-                Parts.Head,
-                ToSpringAsset(headAsMain ? _headDataContainerAsset : _bustDataContainerAsset),
-                headAsMain ? ToSpringAsset(_bustDataContainerAsset) : null,
-                headScale,
-                bodyScale,
-                _ignoredCySpringRootBoneArray,
-                envCollisionArray);
+            LoadSpringParam(Parts.Head, ToSpringAsset(_headDataContainerAsset), ToSpringAsset(_bustDataContainerAsset), headScale, bodyScale, _ignoredCySpringRootBoneArray, envCollisionArray);
         }
 
         public void LoadBodyCollisionParamSequence(Dictionary<string, Transform> transformCacheDic)
@@ -432,14 +374,7 @@ namespace Gallop
         {
             if (_bodyDataContainerAsset == null)
                 return;
-
-            LoadCollisionParam(
-                Parts.Body,
-                ToCollisionAsset(_bodyDataContainerAsset),
-                null,
-                bodyScale,
-                1.0f,
-                transformCacheDic);
+            LoadCollisionParam(Parts.Body, ToCollisionAsset(_bodyDataContainerAsset), null, bodyScale, 1.0f, transformCacheDic);
         }
 
         public void LoadBodySpringParamSequence(CySpringCollisionRuntimeData[] envCollisionArray = null)
@@ -451,15 +386,7 @@ namespace Gallop
         {
             if (_bodyDataContainerAsset == null)
                 return;
-
-            LoadSpringParam(
-                Parts.Body,
-                ToSpringAsset(_bodyDataContainerAsset),
-                null,
-                bodyScale,
-                bodyScale,
-                _ignoredCySpringRootBoneArray,
-                envCollisionArray);
+            LoadSpringParam(Parts.Body, ToSpringAsset(_bodyDataContainerAsset), null, bodyScale, bodyScale, _ignoredCySpringRootBoneArray, envCollisionArray);
         }
 
         public void LoadTailCollisionParamSequence(Dictionary<string, Transform> transformCacheDic)
@@ -471,14 +398,7 @@ namespace Gallop
         {
             if (_tailDataContainerAsset == null)
                 return;
-
-            LoadCollisionParam(
-                Parts.Tail,
-                ToCollisionAsset(_tailDataContainerAsset),
-                null,
-                tailScale,
-                1.0f,
-                transformCacheDic);
+            LoadCollisionParam(Parts.Tail, ToCollisionAsset(_tailDataContainerAsset), null, tailScale, 1.0f, transformCacheDic);
         }
 
         public void LoadTailSpringParamSequence(CySpringCollisionRuntimeData[] envCollisionArray = null)
@@ -490,61 +410,29 @@ namespace Gallop
         {
             if (_tailDataContainerAsset == null)
                 return;
-
-            LoadSpringParam(
-                Parts.Tail,
-                ToSpringAsset(_tailDataContainerAsset),
-                null,
-                bodyScale,
-                bodyScale,
-                _ignoredCySpringRootBoneArray,
-                envCollisionArray);
+            LoadSpringParam(Parts.Tail, ToSpringAsset(_tailDataContainerAsset), null, bodyScale, bodyScale, _ignoredCySpringRootBoneArray, envCollisionArray);
         }
 
-        private void LoadCollisionParam(
-            Parts parts,
-            CySpringCollisionDataAsset paramAsset,
-            CySpringCollisionDataAsset paramAsset2,
-            float legacyScale,
-            float addLegacyScale,
-            Dictionary<string, Transform> transformCacheDic)
+        private void LoadCollisionParam(Parts parts, CySpringCollisionDataAsset paramAsset, CySpringCollisionDataAsset paramAsset2, float legacyScale, float addLegacyScale, Dictionary<string, Transform> transformCacheDic)
         {
             int index = (int)parts;
             if (!IsValidPart(index) || paramAsset == null)
                 return;
-
             if (_collisionArray[index] == null)
                 _collisionArray[index] = new CySpringCollision(gameObject);
-
-            _collisionArray[index].Create(
-                paramAsset,
-                paramAsset2,
-                legacyScale,
-                addLegacyScale,
-                transformCacheDic,
-                TryFindOtherTransform);
+            _collisionArray[index].Create(paramAsset, paramAsset2, legacyScale, addLegacyScale, transformCacheDic, TryFindOtherTransform);
         }
 
-        private void LoadSpringParam(
-            Parts parts,
-            CySpringParamDataAsset paramAsset,
-            CySpringParamDataAsset paramAsset2,
-            float legacyScale,
-            float legacyScale2,
-            string[] ignoredRoot,
-            CySpringCollisionRuntimeData[] envCollisionArray)
+        private void LoadSpringParam(Parts parts, CySpringParamDataAsset paramAsset, CySpringParamDataAsset paramAsset2, float legacyScale, float legacyScale2, string[] ignoredRoot, CySpringCollisionRuntimeData[] envCollisionArray)
         {
             int index = (int)parts;
             if (!IsValidPart(index) || paramAsset == null)
                 return;
-
             if (_springArray[index] == null)
                 _springArray[index] = new CySpring(gameObject);
-
             List<CySpringCollisionRuntimeData> runtimeCollisionList = null;
             if (_collisionArray[index] != null)
                 runtimeCollisionList = _collisionArray[index].RuntimeDataList;
-
             // Official LoadSpringParam special cases:
             // Body removes collision names used by Tail spring data.
             // Tail uses Body collision runtime list filtered by Tail spring collision names.
@@ -555,351 +443,295 @@ namespace Gallop
             }
             else if (parts == Parts.Tail)
             {
-                List<CySpringCollisionRuntimeData> bodyRuntimeList =
-                    _collisionArray[(int)Parts.Body] != null ? _collisionArray[(int)Parts.Body].RuntimeDataList : null;
-
+                List<CySpringCollisionRuntimeData> bodyRuntimeList = _collisionArray[(int)Parts.Body] != null ? _collisionArray[(int)Parts.Body].RuntimeDataList : null;
                 HashSet<string> tailCollisionNames = GetCollisionNameSet(paramAsset);
                 runtimeCollisionList = CreateGetTailRuntimeDataList(bodyRuntimeList, tailCollisionNames);
             }
 
             if (envCollisionArray != null && envCollisionArray.Length > 0)
                 _springArray[index].ApplyEnvCollision(envCollisionArray);
-
-            _springArray[index].Bind(
-                paramAsset,
-                paramAsset2,
-                legacyScale,
-                legacyScale2,
-                runtimeCollisionList,
-                ignoredRoot);
+            _springArray[index].Bind(paramAsset, paramAsset2, legacyScale, legacyScale2, runtimeCollisionList, ignoredRoot);
         }
 
         public void BeginSimulation(float elapsedTime, bool isUseThread = true)
         {
-    
-            if (_springArray == null || !_initialized || !_isPlaying)
-                return;
-
-            if (_ownerTransform == null)
-                _ownerTransform = transform;
-
-    // BeginSimulation 官方这里 ownerTransform 为空基本直接不走后续
-            if (_ownerTransform == null)
-                return;
-
-    // 保存当前 owner posture。
-    // 这三个值会被 UpdatePrevousPosture 临时改 ownerTransform 前使用，
-    // EndSimulation 再恢复。
-            _ownerTransformPosition = _ownerTransform.position;
-            _ownerTransformRotation = _ownerTransform.rotation;
-            _ownerTransformLocalScale = _ownerTransform.localScale;
-
-    // official:
-    // if (IsSkipUpdatePre)
-    // {
-    //     UpdatePrevousPosture();
-    //     OnReset();
-    //     return;
-    // }
-            if (IsSkipUpdatePre)
+            _preparedSimulation?.Complete();
             {
+                if (_springArray == null || !_initialized || !_isPlaying)
+                    return;
+                if (_ownerTransform == null)
+                    _ownerTransform = transform;
+                // BeginSimulation 官方这里 ownerTransform 为空基本直接不走后续
+                if (_ownerTransform == null)
+                    return;
+                // 保存当前 owner posture。
+                // 这三个值会被 UpdatePrevousPosture 临时改 ownerTransform 前使用，
+                // EndSimulation 再恢复。
+                _ownerTransformPosition = _ownerTransform.position;
+                _ownerTransformRotation = _ownerTransform.rotation;
+                _ownerTransformLocalScale = _ownerTransform.localScale;
+                // official:
+                // if (IsSkipUpdatePre)
+                // {
+                //     UpdatePrevousPosture();
+                //     OnReset();
+                //     return;
+                // }
+                if (IsSkipUpdatePre)
+                {
+                    UpdatePrevousPosture();
+                    OnReset();
+                    return;
+                }
+
+                // 官方风处理在 UpdatePrevousPosture 之前。
+                // 你这个 helper 如果内部等价 SetupWind loop，就保留。
+                SetupWindForActiveParts();
+                // 官方这里会把 ownerTransform 临时归零/identity/scale-normalize。
                 UpdatePrevousPosture();
+                // reset 在 UpdatePrevousPosture 后。
                 OnReset();
-                return;
-            }
-
-    // 官方风处理在 UpdatePrevousPosture 之前。
-    // 你这个 helper 如果内部等价 SetupWind loop，就保留。
-            SetupWindForActiveParts();
-
-    // 官方这里会把 ownerTransform 临时归零/identity/scale-normalize。
-            UpdatePrevousPosture();
-
-    // reset 在 UpdatePrevousPosture 后。
-            OnReset();
-
-    // hipMoveDistance 在 UpdatePrevousPosture + OnReset 后算。
-            if (_hipTransform != null)
-                _hipMoveDistance = Vector3.Distance(_hipTransform.position, _hipPrePosition);
-            else
-                _hipMoveDistance = 0.0f;
-
-    // 官方 GatherRootParentPosture：
-    // 每帧把 root parent transform 的 position/rotation 写入 RootParentWork。
-            if (_validRootBoneParentWork && _rootBoneParentWork != null)
-            _rootBoneParentWork.GatherPosture();
-
-            for (int i = 0; i < PARTS_NUM; i++)
-            {
-                CySpring spring = _springArray[i];
-                if (spring == null)
-                    continue;
-
-                if (_modelController == null)
-                    throw new NullReferenceException();
-
-                // official:
-                // spring + 184 = controller._previousPos
-                spring.CurrentCharaPosition = _previousPos;
-
-                // official:
-                // if (_isCalcCorrectScale)
-                //     owner.vtable + 472 = GetTotalScale()
-                // else
-                //     owner.vtable + 456 = GetBodyScale()
-                float legacyScale = _isCalcCorrectScale ? _modelController.GetTotalScale() : _modelController.GetBodyScale();
-
-                // official:
-                // owner.vtable + 440 = GetCySpringCorrectScale(bool)
-                // bool 参数是 i == 0，所以只有 Head 是 true
-                float scale = _modelController.GetCySpringCorrectScale(i == (int)Parts.Head);
-
-                spring.GatherSpring(elapsedTime, scale, legacyScale, AdditionalWindTimeScale, IsUpdateScale);
-            }
-
-            if (_skirtController != null)
+                // hipMoveDistance 在 UpdatePrevousPosture + OnReset 后算。
+                if (_hipTransform != null)
+                    _hipMoveDistance = Vector3.Distance(_hipTransform.position, _hipPrePosition);
+                else
+                    _hipMoveDistance = 0.0f;
+                // 官方 GatherRootParentPosture：
+                // 每帧把 root parent transform 的 position/rotation 写入 RootParentWork。
+                if (_validRootBoneParentWork && _rootBoneParentWork != null)
+                    _rootBoneParentWork.GatherPosture();
+                for (int i = 0; i < PARTS_NUM; i++)
                 {
-                _skirtController.UpdateSkirtArgForCySpring();
-                }
-            _isUseThread = isUseThread;
-            _doneUpdate = false;
-
-            
-            if (_isUseThread)
-            {
-                CySpringThread.QueueUserWorkItem(this);
-            }
-            else
-            {
-                UpdateSpringThread();
-            }
-        }
-
-    private sealed class CySpringThread
-    {   
-        private sealed class TaskInfo
-        {
-            public CySpringController cySpring;
-        }
-
-        private static CySpringThread _instance;
-
-        public static CySpringThread Instance
-        {
-            get
-            {
-                if (_instance == null)
-                {
-                // 官方 ctor(queueSize, threadNum)
-                // private const int DEFAULT_QUEUE_SIZE = 0x80;
-                // private const int DEFAULT_THREAD_NUM = 1;
-                //_instance = new CySpringThread(DEFAULT_QUEUE_SIZE, DEFAULT_THREAD_NUM);
-                    _instance = new CySpringThread(128, 1);
+                    CySpring spring = _springArray[i];
+                    if (spring == null)
+                        continue;
+                    if (_modelController == null)
+                        throw new NullReferenceException();
+                    // official:
+                    // spring + 184 = controller._previousPos
+                    spring.CurrentCharaPosition = _previousPos;
+                    // official:
+                    // if (_isCalcCorrectScale)
+                    //     owner.vtable + 472 = GetTotalScale()
+                    // else
+                    //     owner.vtable + 456 = GetBodyScale()
+                    float scale = _isCalcCorrectScale ? _modelController.GetTotalScale() : _modelController.GetBodyScale();
+                    // official:
+                    // owner.vtable + 440 = GetCySpringCorrectScale(bool)
+                    // bool 参数是 i == 0，所以只有 Head 是 true
+                    float legacyScale = _modelController.GetCySpringCorrectScale(i == (int)Parts.Head);
+                    // Native 2.32.0 BeginSimulation passes Body/Total in xmm2,
+                    // then CorrectScale in xmm3. GatherSpring uses xmm2 for root offsets.
+                    spring.GatherSpring(elapsedTime, scale, legacyScale, AdditionalWindTimeScale, IsUpdateScale);
                 }
 
-                return _instance;
+                if (_skirtController != null)
+                {
+                    _skirtController.UpdateSkirtArgForCySpring();
+                }
+
+                _isUseThread = isUseThread;
+                _doneUpdate = false;
+                {
+                    UpdateSpringThread();
+                }
             }
         }
 
-        private readonly Thread[] _threadPoolArray;      // +0x10
-        private readonly TaskInfo[] _taskQueueArray;    // +0x18
-        private int _nPutPointer;                       // +0x20
-        private int _nGetPointer;                       // +0x24
-        private int _numTasks;                          // +0x28
-        private readonly AutoResetEvent _putNotification; // +0x30
-        private readonly AutoResetEvent _getNotification; // +0x38
-        private readonly Semaphore _semaphore;          // +0x40
-        private bool _quit;                             // +0x48
-
-        private CySpringThread(int queueSize, int threadNum)
+        private sealed class CySpringThread
         {
-            if (threadNum == 0)
-                threadNum = SystemInfo.processorCount;
-
-            _threadPoolArray = new Thread[threadNum];
-            _taskQueueArray = new TaskInfo[queueSize];
-
-            for (int i = 0; i < _taskQueueArray.Length; i++)
-                _taskQueueArray[i] = new TaskInfo();
-
-            _nPutPointer = 0;
-            _nGetPointer = 0;
-            _numTasks = 0;
-
-            _putNotification = new AutoResetEvent(false);
-            _getNotification = new AutoResetEvent(false);
-
-            if (threadNum > 1)
+            private sealed class TaskInfo
             {
-                _semaphore = new Semaphore(0, queueSize);
+                public CySpringController cySpring;
+            }
 
-                for (int i = 0; i < threadNum; i++)
+            private static CySpringThread _instance;
+            public static CySpringThread Instance
+            {
+                get
                 {
-                    Thread t = new Thread(_ThreadFunc);
-                    _threadPoolArray[i] = t;
+                    if (_instance == null)
+                    {
+                        // 官方 ctor(queueSize, threadNum)
+                        // private const int DEFAULT_QUEUE_SIZE = 0x80;
+                        // private const int DEFAULT_THREAD_NUM = 1;
+                        //_instance = new CySpringThread(DEFAULT_QUEUE_SIZE, DEFAULT_THREAD_NUM);
+                        _instance = new CySpringThread(128, 1);
+                    }
+
+                    return _instance;
+                }
+            }
+
+            private readonly Thread[] _threadPoolArray; // +0x10
+            private readonly TaskInfo[] _taskQueueArray; // +0x18
+            private int _nPutPointer; // +0x20
+            private int _nGetPointer; // +0x24
+            private int _numTasks; // +0x28
+            private readonly AutoResetEvent _putNotification; // +0x30
+            private readonly AutoResetEvent _getNotification; // +0x38
+            private readonly Semaphore _semaphore; // +0x40
+            private bool _quit; // +0x48
+            private CySpringThread(int queueSize, int threadNum)
+            {
+                if (threadNum == 0)
+                    threadNum = SystemInfo.processorCount;
+                _threadPoolArray = new Thread[threadNum];
+                _taskQueueArray = new TaskInfo[queueSize];
+                for (int i = 0; i < _taskQueueArray.Length; i++)
+                    _taskQueueArray[i] = new TaskInfo();
+                _nPutPointer = 0;
+                _nGetPointer = 0;
+                _numTasks = 0;
+                _putNotification = new AutoResetEvent(false);
+                _getNotification = new AutoResetEvent(false);
+                if (threadNum > 1)
+                {
+                    _semaphore = new Semaphore(0, queueSize);
+                    for (int i = 0; i < threadNum; i++)
+                    {
+                        Thread t = new Thread(_ThreadFunc);
+                        _threadPoolArray[i] = t;
+                        t.Start();
+                    }
+                }
+                else
+                {
+                    Thread t = new Thread(_SingleThreadFunc);
+                    _threadPoolArray[0] = t;
                     t.Start();
                 }
             }
-            else
+
+            public static void QueueUserWorkItem(CySpringController cySpring)
             {
-                Thread t = new Thread(_SingleThreadFunc);
-                _threadPoolArray[0] = t;
-                t.Start();
+                if (cySpring == null)
+                    return;
+                Instance._EnqueueTask(cySpring);
             }
-        }
 
-        public static void QueueUserWorkItem(CySpringController cySpring)
-        {
-            if (cySpring == null)
-                return;
-
-            Instance._EnqueueTask(cySpring);
-        }
-
-        public static void DequeueUserWorkItem(CySpringController cySpring)
-        {
-            CySpringThread inst = Instance;
-            TaskInfo[] queue = inst._taskQueueArray;
-
-            for (int i = 0; i < queue.Length; i++)
+            public static void DequeueUserWorkItem(CySpringController cySpring)
             {
-                CySpringController queued = queue[i].cySpring;
-                if (queued == cySpring)
-                    queue[i].cySpring = null;
-            }
-        }
-
-        public static void Terminate()
-        {
-            if (_instance != null)
-                _instance._TerminateThreads();
-        }
-
-        private void _EnqueueTask(CySpringController cySpring)
-        {
-            while (_numTasks == _taskQueueArray.Length)
-                _getNotification.WaitOne();
-
-            _taskQueueArray[_nPutPointer].cySpring = cySpring;
-
-            _nPutPointer++;
-            if (_nPutPointer == _taskQueueArray.Length)
-                _nPutPointer = 0;
-
-            if (_threadPoolArray.Length != 1)
-            {
-                Interlocked.Increment(ref _numTasks);
-                _semaphore.Release();
-            }
-            else
-            {
-                if (Interlocked.Increment(ref _numTasks) == 1)
-                    _putNotification.Set();
-            }
-        }
-
-        private void _SingleThreadFunc()
-        {
-            while (!_quit)
-            {
-                if (_numTasks == 0)
+                CySpringThread inst = Instance;
+                TaskInfo[] queue = inst._taskQueueArray;
+                for (int i = 0; i < queue.Length; i++)
                 {
-                    while (true)
-                    {
-                        _putNotification.WaitOne();
-
-                        if (_quit)
-                            return;
-
-                        if (_numTasks != 0)
-                            break;
-                    }
+                    CySpringController queued = queue[i].cySpring;
+                    if (queued == cySpring)
+                        queue[i].cySpring = null;
                 }
-
-                int index = _nGetPointer;
-                int next = index + 1;
-                _nGetPointer = next;
-
-                TaskInfo[] queue = _taskQueueArray;
-                CySpringController cySpring = queue[index].cySpring;
-
-                if (next == queue.Length)
-                 _nGetPointer = 0;
-
-                int newTaskCount = Interlocked.Decrement(ref _numTasks);
-
-                // 官方条件：decrement 后 == queue.Length - 1
-            // 也就是队列刚刚从 full 变成 not full。
-                if (newTaskCount == queue.Length - 1)
-                _getNotification.Set();
-
-                if (cySpring != null)
-                cySpring.UpdateSpringThread();
             }
-        }
 
-        private void _ThreadFunc()
-        {
-            while (!_quit)
+            public static void Terminate()
             {
-                _semaphore.WaitOne();
+                if (_instance != null)
+                    _instance._TerminateThreads();
+            }
 
+            private void _EnqueueTask(CySpringController cySpring)
+            {
+                while (_numTasks == _taskQueueArray.Length)
+                    _getNotification.WaitOne();
+                _taskQueueArray[_nPutPointer].cySpring = cySpring;
+                _nPutPointer++;
+                if (_nPutPointer == _taskQueueArray.Length)
+                    _nPutPointer = 0;
+                if (_threadPoolArray.Length != 1)
+                {
+                    Interlocked.Increment(ref _numTasks);
+                    _semaphore.Release();
+                }
+                else
+                {
+                    if (Interlocked.Increment(ref _numTasks) == 1)
+                        _putNotification.Set();
+                }
+            }
+
+            private void _SingleThreadFunc()
+            {
+                while (!_quit)
+                {
+                    if (_numTasks == 0)
+                    {
+                        while (true)
+                        {
+                            _putNotification.WaitOne();
+                            if (_quit)
+                                return;
+                            if (_numTasks != 0)
+                                break;
+                        }
+                    }
+
+                    int index = _nGetPointer;
+                    int next = index + 1;
+                    _nGetPointer = next;
+                    TaskInfo[] queue = _taskQueueArray;
+                    CySpringController cySpring = queue[index].cySpring;
+                    if (next == queue.Length)
+                        _nGetPointer = 0;
+                    int newTaskCount = Interlocked.Decrement(ref _numTasks);
+                    // 官方条件：decrement 后 == queue.Length - 1
+                    // 也就是队列刚刚从 full 变成 not full。
+                    if (newTaskCount == queue.Length - 1)
+                        _getNotification.Set();
+                    if (cySpring != null)
+                        cySpring.UpdateSpringThread();
+                }
+            }
+
+            private void _ThreadFunc()
+            {
+                while (!_quit)
+                {
+                    _semaphore.WaitOne();
+                    if (_quit)
+                        return;
+                    int index;
+                    int next;
+                    do
+                    {
+                        index = _nGetPointer;
+                        next = index + 1;
+                        if (next == _taskQueueArray.Length)
+                            next = 0;
+                    }
+                    while (Interlocked.CompareExchange(ref _nGetPointer, next, index) != index);
+                    CySpringController cySpring = _taskQueueArray[index].cySpring;
+                    int newTaskCount = Interlocked.Decrement(ref _numTasks);
+                    if (newTaskCount == _taskQueueArray.Length - 1)
+                        _getNotification.Set();
+                    if (cySpring != null)
+                        cySpring.UpdateSpringThread();
+                }
+            }
+
+            private void _TerminateThreads()
+            {
                 if (_quit)
                     return;
-
-                int index;
-                int next;
-
-                do
+                _quit = true;
+                if (_threadPoolArray == null || _threadPoolArray.Length == 0)
+                    return;
+                if (_threadPoolArray.Length == 1)
                 {
-                    index = _nGetPointer;
-                    next = index + 1;
-                    if (next == _taskQueueArray.Length)
-                        next = 0;
+                    _putNotification.Set();
                 }
-                while (Interlocked.CompareExchange(ref _nGetPointer, next, index) != index);
+                else
+                {
+                    _semaphore.Release(_threadPoolArray.Length);
+                }
 
-                CySpringController cySpring = _taskQueueArray[index].cySpring;
-
-                int newTaskCount = Interlocked.Decrement(ref _numTasks);
-
-                if (newTaskCount == _taskQueueArray.Length - 1)
-                    _getNotification.Set();
-
-                if (cySpring != null)
-                    cySpring.UpdateSpringThread();
+                for (int i = 0; i < _threadPoolArray.Length; i++)
+                {
+                    Thread thread = _threadPoolArray[i];
+                    if (thread == null)
+                        throw new NullReferenceException();
+                    thread.Join();
+                }
             }
         }
-
-        private void _TerminateThreads()
-        {
-            if (_quit)
-                return;
-
-            _quit = true;
-
-            if (_threadPoolArray == null || _threadPoolArray.Length == 0)
-                return;
-
-            if (_threadPoolArray.Length == 1)
-            {
-                _putNotification.Set();
-            }
-            else
-            {
-                _semaphore.Release(_threadPoolArray.Length);
-            }
-
-            for (int i = 0; i < _threadPoolArray.Length; i++)
-            {
-                Thread thread = _threadPoolArray[i];
-                if (thread == null)
-                    throw new NullReferenceException();
-
-                thread.Join();
-            }
-        }
-    }
 
         private void UpdateSpringThread()
         {
@@ -910,24 +742,20 @@ namespace Gallop
             }
 
             bool is60FpsPhysics = _targetCySpringFpsMode == 1;
-
+            SimulationStepCount++;
+            // [CySpringDebug] 周期性输出物理全局参数
             for (int i = 0; i < PARTS_NUM; i++)
             {
                 CySpring spring = _springArray[i];
                 if (spring == null)
                     continue;
-
                 float partSpringRate = GetSpringRate((Parts)i);
-                // El viento del visor sale SOLO de los parametros del asset (no se aplica la pista
-                // charaWind del live), asi que sopla constante. Con direccion local (= delante del
-                // personaje) empuja la falda/pelo hacia el centro del escenario. Interruptor para
-                // aislar su efecto.
-                bool hasWind = EnableWind && _hasWindArray[i];
+                bool hasWind = _hasWindArray[i];
                 float windRate = GetWindPowerRate((Parts)i);
-
+                // [CySpringDebug] 周期性输出各部位弹簧率与风场参数
                 if (hasWind) // 官方这里先不要加 || _isEnableDummyWind
                 {
-                    spring.UpdateSpringHasWind(_hipMoveDistance, windRate,_timescale, is60FpsPhysics,partSpringRate);
+                    spring.UpdateSpringHasWind(_hipMoveDistance, windRate, _timescale, is60FpsPhysics, partSpringRate);
                 }
                 else
                 {
@@ -940,123 +768,88 @@ namespace Gallop
 
         public void EndSimulation()
         {
-            if (_springArray == null || !_isPlaying || !_initialized)
-                return;
-
-            if (_isUseThread)
             {
-                float startTime = Time.realtimeSinceStartup;
-
-                while (!_doneUpdate)
+                if (_springArray == null || !_isPlaying || !_initialized)
+                    return;
+                if (_isUseThread)
                 {
-                    if (_simulationTimeOutError)
+                    _preparedSimulation.Complete();
+                    _doneUpdate = true;
+                    float startTime = Time.realtimeSinceStartup;
+                    while (!_doneUpdate)
                     {
-                        _isPlaying = false;
-                        _doneUpdate = true;
-                        break;
-                    }
+                        if (_simulationTimeOutError)
+                        {
+                            _isPlaying = false;
+                            _doneUpdate = true;
+                            break;
+                        }
 
-                    Thread.Sleep(0);
-
-                    float elapsed = Time.realtimeSinceStartup - startTime;
-                    if (elapsed > 10.0f)
-                    {
-                        _simulationTimeOutError = true;
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogError(
-                    "[CySpringController] SimulationTimeOutError elapsed=" + elapsed,
-                    this
-                );
-#endif
-
-                        _isPlaying = false;
-                        _doneUpdate = true;
-                        LogTimeOutError(elapsed);
-                        break;
+                        Thread.Sleep(0);
+                        float elapsed = Time.realtimeSinceStartup - startTime;
+                        if (elapsed > 10.0f)
+                        {
+                            _simulationTimeOutError = true;
+                            _isPlaying = false;
+                            _doneUpdate = true;
+                            LogTimeOutError(elapsed);
+                            break;
+                        }
                     }
                 }
-            }
 
-    // 官方这里等价内联 PostSpringAll：
-    // Head/Body 只要 spring != null 就 PostSpring。
-    // Tail 受 IsApplyTailTransform 控制。
-            if (_springArray != null)
-            {
-                for (int i = 0; i < _springArray.Length; i++)
+                // 官方这里等价内联 PostSpringAll：
+                // Head/Body 只要 spring != null 就 PostSpring。
+                // Tail 受 IsApplyTailTransform 控制。
+                if (_springArray != null)
                 {
-                    CySpring spring = _springArray[i];
-                    if (spring == null)
-                        continue;
-
-                    if (i == (int)Parts.Tail && !IsApplyTailTransform)
-                        continue;
-
-                    spring.PostSpring();
+                    for (int i = 0; i < _springArray.Length; i++)
+                    {
+                        CySpring spring = _springArray[i];
+                        if (spring == null)
+                            continue;
+                        if (i == (int)Parts.Tail && !IsApplyTailTransform)
+                            continue;
+                        spring.PostSpring();
+                    }
                 }
+
+                if (_hipTransform != null)
+                    _hipPrePosition = _hipTransform.position;
+                if (_ownerTransform == null)
+                    _ownerTransform = transform;
+                if (_ownerTransform == null)
+                    throw new NullReferenceException();
+                if (!IsAffectOwnerPotision)
+                    _ownerTransform.position = _ownerTransformPosition;
+                if (!IsAffectOwnerRotation)
+                    _ownerTransform.rotation = _ownerTransformRotation;
+                if (!IsAffectOwnerScale)
+                    _ownerTransform.localScale = _ownerTransformLocalScale;
+                // 官方 EndSimulation 这里只更新 ownerPrePosition / ownerPreRotation。
+                // 不要在这里写 _previousPos / _previousRot / _prevLocalScale。
+                _ownerPrePosition = _ownerTransform.position;
+                _ownerPreRotation = _ownerTransform.rotation;
             }
-
-            if (_hipTransform != null)
-                _hipPrePosition = _hipTransform.position;
-
-            if (_ownerTransform == null)
-                _ownerTransform = transform;
-
-            if (_ownerTransform == null)
-                throw new NullReferenceException();
-
-            if (!IsAffectOwnerPotision)
-                _ownerTransform.position = _ownerTransformPosition;
-
-            if (!IsAffectOwnerRotation)
-                _ownerTransform.rotation = _ownerTransformRotation;
-
-            if (!IsAffectOwnerScale)
-                _ownerTransform.localScale = _ownerTransformLocalScale;
-
-    // 官方 EndSimulation 这里只更新 ownerPrePosition / ownerPreRotation。
-    // 不要在这里写 _previousPos / _previousRot / _prevLocalScale。
-            _ownerPrePosition = _ownerTransform.position;
-            _ownerPreRotation = _ownerTransform.rotation;
         }
 
         private void LogTimeOutError(float elapsedTime)
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.LogError(
-                "SimulationTimeOutError: Owner=" +
-                (_ownerObject != null ? _ownerObject.name : "null") +
-                ", ElapsedTime: " + elapsedTime,
-                this
-            );
-#endif
         }
 
         public void PostSpringAll()
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < PARTS_NUM; i++)
             {
                 CySpring spring = _springArray[i];
                 if (spring == null)
                     continue;
-
                 if (i == (int)Parts.Tail && !IsApplyTailTransform)
                     continue;
-
                 spring.PostSpring();
             }
-        }
-
-        // (DIAG) Acceso de solo lectura a la cadena de un part (0=Head, 1=Body, 2=Tail).
-        public CySpring GetSpringArray(int index)
-        {
-            if (_springArray == null || index < 0 || index >= _springArray.Length)
-                return null;
-
-            return _springArray[index];
         }
 
         public void Reset()
@@ -1070,7 +863,6 @@ namespace Gallop
             int index = (int)parts;
             if (IsValidPart(index))
                 _resetPartsFlag[index] = true;
-
             ResetPartsNativeCloth(parts);
         }
 
@@ -1086,10 +878,8 @@ namespace Gallop
             {
                 if (!_resetPartsFlag[i])
                     continue;
-
                 if (!_nonResetPartsFlag[i])
                     ResetPartsNativeCloth((Parts)i);
-
                 _resetPartsFlag[i] = false;
             }
         }
@@ -1102,14 +892,12 @@ namespace Gallop
         public void Resume()
         {
             _isPlaying = true;
-            UpdatePrevousPosture();
         }
 
         public void SetForceDisableHipMoveParam(bool isDisable)
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
             {
                 if (_springArray[i] != null)
@@ -1120,88 +908,91 @@ namespace Gallop
         public void CreateLinkSkirtController(SkirtController skirtController)
         {
             _skirtController = skirtController;
-
             if (_springArray == null)
                 throw new NullReferenceException();
-
             if (_springArray.Length <= (int)Parts.Body)
                 throw new IndexOutOfRangeException();
-
             CySpring bodySpring = _springArray[(int)Parts.Body];
             if (bodySpring == null)
                 throw new NullReferenceException();
-
             bodySpring.SetSkirtController(skirtController);
-
             if (bodySpring.RootBoneArray == null)
                 throw new NullReferenceException();
-
             if (_skirtController == null)
                 throw new NullReferenceException();
-
-            _skirtController.CreateLinkCySpring(
-                bodySpring.RootBoneArray,
-                () => _isPlaying
-            );
+            _skirtController.CreateLinkCySpring(bodySpring.RootBoneArray, () => _isPlaying);
         }
 
         public void ReserveWarmingUpCySpring(float warmUpTime = DEFAULT_WARMUPTIME, int delayFrame = 0, Action onComplete = null)
         {
             _isWarmingUpCySpringReserved = true;
             _warmingUpTimeReserved = warmUpTime;
-            _springResetDelayFrame = delayFrame;
+            _springResetDelayFrame = Mathf.Max(_springResetDelayFrame, delayFrame);
             _onCompleteWarmingUpCySpringReserve = onComplete;
+        }
+
+        public bool IsWarmingUpCySpringReserved => _isWarmingUpCySpringReserved;
+
+        public void SetWarmUpStepCallback(Action onBeforeBeginWarmUpStep, Action onBeforeEndWarmUpStep)
+        {
+            _onBeforeBeginWarmUpStepReserve = onBeforeBeginWarmUpStep;
+            _onBeforeEndWarmUpStepReserve = onBeforeEndWarmUpStep;
         }
 
         public void TryUpdateWarmUp()
         {
             if (!_isWarmingUpCySpringReserved)
                 return;
-
-            if (_springResetDelayFrame > 0)
+            if (_springResetDelayFrame != 0)
             {
                 _springResetDelayFrame--;
                 return;
             }
 
+            if (_springArray == null || !_isPlaying || !_initialized)
+                return;
             WarmUpCySpring(_warmingUpTimeReserved);
             _isWarmingUpCySpringReserved = false;
             Action complete = _onCompleteWarmingUpCySpringReserve;
-            _onCompleteWarmingUpCySpringReserve = null;
             complete?.Invoke();
         }
 
         private void WarmUpCySpring(float warmUpTime = DEFAULT_WARMUPTIME)
         {
-            int frameCount = Mathf.Max(1, Mathf.CeilToInt(warmUpTime * 60.0f));
-            float dt = 1.0f / 60.0f;
-
-            for (int i = 0; i < frameCount; i++)
             {
-                BeginSimulation(dt, false);
-                EndSimulation();
+                if (Gallop.Math.IsFloatEqualLight(warmUpTime, 0f))
+                    warmUpTime = 1f;
+                float fps = GetTargetCySpringFPS();
+                int frameCount = (int)CySpringWindParam.NativeMul(warmUpTime, fps);
+                float dt = 1f / fps;
+                bool skip = IsSkipUpdatePre;
+                IsSkipUpdatePre = false;
+                try
+                {
+                    for (int i = 0; i < frameCount; i++)
+                    {
+                        _onBeforeBeginWarmUpStepReserve?.Invoke();
+                        BeginSimulation(dt, false);
+                        _onBeforeEndWarmUpStepReserve?.Invoke();
+                        EndSimulation();
+                    }
+                }
+                finally
+                {
+                    IsSkipUpdatePre = skip;
+                }
             }
         }
 
-        /// <summary>
-        /// Frecuencia a la que el juego alimenta el solver (no la del render). `NativeClothUpdate`
-        /// esta calibrado para pasos fijos de 30 Hz (o 60 Hz con `_targetCySpringFpsMode == 1`) y
-        /// `timescale` normalizado a 1. Llamarlo cada frame a 120 fps lo acelera x2 y el pelo se
-        /// siente "ligero" y se mueve de mas.
-        /// </summary>
-        public float TargetCySpringFPS => _targetCySpringFpsMode == 1 ? 60.0f : 30.0f;
-
-        /// <summary>
-        /// Permite desactivar el viento del solver (para aislar su efecto). El visor no aplica la
-        /// pista `charaWind` del live, asi que el viento del asset sopla constante.
-        /// </summary>
-        public bool EnableWind = true;
+        private float GetTargetCySpringFPS()
+        {
+            return UpdateMode == SpringUpdateMode.ModeForceUpdate ? 60f : 30f;
+        }
 
         public void SetSuppression(bool enable, float length)
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetSuppression(enable, length);
         }
@@ -1210,13 +1001,10 @@ namespace Gallop
         {
             if (_ownerTransform == null)
                 _ownerTransform = transform;
-
             if (_ownerTransform == null)
                 throw new NullReferenceException();
-
             _previousPos = Gallop.Math.VECTOR3_ZERO;
             _previousRot = Gallop.Math.QUATERNION_IDENTITY;
-
             if (!IsAffectOwnerPotision)
             {
                 _previousPos = _ownerTransformPosition;
@@ -1231,25 +1019,17 @@ namespace Gallop
 
             if (IsAffectOwnerScale)
                 return;
-
             _prevLocalScale = _ownerTransformLocalScale;
-
             float scale = _ownerTransform.lossyScale.x;
             if (Gallop.Math.IsFloatEqualLight(scale, 0.0f))
                 scale = 0.000001f;
-
-                _ownerTransform.localScale = new Vector3(
-                _ownerTransformLocalScale.x / scale,
-                _ownerTransformLocalScale.y / scale,
-                _ownerTransformLocalScale.z / scale
-            );
+            _ownerTransform.localScale = new Vector3(_ownerTransformLocalScale.x / scale, _ownerTransformLocalScale.y / scale, _ownerTransformLocalScale.z / scale);
         }
 
         public void ResetNativeCloth()
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.ResetNativeCloth();
         }
@@ -1266,7 +1046,6 @@ namespace Gallop
             int index = (int)parts;
             if (!IsValidPart(index))
                 return;
-
             _springArray[index]?.ResetScale(scale, scale, isUpdateNodeAndCollision);
             _springArray[index]?.UpdateScaleConnectBone(scale);
             _collisionArray[index]?.SetScale(scale, scale);
@@ -1275,38 +1054,27 @@ namespace Gallop
         public void SetScale(Parts parts)
         {
             int index = (int)parts;
-
             if (_collisionArray == null)
                 return;
-
             if (_springArray == null)
                 return;
-
             if (index < 0 || index >= _collisionArray.Length)
                 return;
-
             if (index >= _springArray.Length)
                 return;
-
             CySpringCollision collision = _collisionArray[index];
             if (collision == null)
                 return;
-
             CySpring spring = _springArray[index];
             if (spring == null)
                 return;
-
             if (_modelController == null)
                 throw new NullReferenceException();
-
             bool isHead = parts == Parts.Head;
-
             float scale = _modelController.GetCySpringCorrectScale(isHead);
             float addScale = _modelController.GetCySpringCorrectScale(false);
-
             if (isHead && _isCalcCorrectScale)
                 addScale = _modelController.GetCySpringCorrectScale(false);
-
             collision.SetScale(scale, addScale);
             spring.ResetScale(scale, addScale, IsUpdateScale);
             spring.UpdateScaleConnectBone(scale);
@@ -1321,8 +1089,12 @@ namespace Gallop
         public void SetPartsSpringRate(Parts parts, float value)
         {
             if (_springRateArray == null || _springRateArray.Length != PARTS_NUM)
-                _springRateArray = new float[PARTS_NUM] { _springRate, _springRate, _springRate };
-
+                _springRateArray = new float[PARTS_NUM]
+                {
+                    _springRate,
+                    _springRate,
+                    _springRate
+                };
             int index = (int)parts;
             if (IsValidPart(index))
                 _springRateArray[index] = value;
@@ -1332,7 +1104,6 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetStiffnessForceRate(value);
         }
@@ -1374,9 +1145,8 @@ namespace Gallop
             int index = (int)parts;
             if (!IsValidPart(index))
                 return;
-
-            _windParamArray[index] = windParam ?? new CySpringWindParam();
-            _hasWindArray[index] = true;
+            _windParamArray[index].Copy(windParam);
+            _shouldBlendWindParamArray[index] = false;
         }
 
         public void EndWind()
@@ -1389,23 +1159,20 @@ namespace Gallop
         {
             int index = (int)parts;
             if (IsValidPart(index))
-                _hasWindArray[index] = false;
+                _shouldBlendWindParamArray[index] = true;
         }
 
         public void SetEnableCySpringDummyWind(bool isEnable, Vector3 windDir)
         {
             _isEnableDummyWind = isEnable;
             _dummyWindDir = windDir;
-
             if (!isEnable)
                 return;
-
             for (int i = 0; i < PARTS_NUM; i++)
             {
                 _hasWindArray[i] = true;
                 if (_windParamArray[i] == null)
                     _windParamArray[i] = new CySpringWindParam();
-
                 _windParamArray[i].Direction = windDir.sqrMagnitude > 0.000001f ? windDir.normalized : Vector3.forward;
                 _windParamArray[i].Right = Vector3.Cross(Vector3.up, _windParamArray[i].Direction).normalized;
                 if (_windParamArray[i].Right.sqrMagnitude <= 0.000001f)
@@ -1417,54 +1184,52 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < PARTS_NUM; i++)
             {
-                if (!_hasWindArray[i] && !_isEnableDummyWind)
+                if (!_hasWindArray[i])
                     continue;
-
                 CySpring spring = _springArray[i];
                 if (spring == null)
                     continue;
-
                 CySpringWindParam main = _windParamArray[i] ?? new CySpringWindParam();
                 CySpringWindParam add = _addWindParamArray[i] ?? main;
-
-                float mainCenter = GetCenterWindAngle((Parts)i, main);
-                float addCenter = GetCenterWindAngle((Parts)i, add);
+                float mainCenter = 0f, addCenter = 0f;
+                if (_shouldBlendWindParamArray[i])
+                {
+                    Vector3 local = _ownerTransform.InverseTransformDirection(_ownerTransform.position - _ownerPrePosition);
+                    Vector3 run = (_ownerPreRotation * local).normalized;
+                    if (_isEnableDummyWind)
+                        run = _dummyWindDir.normalized;
+                    mainCenter = CalculateDefaultWindParam(main, spring.MainWindParamData, run);
+                    if (spring.ExistAddWindParamData)
+                        addCenter = CalculateDefaultWindParam(add, spring.AddWindParamData, run);
+                }
 
                 spring.SetupWind((Parts)i, main, mainCenter, add, addCenter);
             }
         }
 
-        private float GetCenterWindAngle(Parts parts, CySpringWindParam windParam)
+        // Original CaluculateWindParam 4a63d50. The caller supplies normalized
+        // owner motion (or dummy direction); no invented wind is installed.
+        internal float CalculateDefaultWindParam(CySpringWindParam param, ICySpringWindParamData data, Vector3 runDirection)
         {
-            // The exact official CalculateWindParam is still a later refinement.
-            // This keeps the data path intact while staying deterministic.
-            CySpringParamDataAsset data = GetSpringDataAsset(parts);
-            if (data == null)
-                return 0.0f;
-
-            return Mathf.Lerp(data.CenterWindAngleSlow, data.CenterWindAngleFast, Mathf.Clamp01(_windPowerRate));
-        }
-
-        private CySpringParamDataAsset GetSpringDataAsset(Parts parts)
-        {
-            switch (parts)
-            {
-                case Parts.Head:
-                    return ToSpringAsset(_headDataContainerAsset);
-                case Parts.Body:
-                    return ToSpringAsset(_bodyDataContainerAsset);
-                case Parts.Tail:
-                    return ToSpringAsset(_tailDataContainerAsset);
-                default:
-                    return null;
-            }
+            if (param == null || data == null)
+                throw new NullReferenceException();
+            param.ResetParam();
+            param.Direction = new Vector3(CySpringWindParam.NativeMul(runDirection.x, -1f), CySpringWindParam.NativeMul(runDirection.y, -1f), CySpringWindParam.NativeMul(runDirection.z, -1f));
+            param.VerticalCycle = CySpringWindParam.NativeLerp(data.VerticalCycleSlow, data.VerticalCycleFast, _windPowerRate);
+            param.HorizontalCycle = CySpringWindParam.NativeLerp(data.HorizontalCycleSlow, data.HorizontalCycleFast, _windPowerRate);
+            param.VerticalAngleWidth = CySpringWindParam.NativeLerp(data.VerticalAngleWidthSlow, data.VerticalAngleWidthFast, _windPowerRate);
+            param.HorizontalAngleWidth = CySpringWindParam.NativeLerp(data.HorizontalAngleWidthSlow, data.HorizontalAngleWidthFast, _windPowerRate);
+            for (int i = 0; i < 3; i++)
+                param.PowerScaleArray[i] = CySpringWindParam.NativeMul(param.PowerScaleArray[i], _windPowerScaleArrayRate[i]);
+            return CySpringWindParam.NativeLerp(data.CenterWindAngleSlow, data.CenterWindAngleFast, _windPowerRate);
         }
 
         public void ApplyEnvCySpringCollisionToHead(CySpringCollisionRuntimeData[] envColArray)
         {
+            // Original 0x4a62680 stores even when no head part exists.
+            _envColArray = envColArray;
             ApplyEnvCollision(Parts.Head, envColArray);
         }
 
@@ -1481,28 +1246,12 @@ namespace Gallop
         private void ApplyEnvCollision(Parts parts, CySpringCollisionRuntimeData[] envColArray)
         {
             int index = (int)parts;
-
-            // La variante de CABEZA guarda el array en el controller (el juego lo escribe antes
-            // de validar el resorte); es el que usa SetEnableEnvCollision.
-            if (parts == Parts.Head)
-                _envColArray = envColArray;
-
             if (!IsValidPart(index))
                 return;
-
-            CySpring spring = _springArray[index];
+            var spring = _springArray[index];
             if (spring == null)
                 return;
-
             spring.ApplyEnvCollision(envColArray);
-
-            // Official ApplyEnvCySpringCollisonTo{Head,Body,Tail}:
-            //   CySpring.ApplyEnvCollision(spring, array);
-            //   CySpringController.SetupSpringParentWork(this);
-            // ApplyEnvCollision reconstruye el array NATIVO de colisiones, y al hacerlo deja
-            // ParentWorkIndex = 0 en TODAS ellas. Sin volver a recolectar los ParentWork, las
-            // esferas se resuelven contra el padre equivocado: el pelo recibe empujes que no
-            // existen (se mueve en angulos imposibles) y deja de chocar con cabeza y hombros.
             SetupSpringParentWork();
         }
 
@@ -1510,20 +1259,13 @@ namespace Gallop
         {
             if (_springArray == null)
                 throw new NullReferenceException();
-
             if (_springArray.Length == 0)
                 return;
-
             CySpring headSpring = _springArray[(int)Parts.Head];
             if (headSpring == null)
                 throw new NullReferenceException();
-
-            CySpringCollisionRuntimeData[] envArray = enable
-                ? _envColArray
-                : Array.Empty<CySpringCollisionRuntimeData>();
-
+            CySpringCollisionRuntimeData[] envArray = enable ? _envColArray : Array.Empty<CySpringCollisionRuntimeData>();
             headSpring.ApplyEnvCollision(envArray);
-
             SetupSpringParentWork();
         }
 
@@ -1531,7 +1273,6 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetEnableCySpringBone(enable, rootBoneName, isPrefix);
         }
@@ -1540,7 +1281,6 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetResetLinkCySpringBone(enable, targetRootBoneName);
         }
@@ -1550,18 +1290,83 @@ namespace Gallop
             int index = (int)parts;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return;
-
             if (enable)
                 _springArray[index].EnableAllCySpringBones();
             else
                 _springArray[index].DisableAllCySpringBones();
         }
 
+        public void SetEnableLiveSkirtCySpring(bool enable)
+        {
+            var body = _springArray != null ? _springArray[(int)Parts.Body] : null;
+            if (body?.RootBoneArray == null)
+                return;
+            foreach (var root in body.RootBoneArray)
+                if (root != null && root.LinkSkirtIndex >= 0)
+                    root.SetRootShouldReflectCalcResult(enable);
+        }
+
+        // LiveModelController gravity/skirt consumers 575aa00/5756a70/575c630.
+        // Empty names leave the previous target cache untouched; root bones are
+        // excluded by the original default isRootBone=false collection branch.
+        public void ApplyLiveMotionNoiseGravity(int kind, string name, float value, Vector4 skirtValues)
+        {
+            if (kind == 0)
+            {
+                if (!_liveGravityReset)
+                    foreach (var bone in _liveGravityBones)
+                        bone.MulGravityScale(1f);
+                _liveGravityReset = true;
+                _liveGravityMultiply = 1f;
+                _liveGravityAdd = 0f;
+                _liveGravitySet = -1f;
+                _skirtController?.ApplyLiveCuttValues(0, skirtValues);
+                return;
+            }
+
+            if (kind < 1 || kind > 3)
+                return;
+            if (!string.IsNullOrEmpty(name))
+            {
+                bool same = name == _liveGravityName;
+                float previous = kind == 1 ? _liveGravityMultiply : kind == 2 ? _liveGravityAdd : _liveGravitySet;
+                if (!same || !Mathf.Approximately(previous, value))
+                {
+                    if (!same)
+                    {
+                        _liveGravityBones.Clear();
+                        _liveGravityName = name;
+                        FindSpring(_liveGravityBones, n => n != null && n.Contains(name), Parts.Body, false);
+                        FindSpring(_liveGravityBones, n => n != null && n.Contains(name), Parts.Head, false);
+                        FindSpring(_liveGravityBones, n => n != null && n.Contains(name), Parts.Tail, false);
+                        _liveGravityBones.RemoveAll(b => b is CySpringRootBone);
+                    }
+
+                    foreach (var bone in _liveGravityBones)
+                        if (kind == 1)
+                            bone.MulGravityScale(value);
+                        else if (kind == 2)
+                            bone.AddGravityValue(value);
+                        else
+                            bone.SetGravityValue(value);
+                    if (kind == 1)
+                        _liveGravityMultiply = value;
+                    else if (kind == 2)
+                        _liveGravityAdd = value;
+                    else
+                        _liveGravitySet = value;
+                    _liveGravityReset = false;
+                }
+            }
+
+            if (_liveGravityBones.Count > 0)
+                _skirtController?.ApplyLiveCuttValues(kind, skirtValues);
+        }
+
         public void SetEnableCySpringBones(bool enable, string[] rootBonePrefixArray, bool isPrefix = false)
         {
             if (rootBonePrefixArray == null)
                 return;
-
             for (int i = 0; i < rootBonePrefixArray.Length; i++)
                 SetEnableCySpringBone(enable, rootBonePrefixArray[i], isPrefix);
         }
@@ -1570,12 +1375,10 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
             {
                 if (_springArray[i] == null)
                     continue;
-
                 if (enable)
                     _springArray[i].EnableAllCySpringBones();
                 else
@@ -1583,50 +1386,10 @@ namespace Gallop
             }
         }
 
-        // (TEST) Refresca SOLO la posicion/radio de los colisores de un part desde su runtime, sin
-        // recrear el array nativo ni re-registrar los parent works (y por tanto sin el log del
-        // re-registro). Lo usa la herramienta de prueba de colisores movibles.
-        public void RefreshNativeCollisionPositions(int index)
-        {
-            if (_springArray == null || index < 0 || index >= _springArray.Length)
-                return;
-
-            _springArray[index]?.UpdateNativeCollision(1.0f);
-        }
-
-        // El motor lee radios y posiciones de colision del array NATIVO, que solo se construye en el
-        // bind (InitNativeCollisions). Para que un cambio surta efecto EN CALIENTE hay que
-        // reconstruirlo... y ADEMAS volver a recolectar los ParentWork: InitNativeCollisions crea un
-        // array NUEVO y deja ParentWorkIndex=0 en TODAS las colisiones, asi que sin la recoleccion
-        // las esferas se resolverian desde el primer padre del modelo (el pelo recibia empujes de la
-        // nada). EndLoad() ya hace esta misma secuencia.
-        public void RefreshNativeCollisions()
-        {
-            if (_springArray == null)
-                return;
-
-            for (int i = 0; i < _springArray.Length; i++)
-                _springArray[i]?.RebuildNativeCollisions();
-
-            SetupSpringParentWork();
-        }
-
-        // (INTENTO 20) El motor NO usa el radio del asset (CySpringCollisionData) sino el RUNTIME
-        // (CySpringCollisionRuntimeData, copiado en el bind). Este accesor permite tocar el runtime.
-        public System.Collections.Generic.List<CySpringCollisionRuntimeData> GetCollisionRuntimeList(int index)
-        {
-            if (_collisionArray == null || index < 0 || index >= _collisionArray.Length)
-                return null;
-
-            CySpringCollision collisions = _collisionArray[index];
-            return collisions != null ? collisions.RuntimeDataList : null;
-        }
-
         public void SetEnableCySpringCollision(string name, bool isEnable)
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetEnableCySpringCollision(name, isEnable);
         }
@@ -1638,8 +1401,8 @@ namespace Gallop
 
         public void SetEnableCySpringBoneEnvCollision(Parts parts, string boneName, bool isEnable)
         {
-            // Fine-grained env collision switch is inside CySpringBoneBase in the official code.
-            // Left as no-op for this bridge layer.
+        // Fine-grained env collision switch is inside CySpringBoneBase in the official code.
+        // Left as no-op for this bridge layer.
         }
 
         public CySpringRootBone[] FindRootSpring(string boneName, Parts part, bool isPrefix = false)
@@ -1647,7 +1410,6 @@ namespace Gallop
             int index = (int)part;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return Array.Empty<CySpringRootBone>();
-
             return _springArray[index].FindRootCySpringBones(boneName, isPrefix);
         }
 
@@ -1656,7 +1418,6 @@ namespace Gallop
             int index = (int)part;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return Array.Empty<CySpringRootBone>();
-
             return _springArray[index].FindRootCySpringBones(boneNameArray, isPrefix);
         }
 
@@ -1665,7 +1426,6 @@ namespace Gallop
             int index = (int)part;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return Array.Empty<CySpringRootBone>();
-
             return _springArray[index].RootBoneArray ?? Array.Empty<CySpringRootBone>();
         }
 
@@ -1674,14 +1434,12 @@ namespace Gallop
             int index = (int)part;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return;
-
             _springArray[index].FindCySpringBone(resultList, checkFunc, firstHitBreak);
         }
 
         public IEnumerable<CySpringBoneBase> FindAllCySpringBones()
         {
             _tmpSpringBoneList.Clear();
-
             if (_springArray != null)
             {
                 for (int i = 0; i < _springArray.Length; i++)
@@ -1698,7 +1456,6 @@ namespace Gallop
         {
             if (_springArray == null)
                 return;
-
             for (int i = 0; i < _springArray.Length; i++)
                 _springArray[i]?.SetEnableCySpringBoneWind(enable, rootBoneName, isPrefix);
         }
@@ -1708,11 +1465,9 @@ namespace Gallop
             int index = (int)Parts.Tail;
             if (!IsValidPart(index) || _springArray == null || _springArray[index] == null)
                 return false;
-
             CySpringRootBone[] roots = _springArray[index].RootBoneArray;
             if (roots == null)
                 return false;
-
             for (int i = 0; i < roots.Length; i++)
             {
                 if (roots[i] != null && roots[i].ShouldReflectCalcResult)
@@ -1734,12 +1489,18 @@ namespace Gallop
             int index = (int)parts;
             if (!IsValidPart(index) || _springArray[index] == null)
                 return;
-
             _springArray[index].SetEnableCySpringBoneWind(enable, string.Empty, true);
         }
 
         public void Delete()
         {
+            _preparedSimulation?.Complete();
+            _liveGravityBones.Clear();
+            _liveGravityName = null;
+            _liveGravityReset = true;
+            _liveGravityMultiply = 1f;
+            _liveGravityAdd = 0f;
+            _liveGravitySet = -1f;
             if (_springArray != null)
             {
                 for (int i = 0; i < _springArray.Length; i++)
@@ -1765,12 +1526,9 @@ namespace Gallop
         {
             if (cySpringController == null)
                 return;
-
             cySpringController.Delete();
-
             if (cySpringController.gameObject != null)
                 UnityEngine.Object.Destroy(cySpringController);
-
             cySpringController = null;
         }
 
@@ -1781,19 +1539,46 @@ namespace Gallop
 
         private void ReleaseLoadObject()
         {
-            // Official destroys temporary instantiated DataContainer GameObjects here.
-            // In the direct bridge path the containers are user-owned scene/prefab components, so do not destroy them.
+            if (!Application.isPlaying)
+                return;
+            void Release(int part, ref GameObject instance, ref CySpringDataContainer data)
+            {
+                if (instance == null)
+                    return;
+
+                UnityEngine.Object.Destroy(instance);
+                instance = null;
+                data = null;
+            }
+
+            Release(0, ref _loadHeadObject, ref _headDataContainerAsset);
+            Release(3, ref _loadBustObject, ref _bustDataContainerAsset);
+            Release(1, ref _loadBodyObject, ref _bodyDataContainerAsset);
+            Release(2, ref _loadTailObject, ref _tailDataContainerAsset);
+        }
+
+        public void RefreshHierarchyAfterMerge()
+        {
+            if (_springArray == null)
+                return;
+            foreach (var spring in _springArray)
+            {
+                if (spring?.RootBoneArray == null)
+                    continue;
+                foreach (var root in spring.RootBoneArray)
+                    root?.RefreshParentAfterHierarchyMerge();
+            }
+
+            SetupSpringParentWork();
+            Reset();
         }
 
         private void SetupSpringParentWork()
         {
             _validRootBoneParentWork = false;
-
             if (_springArray == null)
                 return;
-
             CySpring.RootParentInfo info = new CySpring.RootParentInfo();
-
             for (int i = 0; i < _springArray.Length; i++)
             {
                 CySpring spring = _springArray[i];
@@ -1802,7 +1587,6 @@ namespace Gallop
             }
 
             _rootBoneParentWork = CySpring.RootParentInfo.MakeRootParentWork(info);
-
             for (int i = 0; i < _springArray.Length; i++)
             {
                 CySpring spring = _springArray[i];
@@ -1817,7 +1601,6 @@ namespace Gallop
         {
             if (_modelController == null)
                 throw new NullReferenceException();
-
             return _modelController.GetCySpringCorrectScale(isHead);
         }
 
@@ -1826,7 +1609,6 @@ namespace Gallop
             int index = (int)parts;
             if (_springRateArray != null && IsValidPart(index))
                 return _springRateArray[index];
-
             return _springRate;
         }
 
@@ -1836,24 +1618,19 @@ namespace Gallop
             float scale = 1.0f;
             if (_windPowerScaleArrayRate != null && index >= 0 && index < _windPowerScaleArrayRate.Length)
                 scale = _windPowerScaleArrayRate[index];
-
             return Mathf.Clamp01(_windPowerRate * scale);
         }
 
         private bool TryFindOtherTransform(string key, out Transform transformResult)
         {
             transformResult = null;
-
             if (string.IsNullOrEmpty(key))
                 return false;
-
             if (_transformCacheDic != null && _transformCacheDic.TryGetValue(key, out transformResult) && transformResult != null)
                 return true;
-
             Transform root = _ownerTransform != null ? _ownerTransform : transform;
             if (root == null)
                 return false;
-
             Transform[] all = root.GetComponentsInChildren<Transform>(true);
             for (int i = 0; i < all.Length; i++)
             {
@@ -1873,14 +1650,12 @@ namespace Gallop
             Dictionary<string, Transform> dic = new Dictionary<string, Transform>();
             if (root == null)
                 return dic;
-
             Transform[] all = root.GetComponentsInChildren<Transform>(true);
             for (int i = 0; i < all.Length; i++)
             {
                 Transform t = all[i];
                 if (t == null || string.IsNullOrEmpty(t.name))
                     continue;
-
                 if (!dic.ContainsKey(t.name))
                     dic.Add(t.name, t);
             }
@@ -1892,10 +1667,8 @@ namespace Gallop
         {
             if (container == null)
                 return null;
-
             CySpringCollisionDataAsset asset = new CySpringCollisionDataAsset();
             asset._dataList = container.collisionParam ?? new List<CySpringCollisionData>();
-
             return asset;
         }
 
@@ -1903,17 +1676,12 @@ namespace Gallop
         {
             if (container == null)
                 return null;
-
-            CySpringParamDataAsset asset =
-                ScriptableObject.CreateInstance<CySpringParamDataAsset>();
-
+            CySpringParamDataAsset asset = ScriptableObject.CreateInstance<CySpringParamDataAsset>();
             asset.name = container.name + "_RuntimeSpringAsset";
             asset._elements = container.springParam ?? new List<CySpringParamDataElement>();
-
             asset.SetWindParam(container);
             asset.SetMoveSpringParam(container);
             asset.SetConnectedBoneParam(container);
-
             return asset;
         }
 
@@ -1922,18 +1690,14 @@ namespace Gallop
             HashSet<string> set = new HashSet<string>();
             if (asset == null || asset._elements == null)
                 return set;
-
             for (int i = 0; i < asset._elements.Count; i++)
             {
                 CySpringParamDataElement element = asset._elements[i];
                 if (element == null)
                     continue;
-
                 AddNames(set, element._collisionNameList);
-
                 if (element._childElements == null)
                     continue;
-
                 for (int j = 0; j < element._childElements.Count; j++)
                 {
                     CySpringParamDataChildElement child = element._childElements[j];
@@ -1949,7 +1713,6 @@ namespace Gallop
         {
             if (set == null || names == null)
                 return;
-
             for (int i = 0; i < names.Count; i++)
             {
                 string name = names[i];
@@ -1958,43 +1721,34 @@ namespace Gallop
             }
         }
 
-        private static List<CySpringCollisionRuntimeData> CreateGetBodyRuntimeDataList(
-            List<CySpringCollisionRuntimeData> srcList,
-            HashSet<string> removeNameSet)
+        private static List<CySpringCollisionRuntimeData> CreateGetBodyRuntimeDataList(List<CySpringCollisionRuntimeData> srcList, HashSet<string> removeNameSet)
         {
             List<CySpringCollisionRuntimeData> result = new List<CySpringCollisionRuntimeData>();
             if (srcList == null)
                 return result;
-
             for (int i = 0; i < srcList.Count; i++)
             {
                 CySpringCollisionRuntimeData data = srcList[i];
                 if (data == null)
                     continue;
-
                 if (removeNameSet != null && removeNameSet.Contains(data.Name))
                     continue;
-
                 result.Add(data);
             }
 
             return result;
         }
 
-        private static List<CySpringCollisionRuntimeData> CreateGetTailRuntimeDataList(
-            List<CySpringCollisionRuntimeData> srcList,
-            HashSet<string> tailNameSet)
+        private static List<CySpringCollisionRuntimeData> CreateGetTailRuntimeDataList(List<CySpringCollisionRuntimeData> srcList, HashSet<string> tailNameSet)
         {
             List<CySpringCollisionRuntimeData> result = new List<CySpringCollisionRuntimeData>();
             if (srcList == null)
                 return result;
-
             for (int i = 0; i < srcList.Count; i++)
             {
                 CySpringCollisionRuntimeData data = srcList[i];
                 if (data == null)
                     continue;
-
                 if (tailNameSet != null && tailNameSet.Contains(data.Name))
                     result.Add(data);
             }
@@ -2006,8 +1760,5 @@ namespace Gallop
         {
             return index >= 0 && index < PARTS_NUM;
         }
-
-        
- 
     }
 }

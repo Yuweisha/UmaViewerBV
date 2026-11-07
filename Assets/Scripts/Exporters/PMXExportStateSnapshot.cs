@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Gallop;
 using UnityEngine;
 
@@ -20,6 +21,8 @@ internal sealed class PMXExportStateSnapshot : IDisposable
     private readonly bool _eyeTrackingEnabled;
     private readonly bool _animatorControlEnabled;
     private bool _disposed;
+    private readonly List<(SkinnedMeshRenderer renderer, Mesh original, Mesh temporary, float[] weights)> _meshes =
+        new List<(SkinnedMeshRenderer, Mesh, Mesh, float[])>();
 
     private struct TransformState
     {
@@ -113,6 +116,17 @@ internal sealed class PMXExportStateSnapshot : IDisposable
 
     internal void FreezeForExport()
     {
+        // Export baking must never clear or append blend shapes on shared imported assets.
+        foreach (var renderer in _container.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (renderer.sharedMesh == null) continue;
+            Mesh original = renderer.sharedMesh;
+            Mesh temporary = UnityEngine.Object.Instantiate(original);
+            var weights = new float[original.blendShapeCount];
+            for (int i=0; i<weights.Length; i++) weights[i]=renderer.GetBlendShapeWeight(i);
+            _meshes.Add((renderer, original, temporary, weights));
+            renderer.sharedMesh = temporary;
+        }
         // 冻结放在导出 try 块内，任一步骤异常时都能进入 Dispose 恢复快照。
         if (_container.UmaAnimator != null) _container.UmaAnimator.enabled = false;
         if (_container.UmaFaceAnimator != null) _container.UmaFaceAnimator.enabled = false;
@@ -165,11 +179,23 @@ internal sealed class PMXExportStateSnapshot : IDisposable
         {
             try
             {
-                RestoreTransforms();
+                RestoreRuntimeComponents();
             }
             finally
             {
-                RestoreRuntimeComponents();
+                try { RestoreTransforms(); }
+                finally
+                {
+                    foreach (var mesh in _meshes)
+                    {
+                        if (mesh.renderer != null)
+                        {
+                            mesh.renderer.sharedMesh = mesh.original;
+                            for (int i=0; i<mesh.weights.Length; i++) mesh.renderer.SetBlendShapeWeight(i,mesh.weights[i]);
+                        }
+                        if (mesh.temporary != null) UnityEngine.Object.DestroyImmediate(mesh.temporary);
+                    }
+                }
             }
         }
     }

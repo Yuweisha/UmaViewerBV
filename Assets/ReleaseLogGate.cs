@@ -9,7 +9,9 @@ public static class ReleaseLogGate
         Debug.unityLogger.logEnabled = true;
         Debug.unityLogger.filterLogType = LogType.Log;
 #else
-        Debug.unityLogger.logEnabled = false;
+        // Keep failures diagnosable in ordinary player builds.
+        Debug.unityLogger.logEnabled = true;
+        Debug.unityLogger.filterLogType = LogType.Warning;
 #endif
     }
 }

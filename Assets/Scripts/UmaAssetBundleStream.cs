@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 
 public sealed class UmaAssetBundleStream : FileStream
 {

@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System;
 using Overlay = Gallop.ImageEffect.ScreenOverlay.Overlay;
 
@@ -100,7 +100,7 @@ namespace Gallop.Live.Cutt
             value.IsEnableDepth = true;
             value.RollParameter = new Vector4(0f, 1f, 0f, 0f);
             value.ScaleParameter = Vector4.one;
-            value.SetMovieInfo(null, null, Vector2.one, Vector2.zero);
+            value.SetMovieInfo(null, null, Vector2.zero, Vector2.zero);
         }
 
         public static void Copy(Overlay source, Overlay target)

@@ -1,107 +1,51 @@
-# Unity generated directories
-/[Ll]ibrary/
-/[Tt]emp/
-/[Oo]bj/
-/[Bb]uild/
-/[Bb]uilds/
-/[Ll]ogs/
-/[Mm]emoryCaptures/
-/[Rr]ecordings/
-
-# Local Unity/user state
-/[Uu]ser[Ss]ettings/
-/.utmp/
+# Unity caches and build output
+/Library/
+/Temp/
+/Obj/
+/Logs/
+/Build/
+/Builds/
+/UserSettings/
+/MemoryCaptures/
+/Recordings/
 /.vs/
 /.vscode/
 /.idea/
-/.gradle/
-
-# Generated IDE files
-ExportedObj/
-.consulo/
 *.csproj
-*.unityproj
 *.sln
 *.suo
-*.tmp
 *.user
 *.userprefs
 *.pidb
-*.booproj
-*.svd
 *.pdb
 *.mdb
 *.opendb
 *.VC.db
 
-# Unity generated metadata and crash files
-*.pidb.meta
-*.pdb.meta
-*.mdb.meta
-sysinfo.txt
-
-# Build packages
-*.apk
-*.aab
-*.unitypackage
-crashlytics-build.properties
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# UmaViewer local/generated data
-/Assets/AmplifyShaderEditor/
-/Assets/AmplifyShaderEditor.meta
-/Assets/Plugins/Editor/JetBrains*
-/Assets/Plugins/RootMotion/PuppetMaster/_Integration/
-/Assets/Plugins/RootMotion/FinalIK/_Integration/
-/Ignore/
+# Local application data
+/Config.json
+/Poses/
 /Screenshots/
 /VMDRecords/
-/Poses/
 /gltf/
-/BuildDev/
+/dat/
+/master/
+/meta
+/meta_umaviewer
+*.sqlite
+*.db
+*.assetbundle
+*.mp4
+*.wav
 
-# Contains machine-specific game paths and preferences
-/Config.json
-
-# Local web viewer dependencies
-/web/pmx-viewer/node_modules/
-
-# Local validation, extracted game data, and investigation outputs
-/tmp/
-/captures/
-/exports/
-/_pr_backup_*/
-**/__pycache__/
+# Temporary files
+__pycache__/
 *.pyc
+*.tmp
 *.log
 *.dmp
 *.dump
-/tools/**/bin/
-/tools/**/obj/
-
-# Shader bundles and encrypted/runtime extraction artifacts (not native .a libraries)
-shader.a
-shader_extracted.a
-global-metadata*.dat
-*.assetbundle
-*.dmp
+.DS_Store
+Thumbs.db
 .env
 .env.*
-*.pem
-*.pfx
-*.p12
-
-# Local agent instructions and internal handoff plans
-/AGENTS.md
-/CLAUDE.md
-/implementation_plan.md
-/docs/CLAUDE_LIVE_HANDOFF.md
-
-# Handwritten tool project; Unity-generated root IDE projects stay ignored
-!/tools/TargetMethodLookup/TargetMethodLookup.csproj
-
-# Live recordings (salida de la grabacion offline)
-/Recordings/

@@ -103,6 +103,14 @@ namespace Gallop.Live
                     _cameras[i].Composite.FadeValue > 0f) _compositionEnabled = true;
         }
 
+        // Manual export selects camera destinations before SubmitRenderRequest
+        // invokes beginFrameRendering. Bind newly enabled auxiliary cameras here
+        // so their first frame is not skipped for having a null target.
+        public void PrepareManualRenderTargets()
+        {
+            if (isActiveAndEnabled) PrepareTextures();
+        }
+
         private void PrepareTextures()
         {
             if (_renderCamera == null) return;
@@ -198,7 +206,9 @@ namespace Gallop.Live
                 bool flip = fadeType == 0 && projectionFlipped;
                 material.SetTextureScale("_MainTex", new Vector2(1f, flip ? -1f : 1f));
                 material.SetTextureOffset("_MainTex", new Vector2(0f, flip ? 1f : 0f));
-                material.SetFloat(FadeId, fadeValue);
+                // Native AfterRenderingCallback0x4e99d20 writes only the
+                // command-buffer global. A local material value overrides it
+                // and changes blending; material initialization is separate.
                 cmd.SetGlobalFloat(FadeId, fadeValue);
                 if (monitorTexture != null && monitorTexture != source)
                     cmd.Blit(source, monitorTexture, material, 0);

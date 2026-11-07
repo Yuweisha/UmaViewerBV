@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -8,6 +8,7 @@ namespace Gallop.Live.Cutt
     {
         public UmaContainerCharacter UmaContainer;
         public Dictionary<string, Transform> Bones;
+        private readonly Transform _formationRoot;
 
         private LiveCharaPosition _liveCharaStandingPosition;
         private Vector3 _liveCharaInitialPosition = Vector3.zero;
@@ -17,22 +18,58 @@ namespace Gallop.Live.Cutt
         private Transform _liveParentTransform;
 
         private int _liveCharaHeightLevel = 0;
+        private readonly float _liveCharaHeightValue;
         private float _liveCharaHeightRatioBase = 1.0f;
         private float _liveCharaHeightRatio = 1.0f;
         private Vector3 _liveCharaFormationHeightRateOffset = Vector3.zero;
 
         private bool _isPositionNodePositionAddParent = false;
         private bool _isCastShadow = true;
+        private Renderer[] _shadowRenderers;
         private float _cySpringRate = 1.0f;
+        private int _previousFormationWarmupFrame;
+        public LiveCharaEmissiveBridge EmissiveBridge { get; } = new LiveCharaEmissiveBridge();
+        public LiveCharacterEmissiveDispatcher EmissiveModels { get; } = new LiveCharacterEmissiveDispatcher();
+        public LiveCharacterScaleDispatcher ScaleModels { get; } = new LiveCharacterScaleDispatcher();
 
+        public void AddCharaPropMaterial(Material material) => EmissiveBridge.AddMaterial(material);
+
+        // Original Formation model lifecycle 0x4ef7760 forwards key DirtEnergyB/G/R
+        // into ModelController.SetDirtParameter for each available model.
+        public void SetDirtParameter(float foot, float lower, float upper)
+        {
+            EmissiveModels.SetDirtRate(foot, lower, upper);
+        }
+
+        public void SetDirtParameter(float foot,float lower,float upper,
+            Color dirt,Color rimSpecular,Color toon)
+            => EmissiveModels.SetDirtParameter(foot,lower,upper,dirt,rimSpecular,toon);
+
+        private Transform _targetHead, _targetWaist, _targetChest;
+        private Transform _targetLeftWrist, _targetLeftAttach, _targetRightWrist, _targetRightAttach;
         private float HeadHeght;
         private float WaistHeght;
         private float ChestHeght;
 
+        // Formation slots can carry stage attachments without loading a visible model.
+        // Keep the model root separate from its Position node, as on loaded actors.
+        public LiveTimelineCharaLocator(Transform formationRoot)
+        {
+            _formationRoot = formationRoot;
+            var position = new GameObject("Position").transform;
+            position.SetParent(formationRoot, false);
+            Bones = new Dictionary<string, Transform> { ["Position"] = position };
+        }
+
         public LiveTimelineCharaLocator(UmaContainerCharacter umaContainer)
         {
             UmaContainer = umaContainer;
-            Bones = new Dictionary<string, Transform>();
+            // Original initialized CharacterData.HeightWithoutHeel is copied
+            // into CharacterObject at BindResource; animation scale is unrelated.
+            // This loaded-model bridge excludes native dress/loading lifecycle.
+            _liveCharaHeightValue = ResolveLoadedCharacterHeight(umaContainer.CharaData, umaContainer.IsMob);
+            LiveTimelineControl.UpdateCharactorLocator(this);
+            Bones = umaContainer.LiveModelIK!=null?umaContainer.LiveModelIK.NodeCache:new Dictionary<string, Transform>();
 
             foreach (Transform bone in umaContainer.GetComponentsInChildren<Transform>(true))
             {
@@ -42,34 +79,111 @@ namespace Gallop.Live.Cutt
                 }
             }
 
-            Transform position = GetBone("Position");
-            Transform head = GetBone("Head");
-            Transform waist = GetBone("Waist");
-            Transform chest = GetBone("Chest");
+            InitializeEmissiveModels(umaContainer);
 
-            if (position == null)
+            // Stage.StartUpdateTimeline supplies the authored logical frame.
+            // Original constructor's initial position is zero until the
+            // timeline stand-position initializer installs its local position.
+            _liveParentDefaultTransform = null;
+            _liveParentTransform = null;
+            _liveCharaInitialPosition = Vector3.zero;
+            InitializeTargetNodes();
+
+            Debug.Log($"InfoChara {UmaContainer.CharaEntry.Name}: {HeadHeght}, {WaistHeght}, {ChestHeght}");
+        }
+
+        // First model-set wiring: one loaded model over the character container,
+        // using the already reconstructed RendererHolder.OnInitialize semantics
+        // (GetComponentsInChildren<Renderer>(true)). Reserved-dress, mirror and
+        // child-prop separation still needs the real CharacterObject registration.
+        private void InitializeEmissiveModels(UmaContainerCharacter container)
+        {
+            if (container == null) return;
+            try
             {
-                position = umaContainer.transform;
+                var holder = new LiveRendererHolder();
+                holder.OnInitialize(container);
+                container.InstallLiveDirtMaterials(holder);
+                container.InstallLiveEmissiveScroll(holder);
+                var renderers = holder.RendererArray;
+                ScaleModels.AddModel(container,holder);
+                if (renderers == null || renderers.Length == 0) return;
+                var sink = EmissiveModels.AddModel();
+                sink.Renderers.AddRange(renderers);
+                sink.ScrollComponents.AddRange(container.LiveEmissiveScrollComponents);
+                // CharacterObject.SetModelObject0x4e7a244 checks the actual
+                // build-info dirt texture array before AddDirtComponent.
+                sink.HasDirtController=container.IsUseLiveDirtTexture();
+                sink.Dirt.Enabled=sink.HasDirtController;
             }
-
-            _liveParentDefaultTransform = position.parent;
-            _liveParentTransform = position.parent;
-            _liveCharaInitialPosition = position.position;
-
-            if (head != null)
+            catch (Exception exception)
             {
-                HeadHeght = (position.InverseTransformPoint(head.position).y + 0.1f) * UmaContainer.BodyScale;
+                Debug.LogWarning("Emissive model init skipped: " + exception.Message);
             }
+        }
 
-            if (waist != null)
+        // Loaded-model subset of original LiveModelController.UpdateCachedTransforms.
+        // Waist is an authored AssetHolder reference, not a name-search fallback.
+        // HipOffsetY originates from the authored body value only when present.
+        // Full component scheduling/transform application remains separate.
+        private void InitializeTargetNodes()
+        {
+            _targetHead = GetBone("Head");
+            _targetChest = GetBone("Chest");
+            var holder = UmaContainer != null && UmaContainer.Body != null ? UmaContainer.Body.GetComponent<Gallop.AssetHolder>() : null;
+            var waist = holder != null ? holder.Get<GameObject>("waist") : null;
+            _targetWaist = waist != null ? waist.transform : null;
+            _targetLeftWrist = GetBone("Wrist_L");
+            _targetLeftAttach = GetBone("Hand_Attach_L");
+            _targetRightWrist = GetBone("Wrist_R");
+            _targetRightAttach = GetBone("Hand_Attach_R");
+            // Original caches world Y before animation; no local inverse, body
+            // scale multiplier or head padding is baked into these three values.
+            HeadHeght = _targetHead != null ? _targetHead.position.y : 0f;
+            ChestHeght = _targetChest != null ? _targetChest.position.y : 0f;
+            WaistHeght = _targetWaist != null ? _targetWaist.position.y : 0f;
+            if (TryGetLoadedHipOffsetY(holder, out float hipOffset))
             {
-                WaistHeght = position.InverseTransformPoint(waist.position).y * UmaContainer.BodyScale;
+                float delta = LiveTimelineControl.MonitorFloat32(hipOffset * UmaContainer.BodyScale);
+                HeadHeght = LiveTimelineControl.MonitorFloat32(HeadHeght + delta);
+                ChestHeght = LiveTimelineControl.MonitorFloat32(ChestHeght + delta);
+                WaistHeght = LiveTimelineControl.MonitorFloat32(WaistHeght + delta);
             }
+        }
 
-            if (chest != null)
+        internal static bool TryGetLoadedHipOffsetY(Gallop.AssetHolder holder, out float value)
+        {
+            value = 0f;
+            if (holder == null || holder._assetTableValue?.list == null) return false;
+            foreach (var item in holder._assetTableValue.list)
             {
-                ChestHeght = position.InverseTransformPoint(chest.position).y * UmaContainer.BodyScale;
+                if (item == null || item.Key != "root_offset_ty_value") continue;
+                value = item.Value;
+                return true;
             }
+            return false;
+        }
+
+        internal static Vector3 NativeHeadTarget(Vector3 position, Vector3 up, float ratio)
+        {
+            float amount = LiveTimelineControl.MonitorFloat32(ratio * 0.1f);
+            return position + up * amount;
+        }
+
+        private Vector3 TargetPosition(Transform target) => UmaContainer != null && target != null ? target.position : Vector3.zero;
+
+        private Vector3 ConstHeightPosition(float height, bool head)
+        {
+            Vector3 value = _liveCharaInitialPosition;
+            if (UmaContainer != null)
+                value.y = head ? LiveTimelineControl.MonitorFloat32(height + LiveTimelineControl.MonitorFloat32(_liveCharaHeightRatioBase * 0.1f)) : height;
+            return value;
+        }
+
+        private Vector3 InitialHeightPosition(float height, bool head)
+        {
+            if (UmaContainer == null) return Vector3.zero;
+            return new Vector3(0f, head ? LiveTimelineControl.MonitorFloat32(height + LiveTimelineControl.MonitorFloat32(_liveCharaHeightRatioBase * 0.1f)) : height, 0f);
         }
 
         private Transform GetBone(string name)
@@ -135,8 +249,7 @@ namespace Gallop.Live.Cutt
         {
             get
             {
-                Transform t = PositionTransform;
-                return t != null ? t.position : Vector3.zero;
+                return PositionTransform != null ? PositionTransform.position : Vector3.zero;
             }
         }
 
@@ -157,57 +270,26 @@ namespace Gallop.Live.Cutt
             }
         }
 
-        public Vector3 liveCharaHeadPosition
-        {
-            get
-            {
-                if (UmaContainer != null && UmaContainer.HeadBone != null)
-                {
-                    return UmaContainer.HeadBone.transform.position + new Vector3(0, 0.1f, 0);
-                }
+        public Vector3 liveCharaHeadPosition => UmaContainer != null && _targetHead != null
+            ? NativeHeadTarget(_targetHead.position, _targetHead.up, _liveCharaHeightRatioBase) : Vector3.zero;
 
-                return GetBonePosition("Head") + new Vector3(0, 0.1f, 0);
-            }
-        }
-
-        public Vector3 liveCharaWaistPosition => GetBonePosition("Waist");
-
-        public Vector3 liveCharaLeftHandWristPosition => GetBonePosition("Wrist_L");
-
-        public Vector3 liveCharaLeftHandAttachPosition => GetBonePosition("Hand_Attach_L");
-
-        public Vector3 liveCharaRightHandAttachPosition => GetBonePosition("Hand_Attach_R");
-
-        public Vector3 liveCharaRightHandWristPosition => GetBonePosition("Wrist_R");
-
-        public Vector3 liveCharaChestPosition => GetBonePosition("Chest");
-
-        public Vector3 liveCharaFootPosition
-        {
-            get
-            {
-                Vector3 chest = liveCharaChestPosition;
-                return new Vector3(chest.x, 0f, chest.z);
-            }
-        }
-
-        public Vector3 liveCharaConstHeightHeadPosition =>
-            new Vector3(liveCharaInitialPosition.x, HeadHeght, liveCharaInitialPosition.z);
-
-        public Vector3 liveCharaConstHeightWaistPosition =>
-            new Vector3(liveCharaInitialPosition.x, WaistHeght, liveCharaInitialPosition.z);
-
-        public Vector3 liveCharaConstHeightChestPosition =>
-            new Vector3(liveCharaInitialPosition.x, ChestHeght, liveCharaInitialPosition.z);
-
-        public Vector3 liveCharaInitialHeightHeadPosition =>
-            new Vector3(liveCharaInitialPosition.x, HeadHeght, liveCharaInitialPosition.z);
-
-        public Vector3 liveCharaInitialHeightWaistPosition =>
-            new Vector3(liveCharaInitialPosition.x, WaistHeght, liveCharaInitialPosition.z);
-
-        public Vector3 liveCharaInitialHeightChestPosition =>
-            new Vector3(liveCharaInitialPosition.x, ChestHeght, liveCharaInitialPosition.z);
+        public Vector3 liveCharaWaistPosition => TargetPosition(_targetWaist);
+        public Vector3 liveCharaChestPosition => TargetPosition(_targetChest);
+        public Vector3 liveCharaLeftHandWristPosition => UmaContainer != null && _targetLeftWrist != null
+            ? _targetLeftWrist.position : liveCharaWaistPosition + new Vector3(0.5f, 0f, 0f);
+        public Vector3 liveCharaLeftHandAttachPosition => UmaContainer != null && _targetLeftAttach != null
+            ? _targetLeftAttach.position : liveCharaWaistPosition + new Vector3(0.5f, 0f, 0f);
+        public Vector3 liveCharaRightHandWristPosition => UmaContainer != null && _targetRightWrist != null
+            ? _targetRightWrist.position : liveCharaWaistPosition + new Vector3(-0.5f, 0f, 0f);
+        public Vector3 liveCharaRightHandAttachPosition => UmaContainer != null && _targetRightAttach != null
+            ? _targetRightAttach.position : liveCharaWaistPosition + new Vector3(-0.5f, 0f, 0f);
+        public Vector3 liveCharaFootPosition => liveCharaPosition;
+        public Vector3 liveCharaConstHeightHeadPosition => ConstHeightPosition(HeadHeght, true);
+        public Vector3 liveCharaConstHeightWaistPosition => ConstHeightPosition(WaistHeght, false);
+        public Vector3 liveCharaConstHeightChestPosition => ConstHeightPosition(ChestHeght, false);
+        public Vector3 liveCharaInitialHeightHeadPosition => InitialHeightPosition(HeadHeght, true);
+        public Vector3 liveCharaInitialHeightWaistPosition => InitialHeightPosition(WaistHeght, false);
+        public Vector3 liveCharaInitialHeightChestPosition => InitialHeightPosition(ChestHeght, false);
 
         public Vector3 liveCharaScale
         {
@@ -239,7 +321,7 @@ namespace Gallop.Live.Cutt
                     return UmaContainer.transform;
                 }
 
-                return PositionTransform;
+                return _formationRoot != null ? _formationRoot : PositionTransform;
             }
         }
 
@@ -249,13 +331,17 @@ namespace Gallop.Live.Cutt
             set => _liveCharaHeightLevel = value;
         }
 
+        internal static float ResolveLoadedCharacterHeight(System.Data.DataRow row, bool isMob)
+        {
+            int value = row == null ? 0 : Convert.ToInt32(row[isMob ? "chara_height" : "scale"]);
+            return value > 0 ? LiveTimelineControl.MonitorFloat32(value) : 160f;
+        }
+
         public float liveCharaHeightValue
         {
             get
             {
-                Transform t = PositionTransform;
-                float scaleY = t != null ? t.localScale.y : 1.0f;
-                return 160.0f * scaleY;
+                return _liveCharaHeightValue;
             }
         }
 
@@ -283,16 +369,58 @@ namespace Gallop.Live.Cutt
             set => _isPositionNodePositionAddParent = value;
         }
 
+        public void AlterModelPositionAddParent()
+        {
+            foreach (var model in ScaleModels.Models)
+                model.PositionAdd.AlterLateUpdate(model.Owner.transform, model.Owner.Position,
+                    IsPositionNodePositionAddParent);
+        }
+
         public bool IsCastShadow
         {
             get => _isCastShadow;
-            set => _isCastShadow = value;
+            set
+            {
+                // Native CharacterObject -> ModelController -> CharaPartsHolder
+                // applies the timeline switch to model parts (0x4e7dcf0 / 0x5171510).
+                if (_shadowRenderers == null && UmaContainer != null)
+                    _shadowRenderers = UmaContainer.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                _isCastShadow = value;
+                if (_shadowRenderers == null) return;
+                var mode = value ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+                foreach (var renderer in _shadowRenderers)
+                    if (renderer != null && renderer.shadowCastingMode != mode) renderer.shadowCastingMode = mode;
+            }
         }
 
         public float CySpringRate
         {
             get => _cySpringRate;
-            set => _cySpringRate = value;
+            set
+            {
+                _cySpringRate = value;
+                foreach (var model in ScaleModels.Models)
+                    model.Owner.SetLiveFormationCySpringRate(value);
+            }
+        }
+
+        // Current native UpdateCharacterObject (0x505f260): the marker belongs
+        // to the character, defaults to zero, and is cleared only by a non-warm key.
+        internal void ApplyFormationCySpringWarmup(LiveTimelineKeyFormationOffsetData key,
+            Action<int, float> reserveProps)
+        {
+            if (!key.warmUpCySpring)
+            {
+                _previousFormationWarmupFrame = 0;
+                return;
+            }
+            if (_previousFormationWarmupFrame == key.frame) return;
+            for (int dress = 0; dress < ScaleModels.Models.Count; dress++)
+            {
+                ScaleModels.Models[dress].Owner.ReserveLiveFormationCySpring(key.CySpringWarmUpTime);
+                reserveProps?.Invoke(dress, key.PropCySpringWarmUpTime);
+            }
+            _previousFormationWarmupFrame = key.frame;
         }
 
         public int LayerIndex
@@ -304,46 +432,46 @@ namespace Gallop.Live.Cutt
                     return;
                 }
 
-                foreach (Transform t in UmaContainer.GetComponentsInChildren<Transform>(true))
-                {
-                    t.gameObject.layer = value;
-                }
+                // Original SetLiveLayerIndex 0x575d170 caches the raw int.
+                // GetLayer/ExternalLateUpdate resolves [CHAR,_0,_1] and mirror
+                // visibility together; indices outside0..2 fall back to CHAR.
+                UmaContainer.LiveMirrorModelLayerIndex=value;
             }
         }
 
         public Color EmissiveColor
         {
+            // Character-level path: CharacterObject.set_EmissiveColor 0x4e7dba0
+            // loops the reserved models and each ModelController writes its
+            // MaterialPropertyBlock (property id 28). The explicit material
+            // bridge remains a diagnostic-only sink.
             set
             {
-                // 先留空。
-                // 官方这里大概率是设置角色材质的发光颜色。
-                // 你现在先别乱写 shader property，避免把角色材质搞黑。
+                EmissiveModels.SetColor(value);
+                EmissiveBridge.SetColor(value);
             }
         }
 
         public void SetEmissiveScale(float speed, float energyScale)
         {
-            // 官方接口要求的方法。
-            // 先空实现，保证 timeline 调用不会报错。
+            EmissiveModels.SetScroll(speed, energyScale);
         }
 
         public void SetEmissiveIntensityParam(float emissiveIntensity)
         {
-            // 官方接口要求的方法。
-            // 先空实现，保证 timeline 调用不会报错。
+            EmissiveModels.SetIntensity(emissiveIntensity);
+            EmissiveBridge.SetIntensity(emissiveIntensity);
         }
 
         public void SetEmissiveSoftEdgeParam(float emissiveRimPower, float emissiveRimIntensity, bool isemissiveCenter)
         {
-            // 官方接口要求的方法。
-            // 先空实现，保证 timeline 调用不会报错。
+            EmissiveModels.SetSoftEdge(emissiveRimPower, emissiveRimIntensity, isemissiveCenter);
+            EmissiveBridge.SetSoftEdge(emissiveRimPower, emissiveRimIntensity, isemissiveCenter);
         }
 
         public void SetScaleFactor(float scale)
         {
-            // 官方接口要求的方法。
-            // 暂时不要直接改 transform.localScale，避免影响角色骨骼/物理。
-            // 如果后面确认 timeline scale key 需要生效，再按官方逻辑接这里。
+            ScaleModels.SetFactor(scale);
         }
     }
 }

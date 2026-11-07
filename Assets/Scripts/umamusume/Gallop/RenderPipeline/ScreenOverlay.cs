@@ -290,8 +290,9 @@ namespace Gallop.ImageEffect
 
             public void SetRollAngle(float angle)
             {
-                RollParameter.x = Mathf.Sin(angle);
-                RollParameter.y = Mathf.Cos(angle);
+                // Authored RollAngle is in degrees, as in the render-side setter.
+                RollParameter.x = Gallop.Math.Sinf(angle);
+                RollParameter.y = Gallop.Math.Cosf(angle);
             }
 
             private static void SetShaderKeyword(

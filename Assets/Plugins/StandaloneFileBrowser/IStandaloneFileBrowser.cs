@@ -11,4 +11,3 @@ namespace SFB.LegacyWindows {
         void SaveFilePanelAsync(string title, string directory, string defaultName, ExtensionFilter[] extensions, Action<string> cb);
     }
 }
-

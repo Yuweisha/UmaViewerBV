@@ -9,6 +9,7 @@ namespace Gallop.Live
         [SerializeField] private int _rotationType;
         [SerializeField] private bool _isInversedForward;
         private Transform _transform;
+        private bool _isEnabled;
         private bool _isInitialized;
 
         public Transform TargetCameraTransform { get => _targetCameraTransform; set => _targetCameraTransform = value; }
@@ -16,18 +17,21 @@ namespace Gallop.Live
         {
             _transform = transform;
             _targetCameraTransform = cameraTransform;
+            _isEnabled = cameraTransform != null;
             _isInitialized = true;
         }
 
-        // Native 0x1a404e0; invoked explicitly by the render driver, not Unity LateUpdate.
+        // Installed native 0x4e62720; explicitly dispatched by the owner.
         public void AlterLateUpdate()
         {
-            if (!_isInitialized || !enabled || _targetCameraTransform == null) return;
+            if (!_isInitialized || !_isEnabled || !enabled || _targetCameraTransform == null) return;
             Vector3 direction = _targetCameraTransform.position - _transform.position;
+            if (_isInversedForward) direction = -direction;
             if (direction.sqrMagnitude < 1f) return;
             if (_rotationType == 2)
             {
                 _transform.LookAt(_targetCameraTransform);
+                if (_isInversedForward) _transform.Rotate(0f, 180f, 0f, Space.Self);
                 return;
             }
             if (_rotationType != 0 && _rotationType != 1) return;
@@ -37,7 +41,6 @@ namespace Gallop.Live
             Quaternion rotation = Quaternion.LookRotation(direction, up);
             if (_rotationType == 1) rotation = Quaternion.Euler(0f, rotation.eulerAngles.y, 0f);
             if (Quaternion.Angle(rotation, _transform.rotation) > 0.1f) _transform.rotation = rotation;
-            // Native does not read _isInversedForward in any rotation mode.
         }
     }
 }

@@ -7,6 +7,7 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineKeyGlobalFogData : LiveTimelineKeyWithInterpolate
     {
         public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.GlobalFog;
+        public bool IsSyncBlinkLight=>((int)attribute&0x10000)!=0;
         public bool isDistance;
         public float startDistance;
         public bool isHeight;

@@ -24,6 +24,14 @@ namespace Gallop.Live.Cutt
         public OffsetType OffsetType;
         public LayerType LayerType;
         public bool IsLayerTypeRecursively;
+        public bool IsAttachProps;
+        public int PropsIndex;
+        public bool UseScreenCapture;
+        public int ScreenCaptureId;
+        public LiveTimelineKeyObjectData.ScreenCaptureAspectType UseCaptureAspectType;
+        public bool Use2dBackground;
+        public int BgId;
+        public int BgSubId;
     }
 
     public delegate void ObjectUpdateInfoDelegate(ref ObjectUpdateInfo updateInfo);

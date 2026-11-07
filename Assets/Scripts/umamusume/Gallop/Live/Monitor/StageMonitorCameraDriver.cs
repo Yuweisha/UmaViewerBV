@@ -13,21 +13,43 @@ namespace Gallop.Live
     {
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl,
             LiveTimelineControl.FindTimelineConfig, Vector3> _getPosition = GetPosition;
-        private readonly BezierCalcWork _lookAtBezier = new BezierCalcWork();
+        private BezierCalcWork _lookAtBezier;
+        private sealed class Slot
+        {
+            public Camera camera;
+            public MonitorCamera monitor;
+            public CacheCamera cached;
+            public RenderTexture target;
+            public readonly BezierCalcWork bezier = new BezierCalcWork();
+        }
+        private readonly List<Slot> _slots = new List<Slot>();
+        public int Count => _slots.Count;
+        public Texture GetTexture(int index) => index >= 0 && index < _slots.Count &&
+            _slots[index].target != null && _slots[index].target.IsCreated() ? _slots[index].target : null;
+        private Slot FindSlot(Camera camera) => _slots.Find(slot => slot.camera == camera);
+        private void SelectSlot(int index)
+        {
+            var slot = _slots[index];
+            _captureCamera = slot.camera; _monitorCamera = slot.monitor; _cachedCamera = slot.cached;
+            _texture = slot.monitor.monitorTexture; _targetTexture = slot.target; _lookAtBezier = slot.bezier;
+        }
         private readonly List<Renderer> _screens = new List<Renderer>();
         private readonly List<bool> _screenVisibility = new List<bool>();
         private Camera _captureCamera;
+        private MonitorCamera _monitorCamera;
+        private LiveTimelineControl _boundMonitorTimeline;
+        private MonitorCamera _boundMonitor;
         private CacheCamera _cachedCamera;
-        private RenderTexture _texture;
+        private RenderTexture _texture; // Alias of the original MonitorCamera's owned RT.
+        private RenderTexture _targetTexture; // Borrowed Director screen texture.
         private bool _screensHidden;
-        private bool _hasTimelineCullingMask;
-        private int _timelineCullingMask;
-        private bool _hasTimelineBackground;
-        private Color _timelineBackground;
 
-        public Texture Texture => IsActive ? _texture : null;
-        public bool IsActive => isActiveAndEnabled && _captureCamera != null &&
-            _captureCamera.enabled && _texture != null && _texture.IsCreated();
+        // Director.CreateMonitorTexture allocates before camera enable tracks.
+        // A disabled capture camera does not invalidate the borrowed screen RT.
+        public Texture Texture => GetTexture(0);
+        public RenderTexture CaptureTexture => _texture;
+        public bool IsActive => isActiveAndEnabled && _slots.Exists(slot => slot.camera.gameObject.activeSelf &&
+            slot.monitor.monitorTexture != null && slot.monitor.monitorTexture.IsCreated());
 
         private void OnEnable()
         {
@@ -67,7 +89,7 @@ namespace Gallop.Live
         // screen geometry only while this camera renders to avoid RT feedback.
         private void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
         {
-            if (camera != _captureCamera || !IsActive || _screensHidden) return;
+            if (!IsCaptureCamera(camera) || !isActiveAndEnabled || _screensHidden) return;
             _screensHidden = true;
             for (int i = 0; i < _screens.Count; i++)
             {
@@ -80,7 +102,33 @@ namespace Gallop.Live
 
         private void OnEndCameraRendering(ScriptableRenderContext context, Camera camera)
         {
-            if (camera == _captureCamera) RestoreScreens();
+            if (IsCaptureCamera(camera)) RestoreScreens();
+        }
+
+        public bool IsCaptureCamera(Camera camera) => camera != null && FindSlot(camera) != null;
+
+        // Native installs this body on CameraData's owned end callback.
+        // URP14 global endCameraRendering is after context.Submit, so the host
+        // adapter runs it in a final pass after resolving the private attachment.
+        // Complete game renderer event placement remains a separate boundary.
+        internal void CopyCapture(ScriptableRenderContext context, Camera camera)
+        {
+            var slot = FindSlot(camera);
+            if (slot == null || !isActiveAndEnabled) return;
+            try
+            {
+                if (slot.target != null)
+                {
+                    var cmd = CommandBufferPool.Get("Live.MonitorCamera.Copy");
+                    try
+                    {
+                        cmd.Blit(slot.monitor.monitorTexture, slot.target);
+                        context.ExecuteCommandBuffer(cmd);
+                    }
+                    finally { CommandBufferPool.Release(cmd); }
+                }
+            }
+            finally { RestoreScreens(); }
         }
 
         private void RestoreScreens()
@@ -94,153 +142,147 @@ namespace Gallop.Live
         public void ReleaseCapture()
         {
             RestoreScreens();
-            _hasTimelineCullingMask = false;
-            _hasTimelineBackground = false;
-            if (_captureCamera != null)
+            foreach (var slot in _slots)
             {
-                _captureCamera.enabled = false;
-                _captureCamera.targetTexture = null;
-                Destroy(_captureCamera.gameObject);
-                _captureCamera = null;
-                _cachedCamera = null;
+                slot.camera.enabled = false;
+                slot.camera.targetTexture = null;
+                slot.monitor.ReleaseMonitorTexture();
+                if (Application.isPlaying) Destroy(slot.camera.gameObject); else DestroyImmediate(slot.camera.gameObject);
             }
-            if (_texture != null)
-            {
-                _texture.Release();
-                Destroy(_texture);
-                _texture = null;
-            }
+            _slots.Clear();
+            _captureCamera = null; _cachedCamera = null; _monitorCamera = null;
+            _texture = null; _targetTexture = null;
+            _boundMonitorTimeline = null;
+            _boundMonitor = null;
         }
 
         public void UpdateCapture(LiveTimelineControl timeline, float currentFrame, LiveTimelineData data)
         {
             RestoreScreens();
-            if (_captureCamera != null) _captureCamera.enabled = false;
             if (!isActiveAndEnabled || timeline == null || data == null || data.worksheetList == null) return;
+            LiveTimelineWorkSheet layerSheet = data.worksheetList.Find(sheet => sheet != null && sheet.monitorCameraLayerKeys != null && sheet.monitorCameraLayerKeys.Count > 0);
+            timeline.PrepareMonitorCameraLayerState(layerSheet, Mathf.RoundToInt(currentFrame));
+            for (int slotIndex = 0; slotIndex < _slots.Count; slotIndex++)
+            {
+                SelectSlot(slotIndex);
+                UpdateSlot(timeline, currentFrame, data, slotIndex);
+            }
+            timeline.FinishMonitorCameraRoll();
+            if (_slots.Count > 0) SelectSlot(0);
+        }
 
+        private void UpdateSlot(LiveTimelineControl timeline, float currentFrame, LiveTimelineData data, int slotIndex)
+        {
+            if (_texture == null || !_texture.IsCreated()) return;
             LiveTimelineWorkSheet positionSheet = null;
+            LiveTimelineWorkSheet lookAtSheet = null;
             LiveTimelineKeyMonitorCameraPositionData positionKey = null;
             LiveTimelineKeyMonitorCameraPositionData nextPositionKey = null;
             LiveTimelineKeyMonitorCameraLookAtData lookAtKey = null;
             LiveTimelineKeyMonitorCameraLookAtData nextLookAtKey = null;
-            LiveTimelineKeyMonitorCameraLayerData layerKey = null;
-            LiveTimelineKeyMonitorCameraLayerData nextLayerKey = null;
             ILiveTimelineKeyDataList positionKeys = null;
+            ILiveTimelineKeyDataList lookAtKeys = null;
             for (int i = 0; i < data.worksheetList.Count; i++)
             {
                 LiveTimelineWorkSheet sheet = data.worksheetList[i];
                 if (sheet == null) continue;
-                if (positionKey == null && sheet.monitorCameraPosKeys != null && sheet.monitorCameraPosKeys.Count > 0)
+                if (positionKey == null && sheet.monitorCameraPosKeys != null && sheet.monitorCameraPosKeys.Count > slotIndex)
                 {
-                    var keys = sheet.monitorCameraPosKeys[0]?.keys;
+                    var keys = sheet.monitorCameraPosKeys[slotIndex]?.keys;
                     if (FindKeys(keys, timeline, currentFrame, out positionKey, out nextPositionKey))
                     {
                         positionSheet = sheet;
                         positionKeys = keys;
                     }
                 }
-                if (lookAtKey == null && sheet.monitorCameraLookAtKeys != null && sheet.monitorCameraLookAtKeys.Count > 0)
-                    FindKeys(sheet.monitorCameraLookAtKeys[0]?.keys, timeline, currentFrame, out lookAtKey, out nextLookAtKey);
-                if (layerKey == null && sheet.monitorCameraLayerKeys != null && sheet.monitorCameraLayerKeys.Count > 0)
-                    FindKeys(sheet.monitorCameraLayerKeys[0]?.keys, timeline, currentFrame, out layerKey, out nextLayerKey);
-            }
-            if (positionKey == null || !positionKey.enable || lookAtKey == null) return;
-
-            Director director = Director.instance;
-            Camera template = director != null ? director.MainRenderCamera : null;
-            if (template == null || template == _captureCamera || template.cameraType != CameraType.Game ||
-                !director.IsPresentationCamera(template)) return;
-            if (!EnsureCaptureCamera()) return;
-
-            var config = new LiveTimelineControl.FindTimelineConfig
-            {
-                keyType = LiveTimelineControl.FindTimelineConfig.KeyType.KeyDirect,
-                curKey = positionKey,
-                nextKey = nextPositionKey,
-                posKeys = positionKeys
-            };
-            if (!timeline.CalculateCameraPos(out Vector3 position, positionSheet, currentFrame,
-                _cachedCamera, ref config, ref _getPosition)) return;
-            Vector3 lookAt = EvaluateLookAt(timeline, position, lookAtKey, nextLookAtKey, currentFrame);
-
-            _captureCamera.CopyFrom(template);
-            // Native AlterUpdate_MonitorCameraPosition (0x1ad5a88..0x1ad5ad1)
-            // updates these only on flagged keys; CopyFrom must not erase their state.
-            if (((int)positionKey.attribute & 0x20000) != 0)
-            {
-                _timelineCullingMask = positionKey.GetCullingMask();
-                _hasTimelineCullingMask = true;
-            }
-            if (((int)positionKey.attribute & 0x40000) != 0)
-            {
-                _timelineBackground = positionKey.BgColor;
-                _hasTimelineBackground = true;
-            }
-            if (_hasTimelineCullingMask) _captureCamera.cullingMask = _timelineCullingMask;
-            if (_hasTimelineBackground) _captureCamera.backgroundColor = _timelineBackground;
-            _captureCamera.targetTexture = _texture;
-            _captureCamera.depth = template.depth - 100f;
-            _captureCamera.rect = new Rect(0f, 0f, 1f, 1f);
-            _captureCamera.aspect = (float)_texture.width / _texture.height;
-            _captureCamera.allowMSAA = false;
-            _captureCamera.stereoTargetEye = StereoTargetEyeMask.None;
-            _captureCamera.ResetWorldToCameraMatrix();
-            _captureCamera.ResetProjectionMatrix();
-            _captureCamera.ResetCullingMatrix();
-
-            Quaternion rotation = (lookAt - position).sqrMagnitude > 0.0001f
-                ? Quaternion.LookRotation(lookAt - position, Vector3.up) : template.transform.rotation;
-            if (layerKey != null)
-            {
-                float layerRatio = GetRatio(layerKey, nextLayerKey, currentFrame);
-                Vector3 min = nextLayerKey != null
-                    ? Vector3.LerpUnclamped(layerKey.offsetMinPosition, nextLayerKey.offsetMinPosition, layerRatio)
-                    : layerKey.offsetMinPosition;
-                Vector3 max = nextLayerKey != null
-                    ? Vector3.LerpUnclamped(layerKey.offsetMaxPosition, nextLayerKey.offsetMaxPosition, layerRatio)
-                    : layerKey.offsetMaxPosition;
-                position += rotation * LayerOffset(min, max, positionKey.charaRelativeBase, timeline.liveCharactorLocators);
-                lookAt += rotation * LayerOffset(min, max, lookAtKey.lookAtCharaPos, timeline.liveCharactorLocators);
-                if ((lookAt - position).sqrMagnitude > 0.0001f)
-                    rotation = Quaternion.LookRotation(lookAt - position, Vector3.up);
-            }
-            float ratio = GetRatio(positionKey, nextPositionKey, currentFrame);
-            float fov = nextPositionKey != null ? Mathf.LerpUnclamped(positionKey.fov, nextPositionKey.fov, ratio) : positionKey.fov;
-            float roll = nextPositionKey != null ? Mathf.LerpUnclamped(positionKey.roll, nextPositionKey.roll, ratio) : positionKey.roll;
-            _captureCamera.transform.SetPositionAndRotation(position, rotation * Quaternion.AngleAxis(roll, Vector3.forward));
-            _captureCamera.fieldOfView = fov > 0f ? fov : 30f;
-            _captureCamera.nearClipPlane = positionKey.nearClip;
-            _captureCamera.farClipPlane = positionKey.farClip;
-            _captureCamera.enabled = true;
-        }
-
-        private bool EnsureCaptureCamera()
-        {
-            if (_captureCamera == null)
-            {
-                GameObject go = new GameObject("MonitorCameraCapture");
-                go.transform.SetParent(transform, false);
-                _captureCamera = go.AddComponent<Camera>();
-                _captureCamera.enabled = false;
-                _cachedCamera = new CacheCamera(_captureCamera);
-                var cameraData = go.AddComponent<UniversalAdditionalCameraData>();
-                cameraData.renderType = CameraRenderType.Base;
-                cameraData.renderPostProcessing = false;
-            }
-            if (_texture == null)
-            {
-                _texture = new RenderTexture(1024, 576, 24, RenderTextureFormat.ARGB32)
+                if (lookAtKey == null && sheet.monitorCameraLookAtKeys != null && sheet.monitorCameraLookAtKeys.Count > slotIndex)
                 {
-                    name = "LiveMonitorCameraRT",
-                    filterMode = FilterMode.Bilinear,
-                    wrapMode = TextureWrapMode.Clamp,
-                    useMipMap = false,
-                    autoGenerateMips = false
-                };
+                    if (FindKeys(sheet.monitorCameraLookAtKeys[slotIndex]?.keys, timeline, currentFrame, out lookAtKey, out nextLookAtKey))
+                    {
+                        lookAtSheet = sheet;
+                        lookAtKeys = sheet.monitorCameraLookAtKeys[slotIndex].keys;
+                    }
+                }
             }
-            return _texture.IsCreated() || _texture.Create();
+            if (positionKey != null)
+            {
+                var config = new LiveTimelineControl.FindTimelineConfig
+                {
+                    keyType = LiveTimelineControl.FindTimelineConfig.KeyType.KeyDirect,
+                    curKey = positionKey, nextKey = nextPositionKey, posKeys = positionKeys, extraCameraIndex = slotIndex
+                };
+                bool found = timeline.CalculateCameraPos(out Vector3 position, positionSheet, currentFrame,
+                    _cachedCamera, ref config, ref _getPosition);
+                timeline.ApplyMonitorCameraPositionSample(slotIndex, positionKey, nextPositionKey,
+                    GetRatio(positionKey, nextPositionKey, currentFrame, timeline), found, position);
+            }
+            // Original wrapper requires both position/lookAt GROUPS; it does not
+            // require a valid current position key before independent lookAt work.
+            if (lookAtKey != null && lookAtSheet.monitorCameraPosKeys != null && lookAtSheet.monitorCameraPosKeys.Count > slotIndex)
+            {
+                if (nextLookAtKey != null && nextLookAtKey.IsInterpolateKey())
+                    timeline.CacheFutureCameraLookAt(lookAtKey, nextLookAtKey, Mathf.RoundToInt(currentFrame), lookAtKeys);
+                Vector3 lookAt = EvaluateLookAt(timeline, _captureCamera.transform.position, lookAtKey, nextLookAtKey, currentFrame, out float localScale);
+                // Height-rate production restored; vector/props sampling and
+                // original live clock remain explicit adapter boundaries.
+                timeline.ApplyMonitorCameraLookAtSample(slotIndex, lookAtKey, lookAt, localScale);
+            }
         }
 
+        public void SetupCaptureTexture(RenderTexture target) => SetupCaptureTextures(target == null ? null : new[] { target });
+
+        public void SetupCaptureTextures(RenderTexture[] targets)
+        {
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                var target = targets != null && i < targets.Length ? targets[i] : null;
+                _slots[i].target = target;
+                _slots[i].monitor.SetupCaptureTexture(target);
+            }
+            if (_slots.Count > 0) SelectSlot(0);
+        }
+
+        internal void BindTimelineIfNeeded(LiveTimelineControl timeline)
+        {
+            if (timeline == null || _slots.Count == 0 ||
+                (_boundMonitorTimeline == timeline && _boundMonitor == _slots[0].monitor)) return;
+            var monitors = new MonitorCamera[_slots.Count];
+            for (int i = 0; i < monitors.Length; i++) monitors[i] = _slots[i].monitor;
+            timeline.SetMonitorCamera(monitors);
+            _boundMonitorTimeline = timeline;
+            _boundMonitor = monitors[0];
+        }
+
+        public void InitializeCapture(int width, int height, int count = 1)
+        {
+            if (_slots.Count != count) ReleaseCapture();
+            if (_slots.Count == 0)
+            {
+                var prefab = Resources.Load<GameObject>("Prefabs/Live/MonitorCamera");
+                if (prefab == null) throw new InvalidOperationException("Original MonitorCamera prefab is not installed");
+                for (int i = 0; i < count; i++)
+                {
+                    GameObject go = Instantiate(prefab, transform, false);
+                    go.name = "MonitorCamera[" + i + "]";
+                    var slot = new Slot { monitor = go.GetComponent<MonitorCamera>(), camera = go.GetComponent<Camera>() };
+                    if (slot.monitor == null || slot.camera == null)
+                        throw new InvalidOperationException("Original MonitorCamera component identity differs");
+                    go.SetActive(false);
+                    slot.camera.enabled = true;
+                    slot.cached = new CacheCamera(slot.camera);
+                    var cameraData = go.GetComponent<UniversalAdditionalCameraData>() ?? go.AddComponent<UniversalAdditionalCameraData>();
+                    cameraData.renderType = CameraRenderType.Base;
+                    cameraData.renderPostProcessing = false;
+                    _slots.Add(slot);
+                }
+            }
+            foreach (var slot in _slots)
+            {
+                slot.camera.targetTexture = null;
+                slot.monitor.Initialize(width, height);
+            }
+            if (_slots.Count > 0) SelectSlot(0);
+        }
 
         private static bool FindKeys<T>(ILiveTimelineKeyDataList keys, LiveTimelineControl timeline, float frame,
             out T current, out T next) where T : LiveTimelineKey
@@ -255,24 +297,42 @@ namespace Gallop.Live
             return current != null;
         }
 
-        private static float GetRatio(LiveTimelineKey current, LiveTimelineKeyWithInterpolate next, float frame)
+        private static float GetRatio(LiveTimelineKey current, LiveTimelineKeyWithInterpolate next, float frame, LiveTimelineControl timeline)
         {
-            return next != null && next.IsInterpolateKey()
-                ? LiveTimelineControl.CalculateInterpolationValue(current, next, frame) : 0f;
+            if (next == null || !next.IsInterpolateKey()) return 0f;
+            // Runtime seconds stay independent of the integer selection frame;
+            // legacy direct sampling retains an explicit frame/60 bridge.
+            return LiveTimelineControl.CalculateInterpolationValueAtTime(current, next, timeline.CameraSampleTime(frame));
         }
 
         private static Vector3 GetPosition(LiveTimelineKeyCameraPositionData key, LiveTimelineControl timeline,
             LiveTimelineControl.FindTimelineConfig config) => key.GetValue(timeline);
 
         private Vector3 EvaluateLookAt(LiveTimelineControl timeline, Vector3 position,
-            LiveTimelineKeyMonitorCameraLookAtData current, LiveTimelineKeyMonitorCameraLookAtData next, float frame)
+            LiveTimelineKeyMonitorCameraLookAtData current, LiveTimelineKeyMonitorCameraLookAtData next, float frame, out float localScale)
+        {
+            bool interpolate = next != null && next.IsInterpolateKey();
+            float ratio = GetRatio(current, next, frame, timeline);
+            Vector3 result = EvaluateLookAtValue(timeline, position, current, next, ratio);
+            localScale = current.GetHeightRate(timeline);
+            if (interpolate)
+            {
+                float endScale = next.GetHeightRate(timeline);
+                float difference = LiveTimelineControl.MonitorFloat32(endScale - localScale);
+                float product = LiveTimelineControl.MonitorFloat32(difference * ratio);
+                localScale = LiveTimelineControl.MonitorFloat32(product + localScale);
+            }
+            return timeline.ApplyCameraLookAtDelay(current, result, _captureCamera != null ? _captureCamera.transform : null, frame, position);
+        }
+
+        private Vector3 EvaluateLookAtValue(LiveTimelineControl timeline, Vector3 position,
+            LiveTimelineKeyMonitorCameraLookAtData current, LiveTimelineKeyMonitorCameraLookAtData next, float ratio)
         {
             Vector3 start = current.GetValue(timeline, position);
             if (next == null || !next.IsInterpolateKey()) return start;
-            float ratio = GetRatio(current, next, frame);
+            Vector3 end = next.GetValue(timeline, position);
             int count = next.GetBezierPointCount();
-            if (count == 0) return Vector3.LerpUnclamped(start, next.GetValue(timeline, position), ratio);
-            Vector3 end = next.GetValue(timeline, Vector3.zero);
+            if (count == 0) return BezierUtil.LerpUnclamped(start, end, ratio);
             if (next.necessaryToUseNewBezierCalcMethod)
             {
                 _lookAtBezier.Set(start, end, count);
@@ -283,32 +343,17 @@ namespace Gallop.Live
             Vector3 cp1 = next.GetBezierPoint(0, timeline, Vector3.zero);
             Vector3 cp2 = next.GetBezierPoint(1, timeline, Vector3.zero);
             Vector3 cp3 = next.GetBezierPoint(2, timeline, Vector3.zero);
+            Vector3 cp4 = next.GetBezierPoint(3, timeline, Vector3.zero);
             Vector3 target;
-            switch (count)
+            switch (next.GetBezierPointCount())
             {
                 case 1: BezierUtil.Calc(ref start, ref end, ref cp1, ratio, out target); return target;
                 case 2: BezierUtil.Calc(ref start, ref end, ref cp1, ref cp2, ratio, out target); return target;
                 case 3: BezierUtil.Calc(ref start, ref end, ref cp1, ref cp2, ref cp3, ratio, out target); return target;
-                default: return Vector3.LerpUnclamped(start, next.GetValue(timeline, position), ratio);
+                case 4: BezierUtil.Calc(ref start, ref end, ref cp1, ref cp2, ref cp3, ref cp4, ratio, out target); return target;
+                default: return BezierUtil.LerpUnclamped(start, end, ratio);
             }
         }
 
-        private static Vector3 LayerOffset(Vector3 min, Vector3 max, LiveCharaPositionFlag flags,
-            ILiveTimelineCharactorLocator[] locators)
-        {
-            // Same height mapping as MultiCameraComposite/GetCameraLayerOffset 0x1ae0ea0.
-            float height = 0f;
-            int count = 0;
-            if ((int)flags <= 0) height = 1f;
-            else if (locators != null)
-                for (int i = 0; i < locators.Length && i < 20; i++)
-                    if (flags.hasFlag((LiveCharaPosition)i) && locators[i] != null)
-                    {
-                        height += locators[i].liveCharaHeightValue;
-                        count++;
-                    }
-            if (count > 1) height /= count;
-            return height > 0f ? min + (max - min) * ((height - 130f) / 60f) : Vector3.zero;
-        }
     }
 }

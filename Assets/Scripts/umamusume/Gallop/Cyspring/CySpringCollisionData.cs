@@ -17,16 +17,16 @@ namespace Gallop
     {
         private const string None = "None";
 
-        [SerializeField] private string _collisionName;
-        [SerializeField] private string _targetObjectName;
-        [SerializeField] private bool _isOtherTarget;
-        [SerializeField] private Vector3 _offset;
-        [SerializeField] private Vector3 _offset2;
-        [SerializeField] private float _radius;
-        [SerializeField] private float _distance;
-        [SerializeField] private Vector3 _normal;
-        [SerializeField] private CollisionType _type;
-        [SerializeField] private bool _isInner;
+        [SerializeField] public string _collisionName;
+        [SerializeField] public string _targetObjectName;
+        [SerializeField] public bool _isOtherTarget;
+        [SerializeField] public Vector3 _offset;
+        [SerializeField] public Vector3 _offset2;
+        [SerializeField] public float _radius;
+        [SerializeField] public float _distance;
+        [SerializeField] public Vector3 _normal;
+        [SerializeField] public CollisionType _type;
+        [SerializeField] public bool _isInner;
 
         private CySpringCollisionRuntimeData _runtimeData;
 
@@ -36,29 +36,9 @@ namespace Gallop
             set => _collisionName = value;
         }
 
-        //(P1 — port del camino ORIGINAL de física) Los campos son privados porque los consume
-        //el puente nativo (CySpringController). El camino original (DynamicBone) los leía
-        //directamente como públicos. Estos accesores de solo lectura permiten recuperar ese
-        //camino sin abrir los campos ni tocar la serialización.
-        public string TargetObjectName => _targetObjectName;
-        public bool IsOtherTarget => _isOtherTarget;
-        public Vector3 Offset => _offset;
-        public Vector3 Offset2 => _offset2;
-        public float Radius => _radius;
-
-        // (INTENTO 3b) Permite ajustar el radio desde el cargador (p. ej. anular un colisor
-        // concreto antes del bind). El pinchazo del puente nativo construye el array de colisiones
-        // desde este dato, asi que el cambio debe hacerse ANTES de LoadFromDataContainers.
-        public void SetRadius(float radius)
-        {
-            _radius = radius;
-        }
-        public float Distance => _distance;
-        public Vector3 Normal => _normal;
-        public CollisionType Type => _type;
-        public bool IsInner => _isInner;
-
         public CySpringCollisionRuntimeData RuntimeData => _runtimeData;
+
+        public CySpringCollisionData() { }
 
         public CySpringCollisionData(
             string collisionName,

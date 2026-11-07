@@ -31,6 +31,10 @@ namespace Gallop
         // ApplyBloomParameter 发布到 PostImageEffectFeature.RuntimeParameter。
         public ExposureParam ExposureParam { get; } = new ExposureParam();
         public ToneCurveParam ToneCurveParam { get; } = new ToneCurveParam();
+        public ref GlobalFogPass.Parameter GlobalFogParam=>ref RenderParameter.GlobalFog;
+        public ref AuraPass.Parameter AuraParam=>ref RenderParameter.Aura;
+        public ref TransmittedLightPass.Parameter TransmittedLightParam=>ref RenderParameter.TransmittedLight;
+        public ref RainSplashPass.Parameter RainSplashParam=>ref RenderParameter.RainSplash;
 
         // User A/B gate, independent of authored timeline data and other effects.
         // Enabled after fixing the source focus-mode setter ordering regression.

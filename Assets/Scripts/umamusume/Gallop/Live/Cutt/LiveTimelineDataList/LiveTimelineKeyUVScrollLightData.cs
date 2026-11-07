@@ -41,12 +41,11 @@ namespace Gallop.Live.Cutt
 
         private const int ENABLE_TEXTURE = 65536;
 
-        // 这里先按当前逻辑实现
-        // 原版逻辑是从某个 flags 位来判断 ENABLE_TEXTURE
-        // 但目前项目里没有那个 flags 字段，因此这里先保留现有的等价处理
         public bool IsEnabledTexture
         {
-            get => texture != null;
+            // Original getter 0x4f1ed00 tests the inherited attribute bit,
+            // independently of whether a texture pointer currently resolves.
+            get => (((int)attribute) & ENABLE_TEXTURE) != 0;
             private set { }
         }
 

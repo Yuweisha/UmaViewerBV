@@ -11,21 +11,25 @@ namespace Gallop.Live
     [Serializable]
     public class StageObjectUnit
     {
-        public string UnitName;
+        public string UnitName = string.Empty;
         public GameObject[] ChildObjects;
         public string[] _childObjectNames;
-
         public bool IsEnabled { get; private set; }
         public int UnitNameHash { get; private set; }
-        public int[] ChildObjectNameHashArray { get; private set; }
+        public int[] ChildObjectNameHashArray { get; private set; } = Array.Empty<int>();
 
         public void Initialize()
         {
-            IsEnabled = false;
-            UnitNameHash = 0;
-            ChildObjectNameHashArray = null;
-            if (string.IsNullOrEmpty(UnitName)) return;
+            Initialize(null);
+        }
 
+        public void Initialize(Transform parent)
+        {
+            // Native 4f0c970 leaves previous hashes intact on an early return;
+            // parent is present in the ABI but unused by the original body.
+            IsEnabled = false;
+            if (string.IsNullOrEmpty(UnitName))
+                return;
             UnitNameHash = FNVHash.Generate(UnitName);
             var hashes = new List<int>();
             if (ChildObjects != null)
@@ -36,7 +40,8 @@ namespace Gallop.Live
                 for (int i = 0; i < _childObjectNames.Length; i++)
                     if (!string.IsNullOrEmpty(_childObjectNames[i]))
                         hashes.Add(FNVHash.Generate(_childObjectNames[i]));
-            if (hashes.Count == 0) return;
+            if (hashes.Count == 0)
+                return;
             ChildObjectNameHashArray = hashes.ToArray();
             IsEnabled = true;
         }
@@ -53,15 +58,74 @@ namespace Gallop.Live
     [Serializable]
     public class NeonMaterialInfo
     {
-        [SerializeField] private Material _mainMaterial;
-        [SerializeField] private Material _backMaterial;
-
+        [SerializeField]
+        private Material _mainMaterial;
+        [SerializeField]
+        private Material _backMaterial;
         public Material MainMaterial => _mainMaterial;
         public Material BackMaterial => _backMaterial;
     }
 
-    public class StageController : MonoBehaviour
+    public partial class StageController : MonoBehaviour
     {
+        [SerializeField]
+        private GameObject[] _blackBoardNamePrefabs;
+        [SerializeField]
+        private GameObject _blackBoardNameAtlas;
+        private LiveBlackBoardNameControl<GameObject, MeshRenderer, LiveBlackBoardTargets> _blackBoardNames;
+        // Call only once the original font/canvas/atlas installers are available.
+        // The current 1028 source stage has no name-board resources.
+        public void InitializeBlackBoardNameResources(UnityLiveBlackBoardNameServices services)
+        {
+            if (services == null)
+                throw new ArgumentNullException(nameof(services));
+            if (_blackBoardNames != null && _blackBoardNames.Texture != null)
+                throw new InvalidOperationException("Blackboard targets already registered");
+            _blackBoardNames = new LiveBlackBoardNameControl<GameObject, MeshRenderer, LiveBlackBoardTargets>(services);
+        }
+
+        private void MakeBlackBoardNameTexture(GameObject instance, GameObject original)
+        {
+            if (_blackBoardNames == null)
+            {
+                // Preserve the native no-resource branch; a matching resource
+                // must fail explicitly until the original installer is supplied.
+                var services = new UnityLiveBlackBoardNameServices(() => throw new NotSupportedException("Original blackboard font/canvas installer is not bound"), t => throw new NotSupportedException("Original blackboard Initialize is not bound"), (t, a) => throw new NotSupportedException("Original blackboard AtlasReference is not bound"));
+                _blackBoardNames = new LiveBlackBoardNameControl<GameObject, MeshRenderer, LiveBlackBoardTargets>(services);
+            }
+
+            _blackBoardNames.NamePrefabs = _blackBoardNamePrefabs;
+            _blackBoardNames.Atlas = _blackBoardNameAtlas;
+            _blackBoardNames.Make(instance, original);
+        }
+
+        [SerializeField]
+        private GameObject[] _preLiveSkitObjects;
+        [SerializeField]
+        private GameObject[] _afterLiveSkitObjects;
+        private static void SetSkitActive(GameObject[] objects, bool active)
+        {
+            LiveStageStartControl.SetActive(objects, active, (obj, value) => obj.SetActive(value));
+        }
+
+        public void StartPreLiveSkit()
+        {
+            SetSkitActive(_preLiveSkitObjects, true);
+            SetSkitActive(_afterLiveSkitObjects, false);
+        }
+
+        public void StartMainLive()
+        {
+            SetSkitActive(_preLiveSkitObjects, false);
+            SetSkitActive(_afterLiveSkitObjects, false);
+        }
+
+        public void StartAfterLiveSkit()
+        {
+            SetSkitActive(_preLiveSkitObjects, false);
+            SetSkitActive(_afterLiveSkitObjects, true);
+        }
+
         private enum BgColor2RuntimeKind
         {
             Wash,
@@ -92,23 +156,120 @@ namespace Gallop.Live
         int _logEvery = 30;
         int _logCount = 0;
         public List<GameObject> _stageObjects;
+        // Preserve the original prefab references; these are separate from _stageObjects.
+        [SerializeField]
+        private GameObject[] _animationObjects;
+        private readonly Dictionary<GameObject, StageSourceAnimation> _sourceAnimations = new Dictionary<GameObject, StageSourceAnimation>();
+        readonly List<Animation> _pauseAnimations = new List<Animation>();
+        public void Pause(bool paused)
+        {
+            // Native UpdateStageObjectAnimation/UpdateAutoAnimation reset every
+            // owned Legacy state to speed 0/1, including non-playing states.
+            foreach (var animation in _pauseAnimations)
+                if (animation != null)
+                    foreach (AnimationState state in animation)
+                        state.speed = paused ? 0f : 1f;
+            GraphicSettings.SetEffectTimeScale(paused ? 0f : 1f);
+        }
+
+        public void UpdateAnimation(ref AnimationUpdateInfo info)
+        {
+            if (info.data == null || string.IsNullOrEmpty(info.data.name))
+                return;
+            string name = info.data.name;
+            const string prefix = "AnimeObj";
+            // Native Stage.UpdateAnimation resolves the indexed alias first.
+            if (_animationObjects != null && name.StartsWith(prefix, StringComparison.Ordinal) && name.Length == prefix.Length + 1)
+            {
+                int index = name[prefix.Length] - 'A';
+                if (index >= 0 && index < _animationObjects.Length && _animationObjects[index] && StageObjectMap.TryGetValue(_animationObjects[index].name.Replace("(Clone)", ""), out var owner) && TrySampleStageAnimation(owner, ref info))
+                    return;
+            }
+
+            // Real prefab names address every registered work with this hash,
+            // including duplicate scene instances and objects outside the alias array.
+            if (!_objectsWorkInfoDictionary.TryGetValue(FNVHash.Generate(name), out var works))
+                return;
+            foreach (var work in works)
+                if (work.transform)
+                    TrySampleStageAnimation(work.transform.gameObject, ref info);
+        }
+
+        private bool TrySampleStageAnimation(GameObject owner, ref AnimationUpdateInfo info)
+        {
+            if (!owner || !owner.scene.IsValid() || !owner.GetComponent<Animation>())
+                return false;
+            if (!_sourceAnimations.TryGetValue(owner, out var animation))
+            {
+                animation = new StageSourceAnimation(owner);
+                _sourceAnimations.Add(owner, animation);
+            }
+
+            animation.Sample(info.animationId, ResolveStageAnimationTime(ref info), info.wrapMode);
+            return true;
+        }
+
+        private static float ResolveStageAnimationTime(ref AnimationUpdateInfo info)
+        {
+            if (info.UseAnimationTime)
+                return info.AnimationTime;
+            return LiveTimelineControl.MonitorFloat32(LiveTimelineControl.MonitorFloat32(info.progressTime * info.speed) + info.offsetTime);
+        }
+
         public StageObjectUnit[] _stageObjectUnits;
+        [SerializeField]
+        private StageObjectSelect[] _stageObjectSelects = Array.Empty<StageObjectSelect>();
         public Dictionary<string, StageObjectUnit> StageObjectUnitMap = new Dictionary<string, StageObjectUnit>();
         public Dictionary<string, GameObject> StageObjectMap = new Dictionary<string, GameObject>();
         public Dictionary<string, Transform> StageParentMap = new Dictionary<string, Transform>();
-
         private sealed class StageObjectWorkInfo
         {
+            public ParentConstraintComponent parentConstraint;
             public Transform transform;
             public Transform originalParent;
             public TransformBaseData startTransform;
             public Renderer[] renderers;
+            public bool UseScreenCapture;
+            public int ScreenCaptureId;
+            public LiveTimelineKeyObjectData.ScreenCaptureAspectType UseCaptureAspectType;
+            public bool Use2dBackground;
+            public int BgId, BgSubId;
+            public Texture OriginMainTexture;
         }
 
-        private readonly Dictionary<int, List<StageObjectWorkInfo>> _objectsWorkInfoDictionary =
-            new Dictionary<int, List<StageObjectWorkInfo>>();
-        private readonly Dictionary<int, List<Renderer>> _stageObjectRenderers =
-            new Dictionary<int, List<Renderer>>();
+        private readonly Dictionary<int, List<StageObjectWorkInfo>> _objectsWorkInfoDictionary = new Dictionary<int, List<StageObjectWorkInfo>>();
+        public Transform GetObjectWorkInfoTransform(int nameHash, out int count)
+        {
+            var work = ObjectWorkInfoQuery.GetTransform(_objectsWorkInfoDictionary, nameHash, out count) as StageObjectWorkInfo;
+            return work == null ? null : work.transform;
+        }
+
+        // Original Initialize0x4eae460 finds chara_locator_01..20 in the stage;
+        // StartUpdateTimeline0x4eb6710 installs those logical coordinate frames.
+        // They are not the model Position node's physical parent.
+        public void StartUpdateTimeline(LiveTimelineControl control)
+        {
+            var transforms = GetComponentsInChildren<Transform>(true);
+            for (int slot = 0; slot < 20 && slot < control.liveCharactorLocators.Length; slot++)
+            {
+                var locator = control.liveCharactorLocators[slot];
+                if (locator == null)
+                    continue;
+                string name = string.Format("chara_locator_{0:D02}", slot + 1);
+                Transform parent = null;
+                for (int i = 0; i < transforms.Length; i++)
+                    if (transforms[i].name == name)
+                    {
+                        parent = transforms[i];
+                        break;
+                    }
+
+                locator.liveParentDefaultTransform = parent;
+                locator.liveParentTransform = parent;
+            }
+        }
+
+        private readonly Dictionary<int, List<Renderer>> _stageObjectRenderers = new Dictionary<int, List<Renderer>>();
         private readonly Dictionary<Renderer, int> _bgColor1RendererProperties = new Dictionary<Renderer, int>();
         private readonly List<Renderer> _ambientColorRenderers = new List<Renderer>();
         private UnityEngine.MaterialPropertyBlock _stageColorBlock;
@@ -118,90 +279,67 @@ namespace Gallop.Live
         // Native static hash table +0x84 (global StageController.cctor): "BgBL", not "BG_BL".
         private static readonly int BgColor1AmbientTimelineHash = FNVHash.Generate("BgBL");
         private Color _currentAmbientColor;
-        [SerializeField] private bool _autoAddBlinkDriver = true;
-
+        [SerializeField]
+        private bool _autoAddBlinkDriver = true;
         [Header("Official-like BgColor2 material sources")]
-        [SerializeField] private Material[] _washLightMaterials;
+        [SerializeField]
+        private Material[] _washLightMaterials;
         [SerializeField]
         [Tooltip("レーザーオブジェクト")]
         private GameObject[] _laserObjects;
-
         private LaserController[] _laserControllerArray;
-
         [SerializeField]
         [Tooltip("レーザーマテリアル")]
         private Material[] _laserMaterials;
-
-
         private bool _laserSetupDone = false;
         private LiveTimelineControl _laserSetupTimelineControl;
-        private readonly Dictionary<object, int> _laserDataIndexMap =
-            new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-
+        private readonly Dictionary<object, int> _laserDataIndexMap = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         // 时间轴 LaserA/LaserB... 的字母实际对应 LiveTimelineLaserData._materialIndex。
         // 必须保存“材质索引 -> 该索引创建出的运行时 Renderer”，不能按材质名去重，
         // 否则多个同名的 Laser 实例会串色或只更新第一组。
-        private readonly Dictionary<int, List<Renderer>> _laserRenderersByMaterialIndex =
-            new Dictionary<int, List<Renderer>>();
-
-        [SerializeField] private Material[] _footLightMaterials;
-        [SerializeField] private NeonMaterialInfo[] _neonMaterialInfos;
-
+        private readonly Dictionary<int, List<Renderer>> _laserRenderersByMaterialIndex = new Dictionary<int, List<Renderer>>();
+        [SerializeField]
+        private Material[] _footLightMaterials;
+        [SerializeField]
+        private NeonMaterialInfo[] _neonMaterialInfos;
         [Header("BgColor direct driver")]
-        [SerializeField] private bool _enableBgColorDriver = true;
-        [SerializeField] private bool _bgColorFallbackToAllEligible = true;
-        [SerializeField] private bool _bgColorVerboseLog = false;
-        [SerializeField] private float[] _bgColorExtraValueTable = new float[] { 1f };
-        [SerializeField] private BgColorBindingOverride[] _bgColorBindingOverrides;
-
+        [SerializeField]
+        private bool _enableBgColorDriver = true;
+        [SerializeField]
+        private bool _bgColorFallbackToAllEligible = true;
+        [SerializeField]
+        private bool _bgColorVerboseLog = false;
+        [SerializeField]
+        private BgColorBindingOverride[] _bgColorBindingOverrides;
         private readonly Dictionary<string, List<Renderer>> _bgColorRendererCache = new Dictionary<string, List<Renderer>>(StringComparer.OrdinalIgnoreCase);
         private readonly List<Renderer> _bgColorAllEligibleRenderers = new List<Renderer>(256);
         private readonly HashSet<string> _bgColorMissingLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
         private readonly Dictionary<string, List<BgColor2RuntimeGroup>> _bgColor2GroupCache = new Dictionary<string, List<BgColor2RuntimeGroup>>(StringComparer.OrdinalIgnoreCase);
         private readonly List<BgColor2RuntimeGroup> _bgColor2Groups = new List<BgColor2RuntimeGroup>(64);
         private readonly List<Renderer> _allStageRenderers = new List<Renderer>(256);
         private readonly Dictionary<Material, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialRef = new Dictionary<Material, List<BgColor2RuntimeBinding>>();
         private readonly Dictionary<string, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialName = new Dictionary<string, List<BgColor2RuntimeBinding>>(StringComparer.OrdinalIgnoreCase);
-
         [Header("Environment mirror update")]
-        [SerializeField] private bool _enableEnvironmentMirrorUpdate = true;
-        [SerializeField] private List<MirrorReflection> _environmentMirrorTargets = new List<MirrorReflection>(8);
-        [SerializeField, HideInInspector] private float _currentMirrorReflectionRate = 1f;
-
+        [SerializeField]
+        private bool _enableEnvironmentMirrorUpdate = true;
+        [SerializeField]
+        private List<MirrorReflection> _environmentMirrorTargets = new List<MirrorReflection>(8);
+        [SerializeField, HideInInspector]
+        private float _currentMirrorReflectionRate = 1f;
         [Header("Mirror reflection specific update")]
-        [SerializeField] private bool _enableMirrorReflectionSpecificUpdate = true;
-        [SerializeField] private int _mirrorBgLayerMask = 0;
-        [SerializeField] private int _mirror3dLayerMask = 0;
-        [SerializeField] private bool _autoAttachMirrorReflection = true;
-        [SerializeField] private bool _mirrorAutoAttachLog = true;
+        [SerializeField]
+        private bool _enableMirrorReflectionSpecificUpdate = true;
+        [SerializeField]
+        private int _mirrorBgLayerMask = 0;
+        [SerializeField]
+        private int _mirror3dLayerMask = 0;
+        [SerializeField]
+        private bool _autoAttachMirrorReflection = true;
+        [SerializeField]
+        private bool _mirrorAutoAttachLog = true;
+        private bool _mirrorCacheInitialized;
         private readonly Dictionary<int, MirrorReflection> _mirrorByTimelineHash = new Dictionary<int, MirrorReflection>();
         private LiveTimelineControl _boundTimelineControl;
-
-        // `animationList` -> `OnUpdateAnimation`: stage objects that carry the game's
-        // AnimationObjectController (the `blinklight_wash_*` wash lights). Their legacy Animation
-        // ships without a default clip, so nothing moves until the timeline picks a clip.
-        private readonly List<AnimationObjectController> _animationObjects = new List<AnimationObjectController>();
-        private bool _animationObjectsBuilt;
-        private int _animationObjectsScanAttempts;
-        private const int AnimationObjectsScanAttemptLimit = 600;
-
-        // Legacy Animation components that play on their own (e.g. the
-        // `blinklight_wash_wall_a_circle` moving-head loop): they have no AnimationObjectController,
-        // so the timeline does not drive them. The real clip is kept, but its playhead is written from
-        // the live time so pause / seek / offline recording stay in sync with the rest of the stage.
-        private sealed class LegacyTimelineAnimation
-        {
-            public Animation animation;
-            public AnimationState state;
-            public float speed;
-        }
-
-        private readonly List<LegacyTimelineAnimation> _legacyTimelineAnimations = new List<LegacyTimelineAnimation>();
-        private bool _legacyTimelineAnimationsBuilt;
-        private int _legacyTimelineScanAttempts;
-        private const int LegacyTimelineScanAttemptLimit = 600;
-
         private const int MirrorCharacterSlotCount = 20;
         private sealed class MirrorCameraTarget
         {
@@ -217,9 +355,7 @@ namespace Gallop.Live
         private LiveTimelineData _mirrorTimelineData;
         private Camera _activeMirrorRenderingCamera;
         private bool _mirrorRenderingCallbacksBound;
-
-        internal void InitializeMirrorReflections(IReadOnlyList<MirrorReflection> mirrors, Camera baseCamera,
-            Func<float> fovFactor, LiveTimelineControl timeline, IList<UmaContainerCharacter> characters)
+        internal void InitializeMirrorReflections(IReadOnlyList<MirrorReflection> mirrors, Camera baseCamera, Func<float> fovFactor, LiveTimelineControl timeline, IList<UmaContainerCharacter> characters)
         {
             DestroyMirrorReflections();
             _mirrorTimelineData = timeline != null ? timeline.data : null;
@@ -238,6 +374,8 @@ namespace Gallop.Live
                 _mirrorCameraTargets.Add(new MirrorCameraTarget { Mirror = mirror });
                 RegisterMirrorReflection(mirror);
             }
+
+            _mirrorCacheInitialized = true;
             PrepareMirrorCharacters();
             BindMirrorRenderingCallbacks();
         }
@@ -259,10 +397,8 @@ namespace Gallop.Live
 
         private void BindMirrorRenderingCallbacks()
         {
-            if (_mirrorRenderingCallbacksBound || !isActiveAndEnabled || _mirrorTimelineData == null ||
-                !_mirrorTimelineData.IsChangedCharaLayerOnlyMirrorRendering)
+            if (_mirrorRenderingCallbacksBound || !isActiveAndEnabled || _mirrorTimelineData == null || !_mirrorTimelineData.IsChangedCharaLayerOnlyMirrorRendering)
                 return;
-
             _mirrorRenderingCallbacksBound = true;
             for (int i = 0; i < _mirrorCameraTargets.Count; i++)
                 CompleteMirrorReinitialization(_mirrorCameraTargets[i].Mirror);
@@ -282,6 +418,7 @@ namespace Gallop.Live
                 Camera.onPostRender -= OnEndBuiltInCameraRendering;
                 _mirrorRenderingCallbacksBound = false;
             }
+
             for (int i = 0; i < _mirrorCameraTargets.Count; i++)
                 PrepareMirrorReinitialization(_mirrorCameraTargets[i].Mirror);
             RestoreMirrorActorLayers();
@@ -289,6 +426,7 @@ namespace Gallop.Live
 
         internal void DestroyMirrorReflections()
         {
+            _mirrorCacheInitialized = false;
             UnbindMirrorRenderingCallbacks();
             for (int i = 0; i < _mirrorCameraTargets.Count; i++)
                 if (_mirrorCameraTargets[i].Mirror != null)
@@ -352,6 +490,7 @@ namespace Gallop.Live
                 if (mirror != null && mirror.MirrorCamera == camera)
                     return _mirrorCameraTargets[i];
             }
+
             return null;
         }
 
@@ -365,8 +504,7 @@ namespace Gallop.Live
             int layer = GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerCharacter3D_NotReflect);
             for (int i = 0; i < MirrorCharacterSlotCount; i++)
                 if (_mirrorBoundCharacters[i] != null)
-                    _mirrorBoundCharacters[i].SetLayerBeforeMirrorCameraRendering(
-                        (target.BodyMask & (1 << i)) != 0, (target.HeadMask & (1 << i)) != 0, layer);
+                    _mirrorBoundCharacters[i].SetLayerBeforeMirrorCameraRendering((target.BodyMask & (1 << i)) != 0, (target.HeadMask & (1 << i)) != 0, layer);
         }
 
         private void OnEndMirrorCameraRendering(ScriptableRenderContext context, Camera camera)
@@ -433,6 +571,24 @@ namespace Gallop.Live
                 OnEndCameraRendering(default, camera);
         }
 
+        bool _viewerStageInitialized;
+        private MultiLightShadowRuntime _multiLightShadowRuntime;
+        private void UpdateMultiLightShadowParam(ref MultiLightShadowUpdateInfo value) => _multiLightShadowRuntime?.Apply(ref value);
+        public void InitializeLoadedStage(LiveTimelineControl control)
+        {
+            if (!_viewerStageInitialized)
+                throw new InvalidOperationException("Stage Awake initialization did not complete");
+            if (control == null)
+                throw new ArgumentNullException(nameof(control));
+            InitializeDepthOnlyStageObjects(control.data);
+            foreach (var driver in GetComponentsInChildren<StageBlinkLightDriver>(true))
+                driver.RandomRatios = Director.instance.BlinkRandomRatios;
+            CollectBillboardController(Director.instance.MainCameraTransform);
+            TryBindTimelineCallbacks();
+            if (_boundTimelineControl != control)
+                throw new InvalidOperationException("Stage timeline owner differs from loaded Director");
+        }
+
         private void Awake()
         {
             _stageColorBlock = new UnityEngine.MaterialPropertyBlock();
@@ -440,22 +596,21 @@ namespace Gallop.Live
             AutoAddDriver("StageWashLightDriver");
             AutoAddDriver("StageUVScrollLightDriver");
             //AutoAddDriver("StageLaserDriver");
-
             InitializeStage();
+            _multiLightShadowRuntime = new MultiLightShadowRuntime(this);
             RebuildMirrorReflectionCache();
             RebuildBgColorCache();
-
+            Debug.Log("[StageController] stage parts = " + string.Join(", ", _stageObjects.ConvertAll(o => o ? o.name : "<null>")));
             if (Director.instance)
                 Director.instance._stageController = this;
-
             TryBindTimelineCallbacks();
+            _viewerStageInitialized = true;
         }
 
         private void OnEnable()
         {
             if (Director.instance)
                 Director.instance._stageController = this;
-
             TryBindTimelineCallbacks();
             BindMirrorRenderingCallbacks();
         }
@@ -466,9 +621,7 @@ namespace Gallop.Live
         {
             if (_laserControllerArray == null)
                 return;
-
             Transform currentCameraTransform = null;
-
             if (Director.instance != null)
             {
                 currentCameraTransform = Director.instance.MainCameraTransform;
@@ -481,9 +634,7 @@ namespace Gallop.Live
 
             for (int i = 0; i < _laserControllerArray.Length; i++)
             {
-                LaserController controller =
-                    _laserControllerArray[i];
-
+                LaserController controller = _laserControllerArray[i];
                 if (controller == null || !controller.IsInitialized)
                 {
                     continue;
@@ -492,27 +643,20 @@ namespace Gallop.Live
                 // 项目使用多台 Camera，并在切镜头时
                 // 更换 MainCameraTransform 的引用
                 controller.SetTargetCameraTransform(currentCameraTransform);
-
                 controller.AlterUpdate();
             }
         }
 
         private void LateUpdate()
         {
-            UpdateLegacyTimelineAnimations();
-
             var dir = Director.instance;
             var ctl = dir ? dir._liveTimelineControl : null;
-
             if (_boundTimelineControl != ctl)
                 TryBindTimelineCallbacks();
-
             if (!_laserSetupDone && _boundTimelineControl != null)
                 TrySetupLaserObject(_boundTimelineControl);
-
             if (_laserControllerArray == null)
                 return;
-
             for (int i = 0; i < _laserControllerArray.Length; i++)
             {
                 LaserController controller = _laserControllerArray[i];
@@ -526,43 +670,49 @@ namespace Gallop.Live
             var dir = Director.instance;
             if (!dir)
                 return;
-
             dir._stageController = this;
-
             var ctl = dir._liveTimelineControl;
             if (ctl == null)
                 return;
-
             if (_boundTimelineControl == ctl)
                 return;
-
             UnbindTimelineCallbacks(_boundTimelineControl);
             _boundTimelineControl = ctl;
-
+            ctl.OnUpdateTextureAnimation += UpdateTextureAnimation;
             ctl.OnUpdateTransform -= UpdateTransform;
+            ctl.OnUpdateAnimation -= UpdateAnimation;
             ctl.OnUpdateObject -= UpdateObject;
+            ctl.OnUpdateBillboard -= UpdateBillboard;
             ctl.OnUpdateBgColor1 -= UpdateBgColor1;
             ctl.OnUpdateBgColor2 -= UpdateBgColor2;
             ctl.OnEnvironmentMirror -= UpdateEnvironemntMirror;
             ctl.OnUpdateMirrorReflection -= UpdateMirrorReflection;
             ctl.OnUpdateLaser -= UpdateLaser;
-            ctl.OnUpdateAnimation -= UpdateAnimation;
-
+            ctl.OnUpdateAudience -= EvaluateAudienceTimeline;
+            ctl.OnUpdateMultiLightShadowParam -= UpdateMultiLightShadowParam;
             ctl.OnUpdateTransform += UpdateTransform;
+            ctl.OnUpdateAnimation += UpdateAnimation;
             ctl.OnUpdateObject += UpdateObject;
+            ctl.OnUpdateBillboard += UpdateBillboard;
             ctl.OnUpdateBgColor1 += UpdateBgColor1;
             ctl.OnUpdateBgColor2 += UpdateBgColor2;
             ctl.OnEnvironmentMirror += UpdateEnvironemntMirror;
             ctl.OnUpdateMirrorReflection += UpdateMirrorReflection;
             ctl.OnUpdateLaser += UpdateLaser;
-            ctl.OnUpdateAnimation += UpdateAnimation;
-
+            ctl.OnUpdateAudience += EvaluateAudienceTimeline;
+            ctl.OnUpdateMultiLightShadowParam += UpdateMultiLightShadowParam;
+            ctl.OnUpdateTransmittedLightMask += UpdateTransmittedLightMask;
+            InitializeTransmittedLightMaskControllers(ctl);
+            BindAdditionalLight(ctl);
+            BindRendererTimeline(ctl);
+            BindWaveTimeline(ctl);
+            BindLegacyProjector(ctl);
             _laserSetupDone = false;
             _laserSetupTimelineControl = ctl;
             _laserDataIndexMap.Clear();
-
             TrySetupLaserObject(ctl);
         }
+
         private GameObject[] LoadDefaultLaserObjects()
         {
             string[] paths =
@@ -572,13 +722,10 @@ namespace Gallop.Live
                 "3d/effect/live/pfb_eff_live_laser_03",
                 "3d/effect/live/pfb_eff_live_laser_04",
             };
-
             var main = UmaViewerMain.Instance;
             if (main == null || main.AbList == null)
                 return Array.Empty<GameObject>();
-
             var list = new List<GameObject>();
-
             foreach (string path in paths)
             {
                 if (!main.AbList.TryGetValue(path, out var entry) || entry == null)
@@ -596,15 +743,11 @@ namespace Gallop.Live
 
                 string prefabName = path.Substring(path.LastIndexOf('/') + 1);
                 GameObject prefab = null;
-
                 foreach (string assetName in ab.GetAllAssetNames())
                 {
                     if (assetName.IndexOf(prefabName, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         prefab = ab.LoadAsset<GameObject>(assetName);
-                        if (LiveRuntimeDiagnostics.Enabled)
-                            LiveRuntimeDiagnostics.RecordAssetLoad(entry.Name, "LoadAsset", typeof(GameObject),
-                                new UnityEngine.Object[] { prefab }, prefab);
                         if (prefab != null)
                             break;
                     }
@@ -613,8 +756,6 @@ namespace Gallop.Live
                 if (prefab == null)
                 {
                     GameObject[] allPrefabs = ab.LoadAllAssets<GameObject>();
-                    if (LiveRuntimeDiagnostics.Enabled)
-                        LiveRuntimeDiagnostics.RecordAssetLoad(entry.Name, "LoadAllAssets", typeof(GameObject), allPrefabs);
                     foreach (GameObject go in allPrefabs)
                     {
                         if (go != null && go.name.IndexOf(prefabName, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -627,6 +768,7 @@ namespace Gallop.Live
 
                 if (prefab != null)
                 {
+                    Debug.Log("[StageController] loaded laser object: " + prefab.name);
                     list.Add(prefab);
                 }
                 else
@@ -637,16 +779,16 @@ namespace Gallop.Live
 
             return list.ToArray();
         }
+
         private void TrySetupLaserObject(LiveTimelineControl ctl)
         {
             if (ctl == null || ctl.data == null)
                 return;
-
             SetupLaserObject(ctl.data);
-
             if (_laserControllerArray != null)
             {
                 _laserSetupDone = true;
+                Debug.Log("[StageController] Laser setup done. count=" + _laserControllerArray.Length);
             }
         }
 
@@ -656,12 +798,10 @@ namespace Gallop.Live
             _laserControllerArray = null;
             _laserDataIndexMap.Clear();
             _laserRenderersByMaterialIndex.Clear();
-
             // 优先使用舞台/Live 资源加载流程已经设置好的专用 Laser prefab。
             // 没有专用资源时，才回退到多个 Live 共用的通用 Laser prefab。
             if (_laserObjects == null || _laserObjects.Length == 0)
                 _laserObjects = LoadDefaultLaserObjects();
-
             if (_laserObjects == null || _laserObjects.Length == 0)
             {
                 Debug.LogWarning("[StageController] no laser prefabs loaded");
@@ -683,22 +823,18 @@ namespace Gallop.Live
             }
 
             var result = new List<LaserController>();
-
             for (int wsIndex = 0; wsIndex < worksheets.Count; wsIndex++)
             {
                 object worksheet = worksheets[wsIndex];
                 if (worksheet == null)
                     continue;
-
                 IList laserList = GetMemberValue(worksheet, "laserList") as IList;
                 if (laserList == null || laserList.Count == 0)
                     continue;
-
                 for (int i = 0; i < laserList.Count; i++)
                 {
                     object laserData = laserList[i];
                     int objectIndex = GetLaserObjectIndex(laserData);
-
                     if (objectIndex < 0 || objectIndex >= _laserObjects.Length)
                     {
                         Debug.LogWarning($"[StageController] invalid laser prefab index={objectIndex}, prefabCount={_laserObjects.Length}; fallback to 0");
@@ -716,13 +852,8 @@ namespace Gallop.Live
                     // _materialIndex 是时间轴颜色分组索引：LaserA/B/C -> 0/1/2。
                     // 它不能因为 _laserMaterials 模板数组长度不足而被 Clamp，
                     // 否则 B/C 会合并到同一颜色组。
-                    int timelineMaterialIndex = Mathf.Max(
-                        0,
-                        GetLaserMaterialIndex(laserData, result.Count));
-
-                    Material material = ResolveLaserSourceMaterial(
-                        timelineMaterialIndex);
-
+                    int timelineMaterialIndex = Mathf.Max(0, GetLaserMaterialIndex(laserData, result.Count));
+                    Material material = ResolveLaserSourceMaterial(timelineMaterialIndex);
                     var controller = new LaserController();
                     try
                     {
@@ -745,36 +876,32 @@ namespace Gallop.Live
                     int controllerIndex = result.Count;
                     if (laserData != null && !_laserDataIndexMap.ContainsKey(laserData))
                         _laserDataIndexMap.Add(laserData, controllerIndex);
-
                     if (!_laserRenderersByMaterialIndex.TryGetValue(timelineMaterialIndex, out var laserRenderers))
                     {
                         laserRenderers = new List<Renderer>();
                         _laserRenderersByMaterialIndex.Add(timelineMaterialIndex, laserRenderers);
                     }
+
                     controller.AppendRuntimeRenderers(laserRenderers);
-
                     result.Add(controller);
-
+                    Debug.Log($"[StageController] instantiated laser index={controllerIndex}, " + $"prefab={prefab.name}, objectIndex={objectIndex}, " + $"timelineMaterialIndex={timelineMaterialIndex}, " + $"sourceMaterial={(material != null ? material.name : "<prefab>")}");
                 }
             }
 
             _laserControllerArray = result.ToArray();
-
             // Laser 在 Awake 之后动态实例化，必须重新建立 BgColor2 的
             // Renderer/Material 绑定，否则 LaserA、LaserB 等颜色轨不会生效。
             PopulateLaserMaterialsFromRuntimeIfNeeded();
             RebuildBgColorCache();
+            Debug.Log("[StageController] SetupLaserObject complete. count=" + _laserControllerArray.Length);
         }
 
         private Material ResolveLaserSourceMaterial(int timelineMaterialIndex)
         {
             if (_laserMaterials == null || _laserMaterials.Length == 0)
                 return null;
-
             // 有对应模板时直接使用。
-            if (timelineMaterialIndex >= 0 &&
-                timelineMaterialIndex < _laserMaterials.Length &&
-                _laserMaterials[timelineMaterialIndex] != null)
+            if (timelineMaterialIndex >= 0 && timelineMaterialIndex < _laserMaterials.Length && _laserMaterials[timelineMaterialIndex] != null)
             {
                 return _laserMaterials[timelineMaterialIndex];
             }
@@ -794,10 +921,8 @@ namespace Gallop.Live
         {
             if (_laserMaterials != null && _laserMaterials.Any(m => m != null))
                 return;
-
             if (_laserControllerArray == null || _laserControllerArray.Length == 0)
                 return;
-
             var runtimeMaterials = new List<Material>();
             for (int i = 0; i < _laserControllerArray.Length; i++)
             {
@@ -807,23 +932,19 @@ namespace Gallop.Live
 
             var unique = new List<Material>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
             for (int i = 0; i < runtimeMaterials.Count; i++)
             {
                 Material material = runtimeMaterials[i];
                 if (material == null)
                     continue;
-
                 string key = NormalizeKey(CleanMaterialName(material.name));
                 if (string.IsNullOrEmpty(key))
                     key = material.GetInstanceID().ToString();
-
                 if (seen.Add(key))
                     unique.Add(material);
             }
 
             _laserMaterials = unique.ToArray();
-
             if (_bgColorVerboseLog)
                 Debug.Log($"[StageController] collected runtime laser materials={_laserMaterials.Length}");
         }
@@ -832,30 +953,26 @@ namespace Gallop.Live
         {
             Transform[] all = transform.GetComponentsInChildren<Transform>(true);
             var result = new List<GameObject>();
-
             for (int i = 0; i < all.Length; i++)
             {
                 Transform candidate = all[i];
                 if (candidate == null || candidate == transform)
                     continue;
-
                 string n = candidate.name;
                 if (string.IsNullOrEmpty(n) || n.IndexOf("_laser", StringComparison.OrdinalIgnoreCase) < 0)
                     continue;
-
                 if (FindChildRecursive(candidate, "lasercontroller") == null)
                     continue;
-
                 bool nestedInAnotherLaser = false;
                 Transform parent = candidate.parent;
                 while (parent != null && parent != transform)
                 {
-                    if (parent.name.IndexOf("_laser", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                        FindChildRecursive(parent, "lasercontroller") != null)
+                    if (parent.name.IndexOf("_laser", StringComparison.OrdinalIgnoreCase) >= 0 && FindChildRecursive(parent, "lasercontroller") != null)
                     {
                         nestedInAnotherLaser = true;
                         break;
                     }
+
                     parent = parent.parent;
                 }
 
@@ -871,13 +988,11 @@ namespace Gallop.Live
         {
             if (root == null)
                 return null;
-
             for (int i = 0; i < root.childCount; i++)
             {
                 Transform child = root.GetChild(i);
                 if (string.Equals(child.name, childName, StringComparison.OrdinalIgnoreCase))
                     return child;
-
                 Transform found = FindChildRecursive(child, childName);
                 if (found != null)
                     return found;
@@ -890,18 +1005,13 @@ namespace Gallop.Live
         {
             if (_laserControllerArray == null)
                 return;
-
-            int index =
-                updateInfo.timelineIndex;
-
-            if (index < 0 ||
-                index >= _laserControllerArray.Length)
+            int index = updateInfo.timelineIndex;
+            if (index < 0 || index >= _laserControllerArray.Length)
             {
                 return;
             }
 
             LaserController controller = _laserControllerArray[index];
-
             controller?.UpdateInfo(ref updateInfo);
         }
 
@@ -909,7 +1019,6 @@ namespace Gallop.Live
         {
             if (_laserControllerArray == null)
                 return;
-
             for (int i = 0; i < _laserControllerArray.Length; i++)
             {
                 if (_laserControllerArray[i] != null)
@@ -924,10 +1033,8 @@ namespace Gallop.Live
         {
             if (Director.instance != null && Director.instance.MainCameraTransform != null)
                 return Director.instance.MainCameraTransform;
-
             if (Camera.main != null)
                 return Camera.main.transform;
-
             if (Director.instance != null)
             {
                 Camera cam = Director.instance.GetComponentInChildren<Camera>(true);
@@ -943,7 +1050,6 @@ namespace Gallop.Live
         {
             if (data == null)
                 return null;
-
             object v = GetMemberValue(data, "worksheetList");
             return v as IList;
         }
@@ -956,26 +1062,25 @@ namespace Gallop.Live
         private static int GetLaserObjectIndex(object laserData)
         {
             int v;
-
             // 官方 LiveTimelineLaserData 实际字段名。
             v = GetIntMember(laserData, "_objectIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "objectIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "laserObjectIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "prefabIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "laserPrefabIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "assetIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             // fallback：官方普通 live 默认从 pfb_eff_live_laser_01 开始
             return 0;
         }
@@ -983,36 +1088,32 @@ namespace Gallop.Live
         private int GetLaserMaterialIndex(object laserData, int fallbackOrder)
         {
             int v;
-
             // 官方 LiveTimelineLaserData 实际字段名。
             v = GetIntMember(laserData, "_materialIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "materialIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "laserMaterialIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "matIndex", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             v = GetIntMember(laserData, "materialNo", int.MinValue);
-            if (v != int.MinValue) return v;
-
+            if (v != int.MinValue)
+                return v;
             if (_laserMaterials != null && _laserMaterials.Length > 0)
                 return Mathf.Clamp(fallbackOrder, 0, _laserMaterials.Length - 1);
-
             return 0;
         }
 
         private static int GetIntMember(object obj, string name, int fallback)
         {
             object v = GetMemberValue(obj, name);
-
             if (v is int i)
                 return i;
-
             return fallback;
         }
 
@@ -1020,29 +1121,15 @@ namespace Gallop.Live
         {
             if (obj == null || string.IsNullOrEmpty(name))
                 return null;
-
             Type t = obj.GetType();
-
             while (t != null)
             {
-                var f = t.GetField(
-                    name,
-                    System.Reflection.BindingFlags.Instance |
-                    System.Reflection.BindingFlags.Public |
-                    System.Reflection.BindingFlags.NonPublic);
-
+                var f = t.GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
                 if (f != null)
                     return f.GetValue(obj);
-
-                var p = t.GetProperty(
-                    name,
-                    System.Reflection.BindingFlags.Instance |
-                    System.Reflection.BindingFlags.Public |
-                    System.Reflection.BindingFlags.NonPublic);
-
+                var p = t.GetProperty(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
                 if (p != null)
                     return p.GetValue(obj, null);
-
                 t = t.BaseType;
             }
 
@@ -1053,13 +1140,8 @@ namespace Gallop.Live
         {
             if (data == null)
                 return;
-
-
-            var fields = data.GetType().GetFields(
-                System.Reflection.BindingFlags.Instance |
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic);
-
+            Debug.Log("[LaserDataDump] type=" + data.GetType().FullName);
+            var fields = data.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
             foreach (var f in fields)
             {
                 if (f.FieldType == typeof(int))
@@ -1070,7 +1152,6 @@ namespace Gallop.Live
         private sealed class ReferenceEqualityComparer : IEqualityComparer<object>
         {
             public static readonly ReferenceEqualityComparer Instance = new ReferenceEqualityComparer();
-
             public new bool Equals(object x, object y)
             {
                 return ReferenceEquals(x, y);
@@ -1085,11 +1166,9 @@ namespace Gallop.Live
         private void AutoAddDriver(string shortTypeName)
         {
             Type t = null;
-
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 t = asm.GetType($"Gallop.Live.{shortTypeName}") ?? asm.GetType(shortTypeName);
-
                 if (t != null)
                     break;
             }
@@ -1109,6 +1188,7 @@ namespace Gallop.Live
             if (GetComponent(t) == null)
             {
                 gameObject.AddComponent(t);
+                Debug.Log($"[StageController] AutoAddDriver added: {t.FullName}");
             }
         }
 
@@ -1121,6 +1201,12 @@ namespace Gallop.Live
 
         private void OnDestroy()
         {
+            _multiLightShadowRuntime?.Dispose();
+            _multiLightShadowRuntime = null;
+            ReleaseAudienceObjects();
+            ReleaseTransmittedLightMaskControllers();
+            ReleaseLegacyProjectorStageResources();
+            ReleaseDepthOnlyStageResources();
             DestroyMirrorReflections();
             UnbindTimelineCallbacks(_boundTimelineControl);
             _boundTimelineControl = null;
@@ -1130,219 +1216,86 @@ namespace Gallop.Live
         {
             if (ctl == null)
                 return;
-
             ctl.OnUpdateTransform -= UpdateTransform;
+            ctl.OnUpdateMultiLightShadowParam -= UpdateMultiLightShadowParam;
+            ctl.OnUpdateTextureAnimation -= UpdateTextureAnimation;
+            ctl.OnUpdateAnimation -= UpdateAnimation;
             ctl.OnUpdateObject -= UpdateObject;
+            ctl.OnUpdateBillboard -= UpdateBillboard;
             ctl.OnUpdateBgColor1 -= UpdateBgColor1;
             ctl.OnUpdateBgColor2 -= UpdateBgColor2;
             ctl.OnEnvironmentMirror -= UpdateEnvironemntMirror;
             ctl.OnUpdateMirrorReflection -= UpdateMirrorReflection;
             ctl.OnUpdateLaser -= UpdateLaser;
-            ctl.OnUpdateAnimation -= UpdateAnimation;
-        }
-
-        // Routes the `animationList` track (`OnUpdateAnimation`) to the stage's
-        // AnimationObjectControllers, like the game's StageController.UpdateAnimationObjectOld.
-        // Cada clave solo debe aplicarse al objeto cuya pista nombra: sin este filtro la ultima
-        // pista de la lista se aplicaba a todos los objetos y dejaba a los haces con el playhead de
-        // otra pista (offset 0 / speed 0), o sea congelados.
-        private void UpdateAnimation(ref AnimationUpdateInfo updateInfo)
-        {
-            EnsureAnimationObjects();
-
-            string trackName = updateInfo.data != null ? updateInfo.data.name : null;
-            for (int i = 0; i < _animationObjects.Count; i++)
-            {
-                var controller = _animationObjects[i];
-                if (controller == null) continue;
-                if (!MatchesAnimationTrack(controller, trackName)) continue;
-                controller.UpdateStatus(ref updateInfo);
-            }
-        }
-
-        // Nombre de la pista (`pfb_env_live10135_blinkbeamlight_x`) contra el nombre del objeto
-        // (`...x(Clone)`) o el renombrado por el runtime (`light000_blinkbeamlight_x`).
-        private static bool MatchesAnimationTrack(AnimationObjectController controller, string trackName)
-        {
-            if (controller == null || string.IsNullOrEmpty(trackName)) return false;
-            Transform target = controller.transform;
-            for (int depth = 0; depth < 3 && target != null; depth++, target = target.parent)
-            {
-                string name = target.name;
-                if (string.IsNullOrEmpty(name)) continue;
-                const string clone = "(Clone)";
-                if (name.EndsWith(clone, StringComparison.Ordinal))
-                    name = name.Substring(0, name.Length - clone.Length);
-                if (string.Equals(name, trackName, StringComparison.Ordinal)) return true;
-                int underscore = name.IndexOf('_');
-                if (underscore > 0 && name.StartsWith("light", StringComparison.Ordinal) &&
-                    trackName.EndsWith(name.Substring(underscore), StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
-        }
-
-        // Collects the stage's animated objects once. Only the objects that carry the game's
-        // AnimationObjectController are timeline-driven; a plain Animation with a default clip
-        // already plays itself and is left alone.
-        private void EnsureAnimationObjects()
-        {
-            if (_animationObjectsBuilt)
-                return;
-
-            if (_animationObjectsScanAttempts >= AnimationObjectsScanAttemptLimit)
-                return;
-            _animationObjectsScanAttempts++;
-
-            Transform root = Director.instance != null ? Director.instance.transform : transform;
-            var animations = root.GetComponentsInChildren<Animation>(true);
-            if (animations == null || animations.Length == 0)
-                return;
-
-            _animationObjectsBuilt = true;
-
-            for (int i = 0; i < animations.Length; i++)
-            {
-                var animation = animations[i];
-                if (animation == null)
-                    continue;
-
-                var controller = animation.GetComponent<AnimationObjectController>();
-                if (controller == null)
-                    continue;
-
-                controller.Initialize();
-                if (!_animationObjects.Contains(controller))
-                    _animationObjects.Add(controller);
-            }
-        }
-
-        // Drives the legacy autonomous stage animations from the live time. The native game simply
-        // lets them play (`playAutomatically` + default clip), which is why they kept moving while the
-        // viewer was paused. Writing their playhead from `_liveCurrentTime` keeps the authored clip
-        // but makes pause, slider seeks and offline recording behave like the timeline-driven objects.
-        private void UpdateLegacyTimelineAnimations()
-        {
-            EnsureLegacyTimelineAnimations();
-            if (_legacyTimelineAnimations.Count == 0)
-                return;
-
-            Director director = Director.instance;
-            if (director == null)
-                return;
-
-            float liveTime = director._liveCurrentTime;
-            for (int i = 0; i < _legacyTimelineAnimations.Count; i++)
-            {
-                LegacyTimelineAnimation entry = _legacyTimelineAnimations[i];
-                AnimationState state = entry.state;
-                if (state == null || state.clip == null)
-                    continue;
-
-                float length = state.clip.length;
-                if (length <= 0f)
-                    continue;
-
-                float time = liveTime * entry.speed;
-                switch (state.wrapMode)
-                {
-                    case WrapMode.Loop:
-                        time = Mathf.Repeat(time, length);
-                        break;
-                    case WrapMode.PingPong:
-                        time = Mathf.PingPong(time, length);
-                        break;
-                    default:
-                        time = Mathf.Clamp(time, 0f, length);
-                        break;
-                }
-
-                state.speed = 0f; // the playhead is written from the live time
-                state.time = time;
-                entry.animation.Sample();
-            }
-        }
-
-        private void EnsureLegacyTimelineAnimations()
-        {
-            if (_legacyTimelineAnimationsBuilt)
-                return;
-            if (_legacyTimelineScanAttempts >= LegacyTimelineScanAttemptLimit)
-                return;
-            _legacyTimelineScanAttempts++;
-
-            Animation[] animations = GetComponentsInChildren<Animation>(true);
-            if (animations == null || animations.Length == 0)
-                return;
-
-            _legacyTimelineAnimationsBuilt = true;
-            for (int i = 0; i < animations.Length; i++)
-            {
-                Animation animation = animations[i];
-                if (animation == null)
-                    continue;
-
-                // Timeline-driven objects (the ground wash lights) are already handled by UpdateAnimation.
-                if (animation.GetComponent<AnimationObjectController>() != null)
-                    continue;
-
-                // Only animations that actually run on their own. The mirror-scan fixtures have
-                // playAutomatically == false and are driven manually by MirrorScanLightRuntime.
-                if (!animation.playAutomatically || !animation.isPlaying)
-                    continue;
-
-                foreach (AnimationState state in animation)
-                {
-                    if (state == null || state.clip == null)
-                        continue;
-                    if (Mathf.Approximately(state.speed, 0f))
-                        continue;
-
-                    _legacyTimelineAnimations.Add(new LegacyTimelineAnimation
-                    {
-                        animation = animation,
-                        state = state,
-                        speed = state.speed
-                    });
-                    state.speed = 0f; // the playhead is written from the live time
-                }
-            }
+            ctl.OnUpdateTransmittedLightMask -= UpdateTransmittedLightMask;
+            ctl.OnUpdateAudience -= EvaluateAudienceTimeline;
+            UnbindAdditionalLight(ctl);
+            UnbindRendererTimeline(ctl);
+            UnbindWaveTimeline(ctl);
+            UnbindLegacyProjector(ctl);
         }
 
         private void AutoAttachMirrorReflectionComponents()
         {
             if (!_autoAttachMirrorReflection)
                 return;
-
             var renderers = GetComponentsInChildren<Renderer>(true);
             if (renderers == null || renderers.Length == 0)
                 return;
-
+            string stageId = ResolveMirrorStageId();
+            bool hasAuthoredTable = MirrorReflectionPrefabTable.HasStage(stageId);
+            int attachedCount = 0;
             for (int i = 0; i < renderers.Length; i++)
             {
                 var renderer = renderers[i];
-                if (!ShouldAutoAttachMirrorReflection(renderer))
+                if (renderer == null || renderer.GetComponent<MirrorReflection>() != null)
                     continue;
+                string objectName = StripCloneSuffix(renderer.gameObject.name);
+                MirrorReflectionPrefabTable.Row row;
+                if (hasAuthoredTable && MirrorReflectionPrefabTable.TryGet(stageId, objectName, out row))
+                {
+                    if (!HasRenderableMirrorMaterial(renderer))
+                        continue;
+                    var mirror = renderer.gameObject.AddComponent<MirrorReflection>();
+                    mirror.ApplyPrefabRow(row);
+                    attachedCount++;
+                    if (_mirrorAutoAttachLog)
+                        Debug.Log($"[StageController] Restored authored MirrorReflection -> {stageId}/{objectName}");
+                    continue;
+                }
 
+                // Without an authored row, keep the old conservative receiver
+                // fallback only for exactly named mirror/sea receivers.
+                if (hasAuthoredTable || !ShouldAutoAttachMirrorReflection(renderer))
+                    continue;
                 renderer.gameObject.AddComponent<MirrorReflection>();
-
+                attachedCount++;
                 if (_mirrorAutoAttachLog)
                     Debug.Log($"[StageController] Auto attached MirrorReflection -> {GetTransformPath(renderer.transform)}");
             }
+
+            if (attachedCount > 0)
+                Debug.Log($"[StageController] Auto attached {attachedCount} MirrorReflection component(s).");
+        }
+
+        private string ResolveMirrorStageId()
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(gameObject.name, @"(live\d+)");
+            return match.Success ? match.Value : string.Empty;
         }
 
         private bool ShouldAutoAttachMirrorReflection(Renderer renderer)
         {
             if (renderer == null)
                 return false;
-
             if (renderer.GetComponent<MirrorReflection>() != null)
                 return false;
-
             if (renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer)
                 return false;
-
-            return HasRenderableMirrorMaterial(renderer) || HasMirrorLikeName(renderer.transform);
+            // The receiver name is the authoritative boundary. Mirror-ball
+            // alpha/light parts also carry _ReflectionTex and must not create
+            // their own mirror camera.
+            return HasMirrorLikeName(renderer.transform) && HasRenderableMirrorMaterial(renderer);
         }
 
         private bool HasRenderableMirrorMaterial(Renderer renderer)
@@ -1350,16 +1303,13 @@ namespace Gallop.Live
             var materials = renderer.sharedMaterials;
             if (materials == null || materials.Length == 0)
                 return false;
-
             for (int i = 0; i < materials.Length; i++)
             {
                 var mat = materials[i];
                 if (mat == null)
                     continue;
-
                 if (mat.HasProperty("_ReflectionRate") || mat.HasProperty("_ReflectionTex"))
                     return true;
-
                 if (mat.name.IndexOf("mirror", StringComparison.OrdinalIgnoreCase) >= 0)
                     return true;
             }
@@ -1369,23 +1319,27 @@ namespace Gallop.Live
 
         private bool HasMirrorLikeName(Transform tr)
         {
-            while (tr != null && tr != transform)
-            {
-                string candidate = StripCloneSuffix(tr.name);
-                if (candidate.IndexOf("mirror", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
-
-                tr = tr.parent;
-            }
-
-            return false;
+            if (tr == null)
+                return false;
+            string candidate = StripCloneSuffix(tr.name);
+            // Native prefab MirrorReflection lives on the floor receiver itself
+            // (1177: mirror_a/mirror_b). Do not walk ancestors: doing that
+            // attached a mirror Camera to every mirrorball alpha/light child.
+            if (candidate.IndexOf("mirrorball", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+            if (candidate.IndexOf("alpha", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+            if (candidate.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+            if (candidate.IndexOf("flare", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+            return candidate.Equals("mirror", StringComparison.OrdinalIgnoreCase) || candidate.Equals("mirror_a", StringComparison.OrdinalIgnoreCase) || candidate.Equals("mirror_b", StringComparison.OrdinalIgnoreCase) || candidate.StartsWith("mirror_", StringComparison.OrdinalIgnoreCase) || candidate.StartsWith("mirror0", StringComparison.OrdinalIgnoreCase) || candidate.StartsWith("sea_", StringComparison.OrdinalIgnoreCase);
         }
 
         private string GetTransformPath(Transform tr)
         {
             if (tr == null)
                 return "<null>";
-
             var names = new List<string>(8);
             while (tr != null && tr != transform)
             {
@@ -1399,10 +1353,13 @@ namespace Gallop.Live
 
         private void RebuildMirrorReflectionCache()
         {
+            _mirrorCacheInitialized = true;
             _environmentMirrorTargets.Clear();
             _mirrorByTimelineHash.Clear();
             AutoAttachMirrorReflectionComponents();
-
+            var billboardCamera = Director.instance != null ? Director.instance.MainCameraTransform : null;
+            if (billboardCamera != null)
+                CollectBillboardController(billboardCamera);
             var localMirrors = GetComponentsInChildren<MirrorReflection>(true);
             if (localMirrors != null)
             {
@@ -1429,12 +1386,9 @@ namespace Gallop.Live
         {
             if (mirror == null)
                 return;
-
             if (!_environmentMirrorTargets.Contains(mirror))
                 _environmentMirrorTargets.Add(mirror);
-
             RegisterMirrorReflectionAlias(mirror, mirror.name);
-
             Transform current = mirror.transform.parent;
             while (current != null && current != transform)
             {
@@ -1446,7 +1400,6 @@ namespace Gallop.Live
         private void RegisterMirrorReflectionAlias(MirrorReflection mirror, string alias)
         {
             RegisterMirrorReflectionHash(mirror, GenerateMirrorTimelineHash(alias));
-
             string normalizedAlias = StripCloneSuffix(alias);
             if (!string.Equals(normalizedAlias, alias, StringComparison.Ordinal))
                 RegisterMirrorReflectionHash(mirror, GenerateMirrorTimelineHash(normalizedAlias));
@@ -1456,7 +1409,6 @@ namespace Gallop.Live
         {
             if (mirror == null || hash == 0 || _mirrorByTimelineHash.ContainsKey(hash))
                 return;
-
             _mirrorByTimelineHash.Add(hash, mirror);
         }
 
@@ -1464,50 +1416,72 @@ namespace Gallop.Live
         {
             if (string.IsNullOrEmpty(name))
                 return name;
-
             return name.Replace("(Clone)", "");
         }
 
         private static int GenerateMirrorTimelineHash(string timelineName)
         {
-            if (string.IsNullOrEmpty(timelineName))
-                return 0;
-
-            unchecked
-            {
-                const uint offset = 2166136261u;
-                const uint prime = 16777619u;
-
-                uint hash = offset;
-                for (int i = 0; i < timelineName.Length; i++)
-                {
-                    hash ^= timelineName[i];
-                    hash *= prime;
-                }
-                return (int)hash;
-            }
+            return FNVHash.Generate(timelineName);
         }
 
         private void UpdateEnvironemntMirror(ref EnvironmentMirrorUpdateInfo updateInfo)
         {
             if (!_enableEnvironmentMirrorUpdate)
                 return;
-
             if (!updateInfo.isValid)
                 return;
-
-            if (_environmentMirrorTargets == null || _environmentMirrorTargets.Count == 0)
+            if (!_mirrorCacheInitialized)
                 RebuildMirrorReflectionCache();
-
             _currentMirrorReflectionRate = updateInfo.mirrorReflectionRate;
+            // Original EnvironmentMirror parent 0x4eb8b80 updates every target,
+            // independently of whether per-camera layer callbacks are bound.
+            bool changeCharacterLayers = _mirrorTimelineData != null && _mirrorTimelineData.IsChangedCharaLayerOnlyMirrorRendering;
+            if (updateInfo.mirror)
+            {
+                int bodyMask = (int)updateInfo.charaPositionFlag;
+                int headMask = (int)(updateInfo.IsEnabledCharacterMirrorHead ? updateInfo.VisibleHeadFlag : updateInfo.charaPositionFlag);
+                for (int i = 0; i < _mirrorCameraTargets.Count; i++)
+                {
+                    _mirrorCameraTargets[i].BodyMask = bodyMask;
+                    _mirrorCameraTargets[i].HeadMask = headMask;
+                }
+            }
+
+            if (_mirrorCharacters != null)
+                for (int slot = 0; slot < _mirrorCharacters.Count && slot < MirrorCharacterSlotCount; slot++)
+                {
+                    var character = _mirrorCharacters[slot];
+                    if (character == null)
+                        continue;
+                    bool bodyVisible = (((uint)updateInfo.charaPositionFlag >> slot) & 1u) != 0;
+                    uint headMask = (uint)(updateInfo.IsEnabledCharacterMirrorHead ? updateInfo.VisibleHeadFlag : updateInfo.charaPositionFlag);
+                    if (updateInfo.mirror)
+                        character.SetLiveEnvironmentMirrorVisible(bodyVisible, bodyVisible && ((headMask >> slot) & 1u) != 0, changeCharacterLayers);
+                    else if (!changeCharacterLayers)
+                        character.SetLiveEnvironmentMirrorVisible(true, true, false);
+                    bool expand = updateInfo.EnableCharacterMirrorExpandFaceBounds && (((uint)updateInfo.CharacterMirrorExpandFaceBounds >> slot) & 1u) != 0;
+                    character.SetLiveEnvironmentMirrorExpandedHeadBounds(expand);
+                }
 
             for (int i = 0; i < _environmentMirrorTargets.Count; i++)
             {
                 var mirror = _environmentMirrorTargets[i];
                 if (mirror == null)
                     continue;
+                mirror.SetActive(updateInfo.mirror);
+                // Unlike the independent MirrorReflection track, Environment
+                // starts from the authored mask for each valid update.
+                mirror.ResetCullingMask();
+                if (!updateInfo.bgMirror)
+                    mirror.RemoveCullingMask(GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.LayerBG));
+                if (!updateInfo.IsMirrorBg3d)
+                    mirror.RemoveCullingMask(GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.Layer3D));
+                if (changeCharacterLayers)
+                {
+                    mirror.RemoveCullingMask(GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.LayerCHAR) | GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.LayerCharacter3D_0) | GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.LayerCharacter3D_1));
+                    mirror.AddCullingMask(GraphicSettings.GetCullingLayer(GraphicSettings.LayerIndex.LayerCharacter3D_NotReflect));
+                }
 
-                mirror.SetActive(updateInfo.mirror || updateInfo.bgMirror || updateInfo.IsMirrorBg3d);
                 mirror.SetLightMirrorShader(!updateInfo.IsToonMirror);
                 mirror.MirrorReflectionRate = updateInfo.mirrorReflectionRate;
             }
@@ -1517,28 +1491,16 @@ namespace Gallop.Live
         {
             if (!_enableMirrorReflectionSpecificUpdate)
                 return;
-
-            if (_mirrorByTimelineHash.Count == 0)
+            if (!_mirrorCacheInitialized)
                 RebuildMirrorReflectionCache();
-
             if (!_mirrorByTimelineHash.TryGetValue(updateInfo.TimelineNameHash, out var mirror))
-            {
-                RebuildMirrorReflectionCache();
-                if (!_mirrorByTimelineHash.TryGetValue(updateInfo.TimelineNameHash, out mirror))
-                    return;
-            }
-
+                return;
             if (mirror == null)
                 return;
-
-            var mainCamera = Camera.main;
-            if (mainCamera != null)
-                mirror.SetBaseCamera(mainCamera);
-
+            Director.instance.SetupMirrorReflectionBaseCamera(mirror, updateInfo.BaseCameraType, updateInfo.BaseCameraIndex);
             mirror.SetActive(updateInfo.EnableMirror);
             mirror.SetLightMirrorShader(!updateInfo.IsToonMirror);
             mirror.MirrorReflectionRate = updateInfo.MirrorReflectionRate;
-
             if (_mirrorRenderingCallbacksBound && updateInfo.EnableMirror)
             {
                 var target = GetMirrorCameraTarget(mirror);
@@ -1549,23 +1511,28 @@ namespace Gallop.Live
                 }
             }
 
-            mirror.ResetCullingMask();
-
-            if (_mirrorBgLayerMask != 0)
-            {
-                if (updateInfo.EnableBgLayer) mirror.AddCullingMask(_mirrorBgLayerMask);
-                else mirror.RemoveCullingMask(_mirrorBgLayerMask);
-            }
-
-            if (_mirror3dLayerMask != 0)
-            {
-                if (updateInfo.Enable3dLayer) mirror.AddCullingMask(_mirror3dLayerMask);
-                else mirror.RemoveCullingMask(_mirror3dLayerMask);
-            }
+            // Original StageController.UpdateMirrorReflection 0x4eba6e0 uses
+            // GraphicSettings.GetCullingLayer(2=LayerBG) and (7=Layer3D) for every
+            // update; the masks are not serialized fields and must not be gated on 0.
+            int bgCullingMask = Gallop.GraphicSettings.GetCullingLayer(Gallop.GraphicSettings.LayerIndex.LayerBG);
+            if (updateInfo.EnableBgLayer)
+                mirror.AddCullingMask(bgCullingMask);
+            else
+                mirror.RemoveCullingMask(bgCullingMask);
+            int layer3dCullingMask = Gallop.GraphicSettings.GetCullingLayer(Gallop.GraphicSettings.LayerIndex.Layer3D);
+            if (updateInfo.Enable3dLayer)
+                mirror.AddCullingMask(layer3dCullingMask);
+            else
+                mirror.RemoveCullingMask(layer3dCullingMask);
         }
 
         public void InitializeStage()
         {
+            InitializeStageObjectSelect();
+            // StartStageObject first registers the controller transform array;
+            // Track Root's object timeline targets this controller GO itself,
+            // not only its instantiated children.
+            RegisterObjectTransform(transform, string.Empty);
             foreach (GameObject stage_part in _stageObjects)
             {
                 if (stage_part == null)
@@ -1574,17 +1541,40 @@ namespace Gallop.Live
                     continue;
                 }
 
+                // Original quality gate precedes the ordinary part clone.
+                if (stage_part.name.Contains("_mslight_controller") && !IsProjectorStageEnabled)
+                    continue;
                 var instance = Instantiate(stage_part, transform);
-                LiveRuntimeDiagnostics.RecordInstantiation(stage_part.name, instance);
+                // Native StartStageObject (0x5002f63..0x500309f) initializes
+                // indexed animation controllers before the first player tick.
+                // Legacy autoplay can reorder states before a lazy first callback.
+                if (_animationObjects != null && Array.IndexOf(_animationObjects, stage_part) >= 0 && instance.GetComponent<Animation>() != null)
+                    _sourceAnimations.Add(instance, new StageSourceAnimation(instance));
+                _pauseAnimations.AddRange(instance.GetComponentsInChildren<Animation>(true));
+                InitializeLegacyProjectorStagePart(stage_part, instance);
+                InitializeWaveStagePart(instance);
+                MakeBlackBoardNameTexture(instance, stage_part);
                 int rootHash = FNVHash.Generate(stage_part.name);
                 if (!_stageObjectRenderers.TryGetValue(rootHash, out var rootRenderers))
                 {
                     rootRenderers = new List<Renderer>();
                     _stageObjectRenderers.Add(rootHash, rootRenderers);
                 }
-                rootRenderers.AddRange(instance.GetComponentsInChildren<Renderer>(true));
 
-                int missingCount = Gallop.Live.LiveRuntimeDiagnostics.Enabled ? CountMissingScripts(instance) : 0;
+                // Original StartStageObject4eb4660 -> GetChildren4ae7560
+                // excludes the root itself, then the generic helperab3fb0
+                // takes one Renderer per descendant and rejects literal "null".
+                // Keep the root hash present even when that array is empty.
+                foreach (var descendant in instance.GetComponentsInChildren<Transform>(true))
+                {
+                    if (descendant == instance.transform)
+                        continue;
+                    var renderer = descendant.GetComponent<Renderer>();
+                    if (renderer != null && !renderer.name.Contains("null"))
+                        rootRenderers.Add(renderer);
+                }
+
+                int missingCount = CountMissingScripts(instance);
                 if (missingCount > 0)
                 {
                     Debug.LogWarning($"[StageController] '{stage_part.name}' 实例化后有 {missingCount} 个 missing script 组件");
@@ -1592,39 +1582,33 @@ namespace Gallop.Live
 
                 foreach (var child in instance.GetComponentsInChildren<Transform>(true))
                 {
-                    if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                        !StageObjectMap.ContainsKey(child.name.Replace("(Clone)", "")))
+                    if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 && !StageObjectMap.ContainsKey(child.name.Replace("(Clone)", "")))
                         child.gameObject.SetActive(true);
                     RegisterObjectTransform(child, string.Empty);
                 }
             }
 
-            // (Live) La pista `objectList` puede animar la RAÍZ del escenario, no solo sus
-            // sub-piezas: en el live 1156 `pfb_env_live10144_controller000` se desplaza
-            // +9,29 en Z entre los frames 6048 y 6734 (todo el decorado se acerca a la
-            // cámara mientras el personaje anda hasta la plaza). Esa raíz es este mismo
-            // GameObject y hasta ahora no se registraba en ningún mapa, así que
-            // LiveTimelineControl.AlterUpdate_ObjectControl descartaba su entrada por el
-            // guard de nombres y el escenario se quedaba clavado en el origen (el personaje
-            // se veía "corto" y la cámara acababa atravesando el portal).
-            // Solo la raíz: registrar el árbol entero duplicaría las sub-piezas ya
-            // registradas arriba (y con OffsetType.Add se aplicarían dos veces). Los hijos
-            // propios de la raíz son contenedores vacíos (Sunshafts, LensFlare).
-            RegisterObjectTransform(transform, string.Empty);
-
             if (_stageObjectUnits != null)
                 foreach (var unit in _stageObjectUnits)
                 {
-                    if (unit == null) continue;
-                    unit.Initialize();
+                    if (unit == null)
+                        continue;
+                    unit.Initialize(transform);
                     if (unit.IsEnabled && !StageObjectUnitMap.ContainsKey(unit.UnitName))
                         StageObjectUnitMap.Add(unit.UnitName, unit);
                 }
 
+            CompleteLegacyProjectorStageInitialization();
+            InitializeDepthOnlyStageObjects(StageTimelineData);
+            InitializeTextureAnimationMaterials();
             AutoAttachMirrorReflectionComponents();
+            if (_boundTimelineControl != null)
+                InitializeTransmittedLightMaskControllers(_boundTimelineControl);
             var washBeams = GetComponent<StageWashBeamDriver>();
-            if (washBeams == null) washBeams = gameObject.AddComponent<StageWashBeamDriver>();
+            if (washBeams == null)
+                washBeams = gameObject.AddComponent<StageWashBeamDriver>();
             washBeams.Initialize();
+            SetupEnvCollision();
         }
 
         internal void RegisterObjectTransform(Transform child, string nameSuffixToken)
@@ -1635,44 +1619,42 @@ namespace Gallop.Live
                 StageObjectMap.Add(objectName, child.gameObject);
                 StageParentMap.Add(objectName, child.parent);
             }
+
             int objectHash = FNVHash.Generate(objectName);
             if (!_objectsWorkInfoDictionary.TryGetValue(objectHash, out var works))
             {
                 works = new List<StageObjectWorkInfo>();
                 _objectsWorkInfoDictionary.Add(objectHash, works);
             }
+
             var renderers = child.GetComponents<Renderer>();
-            for (int i = 0; i < renderers.Length; i++) CacheBgColor1Renderer(renderers[i]);
-            works.Add(new StageObjectWorkInfo
-            {
-                transform = child,
-                originalParent = child.parent,
-                startTransform = new TransformBaseData
-                {
-                    position = child.localPosition,
-                    rotation = child.localRotation,
-                    scale = child.localScale
-                },
-                renderers = renderers
-            });
+            for (int i = 0; i < renderers.Length; i++)
+                CacheBgColor1Renderer(renderers[i]);
+            works.Add(new StageObjectWorkInfo { transform = child, originalParent = child.parent, startTransform = new TransformBaseData { position = child.localPosition, rotation = child.localRotation, scale = child.localScale }, renderers = renderers, OriginMainTexture = renderers.Length > 0 && renderers[0].sharedMaterial != null ? renderers[0].sharedMaterial.mainTexture : null });
         }
 
         internal void UnregisterObjectTransform(Transform child, string nameSuffixToken)
         {
             string objectName = child.name.Replace("(Clone)", "") + nameSuffixToken;
             int hash = FNVHash.Generate(objectName);
-            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works)) return;
+            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works))
+                return;
             for (int i = works.Count - 1; i >= 0; i--)
             {
-                if (works[i].transform != child) continue;
+                if (works[i].transform != child)
+                    continue;
                 foreach (var renderer in works[i].renderers)
                 {
                     _bgColor1RendererProperties.Remove(renderer);
                     _ambientColorRenderers.Remove(renderer);
                 }
+
                 works.RemoveAt(i);
             }
-            if (works.Count == 0) _objectsWorkInfoDictionary.Remove(hash);
+
+            _sourceAnimations.Remove(child.gameObject);
+            if (works.Count == 0)
+                _objectsWorkInfoDictionary.Remove(hash);
             if (StageObjectMap.TryGetValue(objectName, out var mapped) && mapped == child.gameObject)
             {
                 if (works.Count > 0)
@@ -1690,21 +1672,29 @@ namespace Gallop.Live
 
         private StageObjectUnit FindStageObjectUnit(int hash)
         {
-            if (_stageObjectUnits == null) return null;
+            if (_stageObjectUnits == null)
+                return null;
             for (int i = 0; i < _stageObjectUnits.Length; i++)
             {
                 var unit = _stageObjectUnits[i];
                 if (unit != null && unit.IsEnabled && unit.UnitNameHash == hash)
                     return unit;
             }
+
             return null;
         }
 
         public void UpdateObject(ref ObjectUpdateInfo updateInfo)
         {
-            if (updateInfo.data == null || string.IsNullOrEmpty(updateInfo.data.name)) return;
+            if (updateInfo.data == null || string.IsNullOrEmpty(updateInfo.data.name))
+                return;
             int hash = updateInfo.data.nameHash;
-            if (hash == 0) hash = FNVHash.Generate(updateInfo.data.name);
+            if (hash == 0)
+                hash = FNVHash.Generate(updateInfo.data.name);
+            // Native 0x500b450 dispatches only registered hashes/units. Prefab
+            // renderer arrays are handled by UpdateObjectByHash; recursively
+            // toggling every named transform here overwrites child hide keys
+            // (1084 curtain_root must not re-enable curtain_cloth).
             var unit = FindStageObjectUnit(hash);
             if (unit != null)
             {
@@ -1713,6 +1703,7 @@ namespace Gallop.Live
                     UpdateObjectByHash(childHashes[i], ref updateInfo);
                 return;
             }
+
             UpdateObjectByHash(hash, ref updateInfo);
         }
 
@@ -1721,56 +1712,63 @@ namespace Gallop.Live
             // Native has a prefab renderer-array branch and a per-transform work branch.
             if (_stageObjectRenderers.TryGetValue(hash, out var rootRenderers))
                 for (int i = 0; i < rootRenderers.Count; i++)
-                    if (rootRenderers[i] != null) rootRenderers[i].enabled = updateInfo.renderEnable;
-
-            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works)) return;
+                    if (rootRenderers[i] != null)
+                        SetStageRendererEnabled(rootRenderers[i], updateInfo.renderEnable);
+            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works))
+                return;
             for (int i = 0; i < works.Count; i++)
             {
                 var work = works[i];
                 var tr = work.transform;
-                if (tr == null) continue;
-                Transform parent = work.originalParent;
-                var director = Director.instance;
-                switch (updateInfo.AttachTarget)
-                {
-                    case AttachType.Character:
-                        if (director != null && updateInfo.CharacterPosition >= 0 &&
-                            updateInfo.CharacterPosition < director.CharaContainerScript.Count)
-                        {
-                            var chara = director.CharaContainerScript[updateInfo.CharacterPosition];
-                            if (chara != null) parent = chara.transform;
-                        }
-                        break;
-                    case AttachType.Camera:
-                        if (director != null && director.MainCameraTransform != null)
-                            parent = director.MainCameraTransform;
-                        break;
-                }
-                if (tr.parent != parent) tr.SetParent(parent, false);
-
+                if (tr == null)
+                    continue;
                 var start = work.startTransform;
                 Vector3 position = updateInfo.data.enablePosition ? updateInfo.updateData.position : start.position;
                 Quaternion rotation = updateInfo.data.enableRotate ? updateInfo.updateData.rotation : start.rotation;
                 Vector3 scale = updateInfo.data.enableScale ? updateInfo.updateData.scale : start.scale;
+                // CalculateStageTRS 0x4ff9520 composes against the attachment
+                // transform without reparenting. Position ignores target scale;
+                // scale uses localScale, not lossyScale / TransformPoint.
+                var attachment = Director.instance?.ResolveStageObjectAttachment(updateInfo);
+                if (attachment != null)
+                {
+                    if (updateInfo.data.enablePosition)
+                        position = attachment.position + attachment.rotation * updateInfo.updateData.position;
+                    if (updateInfo.data.enableRotate)
+                        rotation = attachment.rotation * updateInfo.updateData.rotation;
+                    if (updateInfo.data.enableScale)
+                        scale = Vector3.Scale(attachment.localScale, updateInfo.updateData.scale);
+                }
+
                 if (updateInfo.OffsetType == OffsetType.Add)
                 {
                     position += start.position;
                     rotation = start.rotation * rotation;
                     scale = Vector3.Scale(start.scale, scale);
                 }
+
                 tr.localPosition = position;
                 tr.localRotation = rotation;
                 tr.localScale = scale;
+                LiveObjectLayer.Apply((int)updateInfo.LayerType, tr, updateInfo.IsLayerTypeRecursively, index => GraphicSettings.GetLayer((GraphicSettings.LayerIndex)index), target => ((Transform)target).gameObject, (target, layer) => ((GameObject)target).layer = layer, (target, layer) =>
+                {
+                    foreach (var child in ((GameObject)target).GetComponentsInChildren<Transform>(true))
+                        child.gameObject.layer = layer;
+                });
                 for (int r = 0; r < work.renderers.Length; r++)
-                    if (work.renderers[r] != null) work.renderers[r].enabled = updateInfo.renderEnable;
+                    if (work.renderers[r] != null)
+                        SetStageRendererEnabled(work.renderers[r], updateInfo.renderEnable);
+                UpdateObjectImage(work, ref updateInfo);
             }
         }
 
         public void UpdateTransform(ref TransformUpdateInfo updateInfo)
         {
-            if (updateInfo.data == null || string.IsNullOrEmpty(updateInfo.data.name)) return;
+            if (updateInfo.data == null || string.IsNullOrEmpty(updateInfo.data.name))
+                return;
             int hash = updateInfo.data.nameHash;
-            if (hash == 0) hash = FNVHash.Generate(updateInfo.data.name.Replace("(Clone)", ""));
+            if (hash == 0)
+                hash = FNVHash.Generate(updateInfo.data.name.Replace("(Clone)", ""));
             var unit = FindStageObjectUnit(hash);
             if (unit != null)
             {
@@ -1779,17 +1777,20 @@ namespace Gallop.Live
                     UpdateTransformByHash(childHashes[i], ref updateInfo);
                 return;
             }
+
             UpdateTransformByHash(hash, ref updateInfo);
         }
 
         private void UpdateTransformByHash(int hash, ref TransformUpdateInfo updateInfo)
         {
-            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works)) return;
+            if (!_objectsWorkInfoDictionary.TryGetValue(hash, out var works))
+                return;
             for (int i = 0; i < works.Count; i++)
             {
                 var work = works[i];
                 var tr = work.transform;
-                if (tr == null) continue;
+                if (tr == null)
+                    continue;
                 tr.localPosition = updateInfo.data.enablePosition ? updateInfo.updateData.position : work.startTransform.position;
                 tr.localRotation = updateInfo.data.enableRotate ? updateInfo.updateData.rotation : work.startTransform.rotation;
                 tr.localScale = updateInfo.data.enableScale ? updateInfo.updateData.scale : work.startTransform.scale;
@@ -1798,23 +1799,29 @@ namespace Gallop.Live
 
         private void UpdateBgColor1(ref BgColor1UpdateInfo updateInfo)
         {
-            if (!_enableBgColorDriver) return;
+            if (!_enableBgColorDriver)
+                return;
             if (updateInfo.TimelineNameHash == BgColor1AmbientTimelineHash)
             {
                 UpdateAmbientColor1(ref updateInfo);
                 return;
             }
-            if (!_objectsWorkInfoDictionary.TryGetValue(updateInfo.TimelineNameHash, out var works)) return;
+
+            if (!_objectsWorkInfoDictionary.TryGetValue(updateInfo.TimelineNameHash, out var works))
+                return;
             for (int i = 0; i < works.Count; i++)
             {
                 var renderers = works[i].renderers;
                 for (int r = 0; r < renderers.Length; r++)
                 {
                     var renderer = renderers[r];
-                    if (renderer == null || !_bgColor1RendererProperties.TryGetValue(renderer, out int properties)) continue;
+                    if (renderer == null || !_bgColor1RendererProperties.TryGetValue(renderer, out int properties))
+                        continue;
                     renderer.GetPropertyBlock(_stageColorBlock);
-                    if ((properties & 1) != 0) _stageColorBlock.SetColor(BgColor1MulColor0Id, updateInfo.color);
-                    if ((properties & 2) != 0) _stageColorBlock.SetFloat(BgColor1ColorPowerId, updateInfo.colorPower);
+                    if ((properties & 1) != 0)
+                        _stageColorBlock.SetColor(BgColor1MulColor0Id, updateInfo.color);
+                    if ((properties & 2) != 0)
+                        _stageColorBlock.SetFloat(BgColor1ColorPowerId, updateInfo.colorPower);
                     renderer.SetPropertyBlock(_stageColorBlock);
                 }
             }
@@ -1826,7 +1833,8 @@ namespace Gallop.Live
             for (int i = 0; i < _ambientColorRenderers.Count; i++)
             {
                 var renderer = _ambientColorRenderers[i];
-                if (renderer == null) continue;
+                if (renderer == null)
+                    continue;
                 renderer.GetPropertyBlock(_stageColorBlock);
                 _stageColorBlock.SetVector(BgColor1AmbientColorId, _currentAmbientColor);
                 renderer.SetPropertyBlock(_stageColorBlock);
@@ -1837,38 +1845,44 @@ namespace Gallop.Live
         {
             if (!_enableBgColorDriver)
                 return;
-
             float extra = ResolveBgColorExtraValue(updateInfo.randomTableIndex);
-
             var groups = ResolveBgColor2Groups(updateInfo.TimelineName);
             if (groups != null && groups.Count > 0)
             {
                 for (int i = 0; i < groups.Count; i++)
                 {
                     var group = groups[i];
-                    if (group == null) continue;
+                    if (group == null)
+                        continue;
                     for (int j = 0; j < group.bindings.Count; j++)
                     {
                         var binding = group.bindings[j];
-                        if (binding == null) continue;
-
+                        if (binding == null)
+                            continue;
                         var r = binding.renderer;
-                        if (r == null) continue;
-
+                        if (r == null)
+                            continue;
                         Material[] mats;
-                        try { mats = r.materials; }
-                        catch { continue; }
-                        if (mats == null) continue;
+                        try
+                        {
+                            mats = r.materials;
+                        }
+                        catch
+                        {
+                            continue;
+                        }
 
+                        if (mats == null)
+                            continue;
                         if (binding.materialIndex < 0 || binding.materialIndex >= mats.Length)
                             continue;
-
                         var mat = mats[binding.materialIndex];
-                        if (mat == null) continue;
-
+                        if (mat == null)
+                            continue;
                         ApplyBgColor2ToRuntimeGroup(group.kind, mat, ref updateInfo, extra);
                     }
                 }
+
                 return;
             }
 
@@ -1877,21 +1891,28 @@ namespace Gallop.Live
             var legacyRendererTargets = ResolveBgColorRenderers(updateInfo.TimelineName, wantBgColor2Style: true, allowAllEligibleFallback: false);
             if (legacyRendererTargets == null || legacyRendererTargets.Count == 0)
                 return;
-
             for (int i = 0; i < legacyRendererTargets.Count; i++)
             {
                 var r = legacyRendererTargets[i];
-                if (r == null) continue;
-
+                if (r == null)
+                    continue;
                 Material[] mats;
-                try { mats = r.materials; }
-                catch { continue; }
-                if (mats == null) continue;
+                try
+                {
+                    mats = r.materials;
+                }
+                catch
+                {
+                    continue;
+                }
 
+                if (mats == null)
+                    continue;
                 for (int m = 0; m < mats.Length; m++)
                 {
                     var mat = mats[m];
-                    if (mat == null) continue;
+                    if (mat == null)
+                        continue;
                     ApplyBgColor2ToRuntimeGroup(BgColor2RuntimeKind.LegacyFallback, mat, ref updateInfo, extra);
                 }
             }
@@ -1901,29 +1922,28 @@ namespace Gallop.Live
         {
             if (mat == null)
                 return;
-
             switch (kind)
             {
                 case BgColor2RuntimeKind.Wash:
                     ApplyOrdinaryBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power, setExtraMultiply: false, extraValue: extra);
                     break;
-
                 case BgColor2RuntimeKind.Laser:
-                    ApplyOrdinaryBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power, setExtraMultiply: true, extraValue: extra);
+                    ApplyOrdinaryBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power, setExtraMultiply: false, extraValue: extra);
+                    // StageController.UpdateBgColor2 0x5005500: the laser
+                    // material consumes PropertyId 158 (_RandomValue), using
+                    // Director's existing per-frame table plus color1.a at
+                    // native info+0x10 (the independent power is at +0x24).
+                    mat.SetFloat("_RandomValue", Mathf.Clamp01(updateInfo.color1.a + extra));
                     break;
-
                 case BgColor2RuntimeKind.Foot:
                     ApplyOrdinaryBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power, setExtraMultiply: false, extraValue: extra);
                     break;
-
                 case BgColor2RuntimeKind.NeonMain:
                     ApplyNeonMainBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power);
                     break;
-
                 case BgColor2RuntimeKind.NeonBack:
                     ApplyNeonBackBgColor2(mat, updateInfo.color1, updateInfo.power);
                     break;
-
                 default:
                     ApplyLegacyBgColor2(mat, updateInfo.color1, updateInfo.color2, updateInfo.power, extra);
                     break;
@@ -1933,27 +1953,30 @@ namespace Gallop.Live
         private static void ApplyOrdinaryBgColor2(Material mat, Color color1, Color color2, float power, bool setExtraMultiply, float extraValue)
         {
             bool hasAny = false;
-
             if (mat.HasProperty("_MulColor0"))
             {
                 mat.SetColor("_MulColor0", color1);
                 hasAny = true;
             }
+
             if (mat.HasProperty("_MulColor1"))
             {
                 mat.SetColor("_MulColor1", color2);
                 hasAny = true;
             }
+
             if (mat.HasProperty("_BlinkLightColor") && !mat.HasProperty("_MulColor0") && !mat.HasProperty("_MulColor1"))
             {
                 mat.SetColor("_BlinkLightColor", color1);
                 hasAny = true;
             }
+
             if (mat.HasProperty("_ColorPower"))
             {
                 mat.SetFloat("_ColorPower", power);
                 hasAny = true;
             }
+
             if (setExtraMultiply && mat.HasProperty("_ColorPowerMultiply"))
             {
                 mat.SetFloat("_ColorPowerMultiply", extraValue);
@@ -1969,22 +1992,24 @@ namespace Gallop.Live
         private static void ApplyNeonMainBgColor2(Material mat, Color color1, Color color2, float power)
         {
             bool wroteAny = false;
-
             if (mat.HasProperty("_MulColor0"))
             {
                 mat.SetColor("_MulColor0", color2);
                 wroteAny = true;
             }
+
             if (mat.HasProperty("_MulColor1"))
             {
                 mat.SetColor("_MulColor1", color1);
                 wroteAny = true;
             }
+
             if (mat.HasProperty("_BlinkLightColor") && !mat.HasProperty("_MulColor1"))
             {
                 mat.SetColor("_BlinkLightColor", color1);
                 wroteAny = true;
             }
+
             if (mat.HasProperty("_ColorPower"))
             {
                 mat.SetFloat("_ColorPower", power);
@@ -1998,7 +2023,6 @@ namespace Gallop.Live
         private static void ApplyNeonBackBgColor2(Material mat, Color color1, float power)
         {
             bool wroteAny = false;
-
             if (mat.HasProperty("_MulColor1"))
             {
                 mat.SetColor("_MulColor1", color1);
@@ -2015,6 +2039,7 @@ namespace Gallop.Live
                 mat.SetColor("_BlinkLightColor", color1);
                 wroteAny = true;
             }
+
             if (mat.HasProperty("_ColorPower"))
             {
                 mat.SetFloat("_ColorPower", power);
@@ -2032,10 +2057,8 @@ namespace Gallop.Live
             bool hasPower = mat.HasProperty("_ColorPower");
             bool hasMultiply = mat.HasProperty("_ColorPowerMultiply");
             bool hasBlinkColor = mat.HasProperty("_BlinkLightColor");
-
             if (!hasMul0 && !hasMul1 && !hasPower && !hasMultiply && !hasBlinkColor)
                 return;
-
             if (hasMul0)
                 mat.SetColor("_MulColor0", color1);
             if (hasMul1)
@@ -2060,22 +2083,20 @@ namespace Gallop.Live
             _bindingsBySharedMaterialName.Clear();
             _bgColor1RendererProperties.Clear();
             _ambientColorRenderers.Clear();
-
             var all = GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < all.Length; i++)
             {
                 var r = all[i];
-                if (r == null) continue;
+                if (r == null)
+                    continue;
                 _allStageRenderers.Add(r);
                 IndexRendererSharedMaterials(r);
                 CacheBgColor1Renderer(r);
-
                 if (RendererHasAnyBgColorProps(r))
                     _bgColorAllEligibleRenderers.Add(r);
             }
 
             BuildBgColor2RuntimeGroups();
-
             if (_bgColorVerboseLog)
             {
                 Debug.Log($"[StageController] BgColor cache rebuilt. eligibleRenderers={_bgColorAllEligibleRenderers.Count}, materialGroups={_bgColor2Groups.Count}");
@@ -2090,47 +2111,53 @@ namespace Gallop.Live
             for (int m = 0; m < materials.Length; m++)
             {
                 var material = materials[m];
-                if (material == null) continue;
-                if (material.HasProperty(BgColor1MulColor0Id)) stageColorProperties |= 1;
-                if (material.HasProperty(BgColor1ColorPowerId)) stageColorProperties |= 2;
-                if (material.HasProperty(BgColor1AmbientColorId)) hasAmbient = true;
+                if (material == null)
+                    continue;
+                if (material.HasProperty(BgColor1MulColor0Id))
+                    stageColorProperties |= 1;
+                if (material.HasProperty(BgColor1ColorPowerId))
+                    stageColorProperties |= 2;
+                if (material.HasProperty(BgColor1AmbientColorId))
+                    hasAmbient = true;
             }
-            if (stageColorProperties != 0) _bgColor1RendererProperties[r] = stageColorProperties;
-            if (hasAmbient && !_ambientColorRenderers.Contains(r)) _ambientColorRenderers.Add(r);
+
+            if (stageColorProperties != 0)
+                _bgColor1RendererProperties[r] = stageColorProperties;
+            if (hasAmbient && !_ambientColorRenderers.Contains(r))
+                _ambientColorRenderers.Add(r);
         }
 
         private void IndexRendererSharedMaterials(Renderer r)
         {
             var mats = r.sharedMaterials;
-            if (mats == null) return;
-
+            if (mats == null)
+                return;
             for (int i = 0; i < mats.Length; i++)
             {
                 var mat = mats[i];
-                if (mat == null) continue;
-
+                if (mat == null)
+                    continue;
                 var binding = new BgColor2RuntimeBinding
                 {
                     renderer = r,
                     materialIndex = i
                 };
-
                 if (!_bindingsBySharedMaterialRef.TryGetValue(mat, out var byRef))
                 {
                     byRef = new List<BgColor2RuntimeBinding>();
                     _bindingsBySharedMaterialRef[mat] = byRef;
                 }
-                byRef.Add(binding);
 
+                byRef.Add(binding);
                 string key = NormalizeKey(CleanMaterialName(mat.name));
                 if (string.IsNullOrEmpty(key))
                     continue;
-
                 if (!_bindingsBySharedMaterialName.TryGetValue(key, out var byName))
                 {
                     byName = new List<BgColor2RuntimeBinding>();
                     _bindingsBySharedMaterialName[key] = byName;
                 }
+
                 byName.Add(binding);
             }
         }
@@ -2140,13 +2167,13 @@ namespace Gallop.Live
             AddRuntimeGroupsFromMaterialArray(_washLightMaterials, BgColor2RuntimeKind.Wash);
             AddLaserRuntimeGroups();
             AddRuntimeGroupsFromMaterialArray(_footLightMaterials, BgColor2RuntimeKind.Foot);
-
             if (_neonMaterialInfos != null)
             {
                 for (int i = 0; i < _neonMaterialInfos.Length; i++)
                 {
                     var info = _neonMaterialInfos[i];
-                    if (info == null) continue;
+                    if (info == null)
+                        continue;
                     AddRuntimeGroup(info.MainMaterial, BgColor2RuntimeKind.NeonMain, i);
                     AddRuntimeGroup(info.BackMaterial, BgColor2RuntimeKind.NeonBack, i);
                 }
@@ -2168,12 +2195,8 @@ namespace Gallop.Live
                 List<Renderer> sourceRenderers = pair.Value;
                 if (sourceRenderers == null || sourceRenderers.Count == 0)
                     continue;
-
                 Material sourceMaterial = FindFirstRendererMaterial(sourceRenderers);
-                if (sourceMaterial == null &&
-                    _laserMaterials != null &&
-                    sourceIndex >= 0 &&
-                    sourceIndex < _laserMaterials.Length)
+                if (sourceMaterial == null && _laserMaterials != null && sourceIndex >= 0 && sourceIndex < _laserMaterials.Length)
                 {
                     sourceMaterial = _laserMaterials[sourceIndex];
                 }
@@ -2184,44 +2207,31 @@ namespace Gallop.Live
                     sourceIndex = sourceIndex,
                     sourceMaterial = sourceMaterial,
                     sourceName = sourceMaterial != null ? CleanMaterialName(sourceMaterial.name) : $"Laser{sourceIndex}",
-                    sourceKey = sourceMaterial != null ? NormalizeKey(CleanMaterialName(sourceMaterial.name)) : $"laser{sourceIndex}"
-                };
-
+                    sourceKey = sourceMaterial != null ? NormalizeKey(CleanMaterialName(sourceMaterial.name)) : $"laser{sourceIndex}"};
                 var seenBindings = new HashSet<string>(StringComparer.Ordinal);
                 var seenRenderers = new HashSet<int>();
-
                 for (int r = 0; r < sourceRenderers.Count; r++)
                 {
                     Renderer renderer = sourceRenderers[r];
                     if (renderer == null)
                         continue;
-
                     if (seenRenderers.Add(renderer.GetInstanceID()))
                         group.renderers.Add(renderer);
-
                     Material[] materials = renderer.sharedMaterials;
                     if (materials == null)
                         continue;
-
                     for (int m = 0; m < materials.Length; m++)
                     {
                         if (materials[m] == null)
                             continue;
-
                         string bindingKey = renderer.GetInstanceID().ToString() + ":" + m.ToString();
                         if (!seenBindings.Add(bindingKey))
                             continue;
-
-                        group.bindings.Add(new BgColor2RuntimeBinding
-                        {
-                            renderer = renderer,
-                            materialIndex = m
-                        });
+                        group.bindings.Add(new BgColor2RuntimeBinding { renderer = renderer, materialIndex = m });
                     }
                 }
 
                 _bgColor2Groups.Add(group);
-
                 if (_bgColorVerboseLog)
                 {
                     Debug.Log($"[StageController] Laser BgColor2 group built. materialIndex={sourceIndex}, src='{group.sourceName}', bindings={group.bindings.Count}, renderers={group.renderers.Count}");
@@ -2233,17 +2243,14 @@ namespace Gallop.Live
         {
             if (renderers == null)
                 return null;
-
             for (int i = 0; i < renderers.Count; i++)
             {
                 Renderer renderer = renderers[i];
                 if (renderer == null)
                     continue;
-
                 Material[] materials = renderer.sharedMaterials;
                 if (materials == null)
                     continue;
-
                 for (int m = 0; m < materials.Length; m++)
                 {
                     if (materials[m] != null)
@@ -2256,7 +2263,8 @@ namespace Gallop.Live
 
         private void AddRuntimeGroupsFromMaterialArray(Material[] sourceMaterials, BgColor2RuntimeKind kind)
         {
-            if (sourceMaterials == null) return;
+            if (sourceMaterials == null)
+                return;
             for (int i = 0; i < sourceMaterials.Length; i++)
             {
                 AddRuntimeGroup(sourceMaterials[i], kind, i);
@@ -2267,7 +2275,6 @@ namespace Gallop.Live
         {
             if (sourceMaterial == null)
                 return;
-
             var group = new BgColor2RuntimeGroup
             {
                 kind = kind,
@@ -2276,12 +2283,10 @@ namespace Gallop.Live
                 sourceName = CleanMaterialName(sourceMaterial.name),
                 sourceKey = NormalizeKey(CleanMaterialName(sourceMaterial.name))
             };
-
             var collected = CollectBindingsBySourceMaterial(sourceMaterial);
             if (collected != null && collected.Count > 0)
             {
                 group.bindings.AddRange(collected);
-
                 var uniqueRenderers = new HashSet<Renderer>();
                 for (int i = 0; i < collected.Count; i++)
                 {
@@ -2292,7 +2297,6 @@ namespace Gallop.Live
             }
 
             _bgColor2Groups.Add(group);
-
             if (_bgColorVerboseLog)
             {
                 Debug.Log($"[StageController] BgColor2 runtime group built. kind={kind}, src='{group.sourceName}', bindings={group.bindings.Count}, renderers={group.renderers.Count}");
@@ -2305,7 +2309,6 @@ namespace Gallop.Live
             var seen = new HashSet<string>(StringComparer.Ordinal);
             if (sourceMaterial == null)
                 return list;
-
             if (_bindingsBySharedMaterialRef.TryGetValue(sourceMaterial, out var byRef))
             {
                 AddBindings(list, seen, byRef);
@@ -2327,17 +2330,14 @@ namespace Gallop.Live
         {
             if (dst == null || seen == null || src == null)
                 return;
-
             for (int i = 0; i < src.Count; i++)
             {
                 var binding = src[i];
                 if (binding == null || binding.renderer == null)
                     continue;
-
                 string key = binding.renderer.GetInstanceID().ToString() + ":" + binding.materialIndex.ToString();
                 if (!seen.Add(key))
                     continue;
-
                 dst.Add(binding);
             }
         }
@@ -2347,15 +2347,14 @@ namespace Gallop.Live
             string key = NormalizeKey(timelineName);
             if (string.IsNullOrEmpty(key))
                 return null;
-
             if (_bgColor2GroupCache.TryGetValue(key, out var cached))
                 return cached;
-
             var resolved = TryResolveBgColor2GroupsByOverride(timelineName, key);
             if (resolved == null || resolved.Count == 0)
             {
                 resolved = TryResolveBgColor2GroupsByTimelineIndex(key);
             }
+
             if (resolved == null || resolved.Count == 0)
             {
                 var bestByKind = new Dictionary<BgColor2RuntimeKind, (int score, BgColor2RuntimeGroup group)>();
@@ -2364,26 +2363,25 @@ namespace Gallop.Live
                     var group = _bgColor2Groups[i];
                     if (group == null || group.sourceMaterial == null || group.bindings.Count == 0)
                         continue;
-
                     int score = ScoreTimelineAgainstSource(key, timelineName, group.sourceName, group.sourceKey);
                     if (score <= 0)
                         continue;
-
                     if (!bestByKind.TryGetValue(group.kind, out var best) || score > best.score)
                     {
                         bestByKind[group.kind] = (score, group);
                     }
                 }
 
-                resolved = bestByKind.Values
-                                     .OrderBy(v => v.group.kind)
-                                     .Select(v => v.group)
-                                     .ToList();
+                resolved = bestByKind.Values.OrderBy(v => v.group.kind).Select(v => v.group).ToList();
             }
 
             if ((resolved == null || resolved.Count == 0) && _bgColorVerboseLog && _bgColorMissingLogged.Add($"bg2::{timelineName}"))
             {
                 Debug.LogWarning($"[StageController] BgColor2 material group not found for timeline '{timelineName}'");
+            }
+            else if (_bgColorVerboseLog && resolved != null && resolved.Count > 0)
+            {
+                Debug.Log($"[StageController] BgColor2 '{timelineName}' resolved groups={string.Join(", ", resolved.Select(g => $"{g.kind}:{g.sourceName}:{g.renderers.Count}"))}");
             }
 
             _bgColor2GroupCache[key] = resolved;
@@ -2394,14 +2392,12 @@ namespace Gallop.Live
         {
             if (!TryParseBgColor2TimelineIndex(normalizedTimelineKey, out var family, out var sourceIndex))
                 return null;
-
             var list = new List<BgColor2RuntimeGroup>(2);
             for (int i = 0; i < _bgColor2Groups.Count; i++)
             {
                 var group = _bgColor2Groups[i];
                 if (group == null || group.sourceIndex != sourceIndex)
                     continue;
-
                 switch (family)
                 {
                     case "wash":
@@ -2430,24 +2426,25 @@ namespace Gallop.Live
         {
             family = null;
             sourceIndex = -1;
-
             if (TryParseTimelineLetterIndex(normalizedTimelineKey, "bgwash", out sourceIndex))
             {
                 family = "wash";
                 return true;
             }
+
             if (TryParseTimelineLetterIndex(normalizedTimelineKey, "bgfoot", out sourceIndex))
             {
                 family = "foot";
                 return true;
             }
+
             if (TryParseTimelineLetterIndex(normalizedTimelineKey, "bgneon", out sourceIndex))
             {
                 family = "neon";
                 return true;
             }
-            if (TryParseTimelineLetterIndex(normalizedTimelineKey, "laser", out sourceIndex) ||
-                TryParseTimelineLetterIndex(normalizedTimelineKey, "bglaser", out sourceIndex))
+
+            if (TryParseTimelineLetterIndex(normalizedTimelineKey, "laser", out sourceIndex) || TryParseTimelineLetterIndex(normalizedTimelineKey, "bglaser", out sourceIndex))
             {
                 family = "laser";
                 return true;
@@ -2465,11 +2462,9 @@ namespace Gallop.Live
                 return false;
             if (normalizedTimelineKey.Length != prefix.Length + 1)
                 return false;
-
             char suffix = normalizedTimelineKey[normalizedTimelineKey.Length - 1];
             if (suffix < 'a' || suffix > 'z')
                 return false;
-
             sourceIndex = suffix - 'a';
             return true;
         }
@@ -2478,19 +2473,19 @@ namespace Gallop.Live
         {
             if (_bgColorBindingOverrides == null || _bgColorBindingOverrides.Length == 0)
                 return null;
-
             for (int i = 0; i < _bgColorBindingOverrides.Length; i++)
             {
                 var rule = _bgColorBindingOverrides[i];
-                if (rule == null) continue;
-                if (NormalizeKey(rule.timelineName) != key) continue;
-
+                if (rule == null)
+                    continue;
+                if (NormalizeKey(rule.timelineName) != key)
+                    continue;
                 var list = new List<BgColor2RuntimeGroup>();
                 for (int g = 0; g < _bgColor2Groups.Count; g++)
                 {
                     var group = _bgColor2Groups[g];
-                    if (group == null || group.sourceMaterial == null) continue;
-
+                    if (group == null || group.sourceMaterial == null)
+                        continue;
                     bool materialMatch = rule.materialNameContains == null || rule.materialNameContains.Length == 0;
                     if (!materialMatch)
                     {
@@ -2511,7 +2506,8 @@ namespace Gallop.Live
                         for (int r = 0; r < group.renderers.Count && !rendererMatch; r++)
                         {
                             var rr = group.renderers[r];
-                            if (rr == null) continue;
+                            if (rr == null)
+                                continue;
                             var rn = rr.name ?? string.Empty;
                             for (int t = 0; t < rule.rendererNameContains.Length; t++)
                             {
@@ -2540,18 +2536,17 @@ namespace Gallop.Live
         {
             if (string.IsNullOrEmpty(normalizedTimelineKey) || string.IsNullOrEmpty(sourceKey))
                 return 0;
-
             if (sourceKey == normalizedTimelineKey)
                 return 1000;
             if (sourceKey.Contains(normalizedTimelineKey) || normalizedTimelineKey.Contains(sourceKey))
                 return 700;
-
             int score = 0;
             var tokens = SplitNameTokens(timelineName);
             for (int i = 0; i < tokens.Length; i++)
             {
                 string token = NormalizeKey(tokens[i]);
-                if (string.IsNullOrEmpty(token)) continue;
+                if (string.IsNullOrEmpty(token))
+                    continue;
                 if (sourceKey.Contains(token))
                     score += 50;
             }
@@ -2559,11 +2554,16 @@ namespace Gallop.Live
             if (!string.IsNullOrEmpty(sourceName))
             {
                 string sourceLower = sourceName.ToLowerInvariant();
-                if (sourceLower.Contains("wash") && normalizedTimelineKey.Contains("wash")) score += 80;
-                if (sourceLower.Contains("laser") && normalizedTimelineKey.Contains("laser")) score += 80;
-                if (sourceLower.Contains("foot") && normalizedTimelineKey.Contains("foot")) score += 80;
-                if (sourceLower.Contains("neon") && normalizedTimelineKey.Contains("neon")) score += 80;
-                if (sourceLower.Contains("led") && normalizedTimelineKey.Contains("led")) score += 30;
+                if (sourceLower.Contains("wash") && normalizedTimelineKey.Contains("wash"))
+                    score += 80;
+                if (sourceLower.Contains("laser") && normalizedTimelineKey.Contains("laser"))
+                    score += 80;
+                if (sourceLower.Contains("foot") && normalizedTimelineKey.Contains("foot"))
+                    score += 80;
+                if (sourceLower.Contains("neon") && normalizedTimelineKey.Contains("neon"))
+                    score += 80;
+                if (sourceLower.Contains("led") && normalizedTimelineKey.Contains("led"))
+                    score += 30;
             }
 
             return score;
@@ -2574,24 +2574,20 @@ namespace Gallop.Live
             string key = NormalizeKey(timelineName);
             if (string.IsNullOrEmpty(key))
                 return (_bgColorFallbackToAllEligible && allowAllEligibleFallback) ? _bgColorAllEligibleRenderers : null;
-
             if (_bgColorRendererCache.TryGetValue(key, out var cached))
                 return cached;
-
             var set = new HashSet<Renderer>();
-
-            TryAddRenderersFromStageObjectMap(timelineName, key, set);
-            TryAddRenderersFromUnitMap(timelineName, key, set);
-
             ApplyBindingOverrides(timelineName, key, set);
-
             var all = GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < all.Length; i++)
             {
                 var r = all[i];
-                if (r == null) continue;
-                if (wantBgColor2Style && !RendererHasBgColor2Props(r)) continue;
-                if (!wantBgColor2Style && !RendererHasBgColor1Props(r)) continue;
+                if (r == null)
+                    continue;
+                if (wantBgColor2Style && !RendererHasBgColor2Props(r))
+                    continue;
+                if (!wantBgColor2Style && !RendererHasBgColor1Props(r))
+                    continue;
                 if (RendererMatchesTimeline(r, timelineName, key))
                     set.Add(r);
             }
@@ -2607,6 +2603,10 @@ namespace Gallop.Live
                 if (_bgColorVerboseLog && !string.IsNullOrEmpty(timelineName) && _bgColorMissingLogged.Add(timelineName))
                     Debug.LogWarning($"[StageController] BgColor target not found for timeline '{timelineName}'");
             }
+            else if (_bgColorVerboseLog)
+            {
+                Debug.Log($"[StageController] BgColor '{timelineName}' resolved renderers={resolved.Count}");
+            }
 
             _bgColorRendererCache[key] = resolved;
             return resolved;
@@ -2617,15 +2617,16 @@ namespace Gallop.Live
             bool added = false;
             foreach (var kv in StageObjectMap)
             {
-                if (kv.Value == null) continue;
+                if (kv.Value == null)
+                    continue;
                 string candidate = kv.Key ?? string.Empty;
                 string candidateKey = NormalizeKey(candidate);
                 if (candidateKey != key && !candidateKey.Contains(key) && !key.Contains(candidateKey))
                     continue;
-
                 AddRenderersRecursive(kv.Value, set);
                 added = true;
             }
+
             return added;
         }
 
@@ -2634,24 +2635,28 @@ namespace Gallop.Live
             bool added = false;
             foreach (var kv in StageObjectUnitMap)
             {
-                if (kv.Value == null) continue;
+                if (kv.Value == null)
+                    continue;
                 string candidateKey = NormalizeKey(kv.Key ?? string.Empty);
                 if (candidateKey != key && !candidateKey.Contains(key) && !key.Contains(candidateKey))
                     continue;
-
                 var children = kv.Value.ChildObjectNameHashArray;
-                if (children == null) continue;
+                if (children == null)
+                    continue;
                 for (int i = 0; i < children.Length; i++)
                 {
-                    if (!_objectsWorkInfoDictionary.TryGetValue(children[i], out var works)) continue;
+                    if (!_objectsWorkInfoDictionary.TryGetValue(children[i], out var works))
+                        continue;
                     for (int j = 0; j < works.Count; j++)
                     {
-                        if (works[j].transform == null) continue;
+                        if (works[j].transform == null)
+                            continue;
                         AddRenderersRecursive(works[j].transform.gameObject, set);
                         added = true;
                     }
                 }
             }
+
             return added;
         }
 
@@ -2659,18 +2664,19 @@ namespace Gallop.Live
         {
             if (_bgColorBindingOverrides == null || _bgColorBindingOverrides.Length == 0)
                 return;
-
             var all = GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < _bgColorBindingOverrides.Length; i++)
             {
                 var rule = _bgColorBindingOverrides[i];
-                if (rule == null) continue;
-                if (NormalizeKey(rule.timelineName) != key) continue;
-
+                if (rule == null)
+                    continue;
+                if (NormalizeKey(rule.timelineName) != key)
+                    continue;
                 for (int j = 0; j < all.Length; j++)
                 {
                     var r = all[j];
-                    if (r == null) continue;
+                    if (r == null)
+                        continue;
                     if (MatchRule(r, rule))
                         set.Add(r);
                 }
@@ -2681,7 +2687,6 @@ namespace Gallop.Live
         {
             if (r == null || rule == null)
                 return false;
-
             bool rendererMatched = rule.rendererNameContains == null || rule.rendererNameContains.Length == 0;
             if (!rendererMatched)
             {
@@ -2706,7 +2711,8 @@ namespace Gallop.Live
                     for (int i = 0; i < mats.Length && !materialMatched; i++)
                     {
                         var m = mats[i];
-                        if (m == null) continue;
+                        if (m == null)
+                            continue;
                         string mn = m.name ?? string.Empty;
                         for (int j = 0; j < rule.materialNameContains.Length; j++)
                         {
@@ -2726,12 +2732,14 @@ namespace Gallop.Live
 
         private bool RendererMatchesTimeline(Renderer r, string timelineName, string normalizedKey)
         {
-            if (r == null) return false;
-
-            if (StringMatchesTimeline(r.name, normalizedKey)) return true;
-            if (r.transform != null && StringMatchesTimeline(r.transform.root.name, normalizedKey)) return true;
-            if (r.transform != null && r.transform.parent != null && StringMatchesTimeline(r.transform.parent.name, normalizedKey)) return true;
-
+            if (r == null)
+                return false;
+            if (StringMatchesTimeline(r.name, normalizedKey))
+                return true;
+            if (r.transform != null && StringMatchesTimeline(r.transform.root.name, normalizedKey))
+                return true;
+            if (r.transform != null && r.transform.parent != null && StringMatchesTimeline(r.transform.parent.name, normalizedKey))
+                return true;
             var mats = r.sharedMaterials;
             if (mats != null)
             {
@@ -2749,9 +2757,12 @@ namespace Gallop.Live
                 for (int i = 0; i < tokens.Length; i++)
                 {
                     string token = tokens[i];
-                    if (string.IsNullOrEmpty(token)) continue;
-                    if (ContainsIgnoreCase(r.name, token)) return true;
-                    if (r.transform != null && ContainsIgnoreCase(r.transform.root.name, token)) return true;
+                    if (string.IsNullOrEmpty(token))
+                        continue;
+                    if (ContainsIgnoreCase(r.name, token))
+                        return true;
+                    if (r.transform != null && ContainsIgnoreCase(r.transform.root.name, token))
+                        return true;
                     if (mats != null)
                     {
                         for (int j = 0; j < mats.Length; j++)
@@ -2771,18 +2782,15 @@ namespace Gallop.Live
         {
             if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(normalizedKey))
                 return false;
-
             string nk = NormalizeKey(candidate);
             return nk == normalizedKey || nk.Contains(normalizedKey) || normalizedKey.Contains(nk);
         }
 
         private static string[] SplitNameTokens(string s)
         {
-            if (string.IsNullOrEmpty(s)) return Array.Empty<string>();
-            return s.Replace("-", " ").Replace("_", " ")
-                    .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Where(t => t.Length >= 3)
-                    .ToArray();
+            if (string.IsNullOrEmpty(s))
+                return Array.Empty<string>();
+            return s.Replace("-", " ").Replace("_", " ").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 3).ToArray();
         }
 
         private static bool ContainsIgnoreCase(string s, string token)
@@ -2792,7 +2800,8 @@ namespace Gallop.Live
 
         private static string NormalizeKey(string s)
         {
-            if (string.IsNullOrEmpty(s)) return string.Empty;
+            if (string.IsNullOrEmpty(s))
+                return string.Empty;
             char[] tmp = new char[s.Length];
             int n = 0;
             for (int i = 0; i < s.Length; i++)
@@ -2801,23 +2810,22 @@ namespace Gallop.Live
                 if (char.IsLetterOrDigit(c))
                     tmp[n++] = char.ToLowerInvariant(c);
             }
-            return n > 0 ? new string(tmp, 0, n) : string.Empty;
+
+            return n > 0 ? new string (tmp, 0, n) : string.Empty;
         }
 
         private static string CleanMaterialName(string s)
         {
             if (string.IsNullOrEmpty(s))
                 return string.Empty;
-
-            string cleaned = s.Replace("(Instance)", string.Empty)
-                              .Replace("(Clone)", string.Empty)
-                              .Trim();
+            string cleaned = s.Replace("(Instance)", string.Empty).Replace("(Clone)", string.Empty).Trim();
             return cleaned;
         }
 
         private void AddRenderersRecursive(GameObject go, HashSet<Renderer> set)
         {
-            if (go == null) return;
+            if (go == null)
+                return;
             var rs = go.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < rs.Length; i++)
             {
@@ -2835,53 +2843,60 @@ namespace Gallop.Live
         private static bool RendererHasBgColor1Props(Renderer r)
         {
             var mats = r != null ? r.sharedMaterials : null;
-            if (mats == null) return false;
+            if (mats == null)
+                return false;
             for (int i = 0; i < mats.Length; i++)
             {
                 var m = mats[i];
-                if (m == null) continue;
+                if (m == null)
+                    continue;
                 if (m.HasProperty("_CharaColor") || m.HasProperty("_ToonDarkColor") || m.HasProperty("_ToonBrightColor") || m.HasProperty("_OutlineColor") || m.HasProperty("_Saturation"))
                     return true;
             }
+
             return false;
         }
 
         private static bool RendererHasBgColor2Props(Renderer r)
         {
             var mats = r != null ? r.sharedMaterials : null;
-            if (mats == null) return false;
+            if (mats == null)
+                return false;
             for (int i = 0; i < mats.Length; i++)
             {
                 var m = mats[i];
-                if (m == null) continue;
+                if (m == null)
+                    continue;
                 if (m.HasProperty("_MulColor0") || m.HasProperty("_MulColor1") || m.HasProperty("_ColorPower") || m.HasProperty("_ColorPowerMultiply") || m.HasProperty("_BlinkLightColor"))
                     return true;
             }
+
             return false;
         }
 
         private float ResolveBgColorExtraValue(int index)
         {
-            if (_bgColorExtraValueTable != null && index >= 0 && index < _bgColorExtraValueTable.Length)
-                return _bgColorExtraValueTable[index];
-            return 1f;
+            var director = Director.instance;
+            return director != null ? director.GetBackgroundRandomValue(index) : 0f;
         }
 
         public static int CountMissingScripts(GameObject root)
         {
-            if (root == null) return 0;
+            if (root == null)
+                return 0;
             int count = 0;
-
             var components = root.GetComponents<Component>();
             foreach (var c in components)
             {
-                if (c == null) count++;
+                if (c == null)
+                    count++;
             }
 
             foreach (Transform child in root.transform)
             {
                 count += CountMissingScripts(child.gameObject);
             }
+
             return count;
         }
     }

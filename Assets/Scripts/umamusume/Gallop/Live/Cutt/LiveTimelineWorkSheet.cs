@@ -99,7 +99,8 @@ namespace Gallop.Live.Cutt
         InitialHeightFace = 17,
         InitialHeightChest = 18,
         InitialHeightWaist = 19,
-        Max = 20
+        StartFrameFace = 20,
+        Max = 21
     }
 
     public enum LiveCameraCullingLayer
@@ -165,12 +166,60 @@ namespace Gallop.Live.Cutt
         public LiveCameraBgColorType BgColorType;
         public Color BgColor;
         public int BgColorTargetCharacterIndex;
+        public Vector3 CharaPositionAtStartFrame;
+        public bool IsUseCharaPositionAtPrevKeyStartFrame;
+        private int _charaPositionCachedFrame = -1;
+        public bool IsUsePositionCache => (int)charaRelativeParts == 20;
+
+        public void CacheStartFramePositionIfNeed(LiveTimelineControl timeline, int cacheFrame)
+        {
+            if (!IsUsePositionCache || _charaPositionCachedFrame >= 0) return;
+            CacheStartFramePosition(timeline, cacheFrame);
+        }
+
+        public void CacheStartFramePosition(LiveTimelineControl timeline, int cacheFrame)
+        {
+            CharaPositionAtStartFrame = timeline.GetPositionWithCharacters(charaRelativeBase,
+                IsUsePositionCache ? LiveCameraCharaParts.Face : LiveCameraCharaParts.Max);
+            _charaPositionCachedFrame = cacheFrame;
+        }
+
+        public bool IsAttachedToProps;
+        public int PropsIndex;
+        public int PropsAttachNodeIndex;
+
+        // Original 0x4f082e0: direct fallback for absent slot/master row;
+        // present rows use the corresponding master string prefixed with '#'.
+        public Color GetBgColor()
+        {
+            string field;
+            switch (BgColorType)
+            {
+                case LiveCameraBgColorType.CharacterImageColorMain: field = "image_color_main"; break;
+                case LiveCameraBgColorType.CharacterImageColorSub: field = "image_color_sub"; break;
+                case LiveCameraBgColorType.CharacterUIColorMain: field = "ui_color_main"; break;
+                case LiveCameraBgColorType.CharacterUIColorSub: field = "ui_color_sub"; break;
+                default: return BgColor;
+            }
+            var row = Gallop.Live.Director.GetLiveCameraCharaData(BgColorTargetCharacterIndex);
+            if (row == null) return BgColor;
+            string raw = row.IsNull(field) ? null : (string)row[field];
+            // Native TextUtil.ToColor ignores the parser bool and consumes the
+            // engine output even on failure; never substitute the direct color.
+            Color color = default;
+            ColorUtility.TryParseHtmlString("#" + raw, out color);
+            return color;
+        }
 
         public Vector3 offset = Vector3.zero;
 
         public Vector3 posDirect = Vector3.zero;
 
-        public bool newBezierCalcMethod;
+        public bool newBezierCalcMethod
+        {
+            get => ((int)attribute & 0x10000) != 0;
+            set => attribute = (LiveTimelineKeyAttribute)(value ? (int)attribute | 0x10000 : (int)attribute & ~0x10000);
+        }
 
 
         public float outlineZOffset = 1f;
@@ -182,7 +231,9 @@ namespace Gallop.Live.Cutt
 
         protected const CharacterLOD shaderLODMask = (CharacterLOD)0x1FF8000;
 
-        public int GetCullingMask()
+        public virtual int GetCullingMask() => ResolveCullingMask(cullingLayer);
+
+        public static int ResolveCullingMask(LiveCameraCullingLayer cullingLayer)
         {
             // Native GetCullingMask (0x1af50a0) reads cullingLayer, not the legacy CGSS mask.
             int mask = 0;
@@ -208,21 +259,17 @@ namespace Gallop.Live.Cutt
 
         protected virtual Vector3 GetValue(LiveTimelineControl timelineControl, LiveCameraPositionType type, bool containOffset)
         {
-            Vector3 vector = position;
-            switch (type)
+            if (type == LiveCameraPositionType.Direct) return position;
+            if (type != LiveCameraPositionType.Character) return Vector3.zero;
+            if ((int)charaRelativeParts != 20)
+                return LiveTimelineKeyCameraLookAtData.GetCharacterWorldPosition(timelineControl, charaRelativeBase, charaRelativeParts,
+                    charaPos, position, IsAttachedToProps, PropsIndex, PropsAttachNodeIndex);
+            if (!IsUseCharaPositionAtPrevKeyStartFrame && frame != timelineControl.CurrentCameraPositionKeyFrame)
             {
-                case LiveCameraPositionType.Direct:
-                    vector += posDirect;
-                    break;
-                case LiveCameraPositionType.Character:
-                    vector += timelineControl.GetPositionWithCharacters(charaRelativeBase, charaRelativeParts, charaPos);
-                    break;
+                CharaPositionAtStartFrame = timelineControl.GetPositionWithCharacters(charaRelativeBase, LiveCameraCharaParts.Face);
+                _charaPositionCachedFrame = frame;
             }
-            if (!containOffset)
-            {
-                return vector;
-            }
-            return vector + offset;
+            return position + CharaPositionAtStartFrame;
         }
 
         public int GetBezierPointCount()
@@ -261,7 +308,7 @@ namespace Gallop.Live.Cutt
             {
                 return GetValue(timelineControl) + bezierPoints[index];
             }
-            return GetValue(timelineControl) + Vector3.zero;
+            return GetValue(timelineControl);
         }
 
         public void GetBezierPoints(LiveTimelineControl timelineControl, Vector3[] outPoints, int startIndex)
@@ -342,7 +389,7 @@ namespace Gallop.Live.Cutt
         public int index;
     }
 
-    public class LiveTimelineWorkSheet : ScriptableObject
+    public partial class LiveTimelineWorkSheet : ScriptableObject
     {
         public string version;
         public int targetCameraIndex;
@@ -351,8 +398,14 @@ namespace Gallop.Live.Cutt
         public float TotalTimeLength;
         public bool Lyrics;
         public LiveTimelineDefine.SheetIndex SheetType;
+        public int SheetVariationId;
+        public bool IsVariationSheet;
         [SerializeField] public LiveTimelineKeyTimescaleDataList timescaleKeys;
+        [SerializeField] public LiveTimelineKeyCharaMotionNoiseDataList charaMotionNoiseKeys;
+        [SerializeField] public List<LiveTimelineNodeScaleData> nodeScaleList;
         [SerializeField] public LiveTimelineKeyCameraPositionDataList cameraPosKeys;
+        [SerializeField] public LiveTimelineKeyHandShakeCameraDataList handShakeCameraKeys;
+        [SerializeField] public LiveTimelineKeyTransparentCameraDataList TransparentCameraKeys;
         [SerializeField] public List<LiveTimelineMultiCameraPositionData> multiCameraPosKeys;
         [SerializeField] public List<LiveTimelineMultiCameraLookAtData> multiCameraLookAtKeys;
         [SerializeField] public List<LiveTimelineMultiCameraLayerData> multiCameraLayerKeys;
@@ -365,18 +418,26 @@ namespace Gallop.Live.Cutt
         [SerializeField] public LiveTimelineKeyCameraLookAtDataList cameraLookAtKeys;
         [SerializeField] public LiveTimelineKeyCameraFovDataList cameraFovKeys;
         [SerializeField] public LiveTimelineKeyCameraRollDataList cameraRollKeys;
+        [SerializeField] public LiveTimelineKeyCameraLayerDataList cameraLayerKeys;
 
         [SerializeField]
         public LiveTimelineKeyPostEffectBloomDiffusionDataList postEffectBloomDiffusionKeys;
         [SerializeField] public LiveTimelineKeyPostEffectDOFDataList postEffectDOFKeys;
+        [SerializeField] public LiveTimelineKeyCharaFootLightDataList charaFootLightKeys;
+        [SerializeField] public List<LiveTimelineMultiCameraPostEffectDOFData> postEffectDOFMultiCameraKeys;
         [SerializeField] public LiveTimelineKeyRadialBlurDataList radialBlurKeys;
+        [SerializeField] public LiveTimelineKeyTiltShiftDataList tiltShiftKeys;
         [SerializeField] public LiveTimelineKeyVortexDataList VortexKeys;
         [SerializeField] public LiveTimelineKeyFluctuationDataList FluctuationKeys;
-        [SerializeField] public LiveTimelineKeyTiltShiftDataList tiltShiftKeys;
+        [SerializeField] public LiveTimelineKeyLensDistortionDataList LensDistortionKeys;
+        [SerializeField] public LiveTimelineKeyHatchingDataList hatchingKeys;
+        [SerializeField] public List<LiveTimelineMultiCameraTiltShiftData> multiCameraTiltShiftDataLists;
+        [SerializeField] public List<LiveTimelineMultiCameraRadialBlurData> multiCameraRadialBlurDataLists;
         // Main-camera simple/nonselective color correction; other modes remain unsupported.
         public List<LiveTimelineColorCorrectionData> colorCorrectionDataLists;
-        [SerializeField] public List<LiveTimelineChromaticAberrationData> chromaticAberrationList;
+        [SerializeField] public List<LiveTimelineMultiCameraColorCorrectionData> multiCameraColorCorrectionDataLists;
         public LiveTimelineKeyPostFilmDataList postFilmKeys;
+        [SerializeField] public LiveTimelineKeyFadeDataList fadeKeys;
         [SerializeField] public LiveTimelineKeyPostFilmDataList postFilm2Keys;
         [SerializeField] public LiveTimelineKeyPostFilmDataList postFilm3Keys;
         [SerializeField]
@@ -401,8 +462,6 @@ namespace Gallop.Live.Cutt
 
         [SerializeField] public List<LiveTimelineCharaMotSeqData> charaMotSeqList;
         [SerializeField] public List<LiveTimelineAnimationData> animationList = new List<LiveTimelineAnimationData>();
-        // Colisiones de entorno del cutt (suelo/atrezzo) que se aplican al pelo, la ropa y la cola.
-        [SerializeField] public List<LiveTimelineCharaCollisionData> CharaCollisionDataList;
 
         [SerializeField] public LiveTimelineKeyCameraSwitcherDataList cameraSwitcherKeys;
         [SerializeField] public LiveTimelineKeyLipSyncDataList ripSyncKeys;
@@ -410,17 +469,21 @@ namespace Gallop.Live.Cutt
 
         [SerializeField] public LiveTimelineFacialData facial1Set;
         [SerializeField] public LiveTimelineFacialData[] other4FacialArray;
-        // Pista de sombreado facial del live (umbrales de mejilla/nariz, blends y luz facial).
-        [SerializeField] public LiveTimelineFacialToonData facialToonSet;
         [SerializeField] public LiveTimelineFormationOffsetData formationOffsetSet;
 
         [SerializeField] public List<LiveTimelineGlobalFogData> globalFogDataLists;
+        [SerializeField] public LiveTimelineKeyTransmittedLightDataList TransmittedLightKeys=new LiveTimelineKeyTransmittedLightDataList();
+        [SerializeField] public LiveTimelineKeyEdgeStyleDataList edgeStyleKeys=new LiveTimelineKeyEdgeStyleDataList();
+        [SerializeField] public List<LiveTimelineTransmittedLightMaskData> transmittedLightMaskDataList=new List<LiveTimelineTransmittedLightMaskData>();
+        [SerializeField] public List<LiveTimelineMultiCameraTransmittedLightData> MultiCameraTransmittedLightDataList=new List<LiveTimelineMultiCameraTransmittedLightData>();
         [SerializeField] public List<LiveTimelineGlobalLightData> globalLightDataLists;
         [SerializeField] public List<LiveTimelineStageEnvironmentData> environmentDataLists;
         [SerializeField] public List<LiveTimelineBgColor1Data> bgColor1List;
         [SerializeField] public List<LiveTimelineBgColor2Data> bgColor2List;
         [SerializeField] public List<LiveTimelineBlinkLightData> blinkLightList;
-        [SerializeField] public List<LiveTimelineWashLightData> washLightList;
+        [UnityEngine.Serialization.FormerlySerializedAs("washLightList")]
+        [SerializeField] public List<LiveTimelineWashLightData> WashLightList;
+        public List<LiveTimelineWashLightData> washLightList { get=>WashLightList; set=>WashLightList=value; }
         [SerializeField] public List<LiveTimelineMonitorControlData> monitorControlList;
         [SerializeField] public List<LiveTimelineMonitorCameraLayerData> monitorCameraLayerKeys;
         [SerializeField] public List<LiveTimelineMonitorCameraPositionData> monitorCameraPosKeys;
@@ -429,22 +492,49 @@ namespace Gallop.Live.Cutt
         [SerializeField] public List<LiveTimelineUVScrollLightData> uvScrollLightList;
         [SerializeField] public List<LiveTimelineLensFlareData> lensFlareList;
         [SerializeField] public List<LiveTimelineLightProjectionData> lightProjectionList;
-        [SerializeField] public List<LiveTimelineProjectorData> projecterList;
+        [SerializeField] public List<LiveTimelineBillboardData> billboardList;
+        [SerializeField] public List<LiveTimelineAudienceData> audienceList;
+        [SerializeField] public List<LiveTimelineAdditionalLight> AdditionalLightList;
 
         [SerializeField] public List<LiveTimelineTransformData> transformList;
         [SerializeField] public List<LiveTimelineObjectData> objectList;
-        [SerializeField] public List<LiveTimelineMobCyalumeControlData> MobControlKeys;
-        [SerializeField] public List<LiveTimelineMobCyalumeControlData> CyalumeControlKeys;
+        [SerializeField] public List<LiveTimelineMobControlData> MobControlKeys;
+        [SerializeField] public List<LiveTimelineCyalumeControlData> CyalumeControlKeys;
 
         private void OnEnable()
         {
-            InitializeLightProjection(null);
-            InitializeProjector(null);
-            InitializeProps(null);
+            // Registration belongs to the Control's Data.OnLoad lifetime.
+            // Deserializing an asset must not run a second ownerless OnLoad.
+        }
+
+        public void InitializeAudience(LiveTimelineControl control)
+        {
+            if(control!=null&&control.HasInitializedWorksheet(this))return;
+            InitializePropsGroups(audienceList, control);
+        }
+
+        public void InitializeBillboards(LiveTimelineControl control)
+        {
+            if(control!=null&&control.HasInitializedWorksheet(this))return;
+            InitializePropsGroups(billboardList, control);
+        }
+
+        public void InitializeBgColor2(LiveTimelineControl control)
+        {
+            if(control!=null&&control.HasInitializedWorksheet(this))return;
+            if (bgColor2List == null) return;
+            foreach (var group in bgColor2List)
+            {
+                if (group == null) continue;
+                var keys=group.keys;
+                if(keys!=null)for(int index=0;index<keys.Count;index++)keys[index]?.OnLoad(control);
+                group.UpdateStatus();
+            }
         }
 
         public void InitializeLightProjection(LiveTimelineControl control)
         {
+            if(control!=null&&control.HasInitializedWorksheet(this))return;
             if (lightProjectionList == null) return;
             foreach (var group in lightProjectionList)
             {
@@ -456,31 +546,11 @@ namespace Gallop.Live.Cutt
             }
         }
 
-        public void InitializeProjector(LiveTimelineControl control)
-        {
-            if (projecterList == null) return;
-            foreach (var group in projecterList)
-            {
-                if (group == null) continue;
-                group.UpdateStatus();
-                if (group.keys == null) continue;
-                for (int i = 0; i < group.keys.Count; ++i)
-                    group.keys[i]?.OnLoad(control);
-            }
-        }
-
         public void InitializeProps(LiveTimelineControl control)
         {
+            if(control!=null&&control.HasInitializedWorksheet(this))return;
             InitializePropsGroups(propsList, control);
             InitializePropsGroups(propsAttachList, control);
-        }
-
-        /// <summary>
-        /// Prepara las keys de colisiones de entorno (deriva la rotacion de los angulos de Euler).
-        /// </summary>
-        public void InitializeCharaCollision(LiveTimelineControl control)
-        {
-            InitializePropsGroups(CharaCollisionDataList, control);
         }
 
         private static void InitializePropsGroups<T>(IList<T> groups, LiveTimelineControl control)

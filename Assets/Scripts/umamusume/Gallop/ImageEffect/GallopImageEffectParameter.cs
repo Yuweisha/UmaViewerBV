@@ -5,7 +5,7 @@ using UnityEngine;
 namespace Gallop
 {
     /// <summary>
-    /// 当前仅启用 DofDiffusionBloomOverlay 所需参数。
+    /// 当前启用 DofDiffusionBloomOverlay 与原生 RainSplash 参数。
     ///
     /// 其他官方参数字段和处理逻辑暂时保留为注释，
     /// 等对应参数类及 Pass 完成后再恢复。
@@ -21,6 +21,8 @@ namespace Gallop
         public IndirectLightShaftsParam IndirectLightShaftsParam;
         public RadialBlurParam RadialBlurParam;
         */
+
+        public RainSplashParam RainSplashParam=new RainSplashParam();
 
         // 当前 PostImageEffectFeature 实际使用的参数。
         public DofDiffusionBloomOverlayParam
@@ -82,7 +84,7 @@ namespace Gallop
 
         /// <summary>
         /// 从运行时 GallopImageEffect 读取参数。
-        /// 当前只读取 DofDiffusionBloomOverlay。
+        /// 读取 DofDiffusionBloomOverlay 与 RainSplash 的原生可复制字段。
         /// </summary>
         public void CopyFrom(GallopImageEffect src)
         {
@@ -117,12 +119,13 @@ namespace Gallop
             RainSplashParam.Setup(src.RainSplash);
             */
 
+            RainSplashParam.Setup(src.RainSplashParam);
             OnCopyFrom(src);
         }
 
         /// <summary>
         /// 从另一个参数资源复制。
-        /// 当前只复制 DofDiffusionBloomOverlay。
+        /// 复制 DofDiffusionBloomOverlay 与 RainSplash 的原生可复制字段。
         /// </summary>
         public void CopyFrom(GallopImageEffectParameter src)
         {
@@ -159,12 +162,13 @@ namespace Gallop
             // LetterBoxParam
             */
 
+            RainSplashParam.Setup(src.RainSplashParam);
             OnCopyFrom(src);
         }
 
         /// <summary>
         /// 将参数写入运行时 GallopImageEffect。
-        /// 当前只写入 DofDiffusionBloomOverlay。
+        /// 写入 DofDiffusionBloomOverlay 与 RainSplash 的原生可复制字段。
         /// </summary>
         public void CopyTo(GallopImageEffect target)
         {
@@ -206,12 +210,13 @@ namespace Gallop
             // LetterBoxParam
             */
 
+            target.RainSplashParam.Setup(RainSplashParam);
             OnCopyTo(target);
         }
 
         /// <summary>
         /// 在两个参数资源之间插值。
-        /// 当前只插值 DofDiffusionBloomOverlay。
+        /// 插值 DofDiffusionBloomOverlay 与 RainSplash 的原生浮点字段。
         /// </summary>
         public void Lerp(
             GallopImageEffectParameter src1,
@@ -290,6 +295,7 @@ namespace Gallop
             // LetterBoxParam
             */
 
+            RainSplashParam.Lerp(src1.RainSplashParam,src2.RainSplashParam,t);
             OnLerp(src1, src2, t);
         }
 

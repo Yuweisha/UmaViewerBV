@@ -4,34 +4,208 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Rendering;
 using Gallop.ImageEffect;
 
 namespace Gallop.Live
 {
-    public class Director : MonoBehaviour
+    public partial class Director : MonoBehaviour
     {
         private static Director _instance = null;
         public LiveTimelineControl _liveTimelineControl; //Edited to public
         [SerializeField]
-        public float _liveCurrentTime;  //Edited to public
+        public float _liveCurrentTime; //Edited to public
+        private LiveTimeController _liveTimeController;
+        private float _livePrevTime;
+        private readonly RandomTable<float> _randomTable = new RandomTable<float>();
+        internal float GetBackgroundRandomValue(int index) => _randomTable[index];
+        private readonly LiveModelRenderQueue _modelRenderQueue = new LiveModelRenderQueue();
+        public LiveModelRenderQueue.Observation[] ObserveModelRenderQueues() => _modelRenderQueue.Observe();
+        private bool _modelQueueCallbacksBound;
+        // Native Director.Start 0x4e3ab80 owns the separate Blink ratio table.
+        // Keep it distinct from the per-frame background-color RandomTable.
+        public RandomRatioTable BlinkRandomRatios { get; } = new RandomRatioTable();
+
+        private readonly LiveFadeController _fadeController = new LiveFadeController();
+        private sealed class RenderFadeSurface : ILiveFadeSurface
+        {
+            public bool IsAlive => true;
+            public Color Color { get; set; }
+        }
+
+        private readonly RenderFadeSurface _renderFadeSurface = new RenderFadeSurface();
+        public Color PresentationFadeColor => _renderFadeSurface.Color;
+
+        private void OnUpdateFade(Color color) => _fadeController.SetColor(color);
+        public void InitializeLiveFadeSurfaces(ILiveFadeSurface landscape, ILiveFadeSurface portrait, ILiveFadeSurface fullPortrait) => _fadeController.Initialize(landscape, portrait, fullPortrait);
+        internal void InitializePlaybackClock()
+        {
+            InitializeRandomTables();
+            PreparePlaybackClock();
+            _liveTimeController.StartCalcElapsedTime();
+        }
+
+        private void PreparePlaybackClock()
+        {
+            _liveTimeController = new LiveTimeController(new DirectorLiveTimeSource(this));
+            _liveTimeController.Initialize();
+        }
+
+        private void InitializeRandomTables()
+        {
+            if (_randomTable.isInitialized)
+                return;
+            // Original Director.Start builds the background table before the
+            // independent Blink table. Seeking/restarting only the clock must
+            // not rebuild either table or consume another random history.
+            _randomTable.Build(16, 256, (bucket, stack) => LiveRandomBoundary.Value());
+            BlinkRandomRatios.Generate(10, 64, 0);
+        }
+
+        internal void AdvancePlaybackClock(float deltaTime)
+        {
+            if (_liveTimeController == null)
+                InitializePlaybackClock();
+            LiveDirectorTimelineDispatch.AdvanceClock(ref _liveTimeController, ref _liveCurrentTime, ref _livePrevTime, deltaTime);
+            _randomTable.Update();
+            _fadeController.AlterUpdate(_liveCurrentTime);
+        }
+
+        private void SetPlaybackClockTime(float time)
+        {
+            if (_liveTimeController == null)
+                InitializePlaybackClock();
+            _liveTimeController.SetCurrentTime(time);
+        }
+
         public bool _isLiveSetup; //Edit to pulic
         public StageController _stageController; //Edited to public
+        private StageMonitorDriver _monitorResourceOwner;
+        private StageMonitorCameraDriver _monitorCameraDriver;
+        public RenderTexture[] MonitorTextureArray { get; private set; }
+        internal StageMonitorCameraDriver MonitorCaptureDriver => _monitorCameraDriver;
+        public Vector2Int MonitorVirtualResolution => LiveMonitorResolution.CurrentVirtualResolution();
+
+        internal void EnsureMonitorResources(StageMonitorDriver owner, StageMonitorCameraDriver cameras, LiveTimelineMonitorCameraSettings settings)
+        {
+            float rate = settings != null && settings.IsEnabledTextureWidthRate ? LiveMonitorResolution.ClampWidthRate(settings.TextureWidthRate) : 0.25f;
+            var size = LiveMonitorResolution.TextureSize(MonitorVirtualResolution, rate, LiveQualitySettings.IsMonitorCamera);
+            // Each authored position group owns an independent MonitorCamera.
+            int count = GetAuthoredMonitorCameraCount();
+            if (count == 0)
+                return;
+            if (_monitorResourceOwner != owner || _monitorCameraDriver != cameras || cameras.Count != count || MonitorTextureArray == null || MonitorTextureArray.Length != count || MonitorTextureArray[0] == null || MonitorTextureArray[0].width != size.x || MonitorTextureArray[0].height != size.y)
+                RemakeMonitorResources(owner, cameras, size);
+        }
+
+        private int GetAuthoredMonitorCameraCount()
+        {
+            int count = 0;
+            var sheets = _liveTimelineControl != null ? _liveTimelineControl.data?.worksheetList : null;
+            if (sheets != null)
+                foreach (var sheet in sheets)
+                    if (sheet?.monitorCameraPosKeys != null)
+                        count = Mathf.Max(count, sheet.monitorCameraPosKeys.Count);
+            return count;
+        }
+
+        // Native RemakeMonitorTexture: private cameras first, shared allocation
+        // second, then borrow targets and publish the new array to image effects.
+        internal void RemakeMonitorResources(StageMonitorDriver owner, StageMonitorCameraDriver cameras, Vector2Int size)
+        {
+            int count = Mathf.Max(1, GetAuthoredMonitorCameraCount());
+            if (_monitorCameraDriver != null && _monitorCameraDriver != cameras)
+                _monitorCameraDriver.SetupCaptureTexture(null);
+            cameras.InitializeCapture(size.x, size.y, count);
+            ReleaseMonitorTextures();
+            _monitorResourceOwner = owner;
+            _monitorCameraDriver = cameras;
+            MonitorTextureArray = new RenderTexture[count];
+            for (int i = 0; i < count; i++)
+            {
+                var texture = new RenderTexture(size.x, size.y, 0)
+                {
+                    name = "LiveMonitorScreenRT[" + i + "]",
+                    filterMode = FilterMode.Bilinear
+                };
+                texture.Create();
+                MonitorTextureArray[i] = texture;
+            }
+
+            cameras.SetupCaptureTextures(MonitorTextureArray);
+            PublishMonitorTextures();
+        }
+
+        private void PublishMonitorTextures()
+        {
+            // Native Director +0xd8 is MultiCameraFinalComposite[], not the
+            // auxiliary MultiCamera array. Its +0x48 target is borrowed.
+            if (MultiCameraFinalComposite != null)
+                MultiCameraFinalComposite.monitorTexture = MonitorTextureArray != null && MonitorTextureArray.Length > 0 ? MonitorTextureArray[0] : null;
+            if (_cameraImageEffects != null)
+                foreach (var effect in _cameraImageEffects)
+                    if (effect is LiveImageEffect live)
+                        live.MonitorTextureArray = MonitorTextureArray;
+        }
+
+        private void ReleaseMonitorTextures()
+        {
+            if (MonitorTextureArray != null)
+                foreach (var texture in MonitorTextureArray)
+                    if (texture != null)
+                    {
+                        texture.Release();
+                        if (Application.isPlaying)
+                            Destroy(texture);
+                        else
+                            DestroyImmediate(texture);
+                    }
+
+            MonitorTextureArray = null;
+            PublishMonitorTextures();
+        }
+
+        internal void UnbindMonitorResources(StageMonitorDriver owner)
+        {
+            if (_monitorResourceOwner != owner)
+                return;
+            _monitorCameraDriver?.SetupCaptureTexture(null);
+            ReleaseMonitorTextures();
+            _monitorResourceOwner = null;
+            _monitorCameraDriver = null;
+        }
+
+        // Native Director delegates these to the timeline-owned arrays. The
+        // host owner guard avoids reading disposed slots after Viewer unbind.
+        public bool IsActiveMonitorCamera(int index = -1) => _monitorResourceOwner != null && _liveTimelineControl != null && _liveTimelineControl.IsActiveMonitorCamera(index);
+        public bool IsUseRenderTextureForMonitor(int index) => _monitorResourceOwner != null && _liveTimelineControl != null && _liveTimelineControl.IsUseRenderTextureForMonitor(index);
         [SerializeField]
         private GameObject[] _cameraNodes;
         private Camera[] _cameraObjects;
+        // Native Director retains one main timeline sample; each presentation
+        // camera applies a full parameter copy before its color Setup gate.
+        private Gallop.RenderPipeline.SimpleColorCorrectionPass.Parameter _mainColorCorrection;
         private GallopImageEffect[] _cameraImageEffects;
         private Transform[] _cameraTransforms;
         [SerializeField]
         private CameraLookAt _cameraLookAt;
         private int _activeCameraIndex = 1;
-        private readonly int[] kTimelineCameraIndices = new int[3] { 1, 2, 3 };
-        [SerializeField] private bool _enableMirrorReflection = true;
-        [SerializeField] private List<MirrorReflection> _mirrorReflections = new List<MirrorReflection>();
-        [SerializeField] private bool _mirrorRenderInLateUpdate = true;
-
+        private readonly int[] kTimelineCameraIndices = new int[3]
+        {
+            1,
+            2,
+            3
+        };
         [SerializeField]
-        private GallopImageEffect _mainGallopImageEffect;
+        private bool _enableMirrorReflection = true;
+        [SerializeField]
+        private List<MirrorReflection> _mirrorReflections = new List<MirrorReflection>();
+        [SerializeField]
+        private bool _mirrorRenderInLateUpdate = true;
+        private bool _mirrorInitPending;
+        [SerializeField]
         public MultiCameraFinalComposite MultiCameraFinalComposite { get; private set; }
+
         private MultiCamera[] _multiCameras;
         private LiveVolumeLightController _volumeLightController;
         private LiveStageParticleController _stageParticleController;
@@ -41,70 +215,52 @@ namespace Gallop.Live
         public const string Spotlight3dControllerPath = "3d/env/live/common/spotlight3d/pfb_env_live_cmn_spotlight3d_controller000";
         private Spotlight3dRuntime _spotlightRuntime;
         private MaterialPropertyBlock _characterLightingBlock;
-        private Light _liveDirectionalLight;
-        // Elevacion minima de la luz (caida vertical del vector director): 0.5 = ~30 grados.
-        private const float MinLightDrop = 0.5f;
         private Gallop.RenderPipeline.RecoveredLensFlareController _stageFlares;
         private LightProjectionRuntimeController _lightProjectionController;
-        private MirrorScanLightRuntime _mirrorScanLightRuntime;
         private FootLightRuntime _footLightRuntime;
         private LivePropsController _livePropsController;
         private readonly Dictionary<int, Texture> _lightProjectionTextures = new Dictionary<int, Texture>();
         private readonly Dictionary<int, Texture> _mirrorBallProjectionTextures = new Dictionary<int, Texture>();
+        private LiveSettingsResourceMap _liveSettingsResources;
         public IReadOnlyList<Gallop.RenderPipeline.CustomProjector> LightProjectors => _lightProjectionController?.Projectors;
         public IReadOnlyList<Gallop.RenderPipeline.MirrorBallProjector> MirrorBallProjectors => _lightProjectionController?.MirrorBallProjectors;
 
-        public static string GetLightProjectionTexturePath(int textureId) => string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
-            "3d/env/live/common/projector/tex_env_live_cmn_projector{0:000}", textureId);
-
-        public static string GetMirrorBallProjectionTexturePath(int textureId) => string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
-            "3d/env/live/common/projectormirrorball/tex_env_live_cmn_projector_mirrorball{0:000}", textureId);
-
-        // The timeline TextureId is an id into the per-song projector table published by
-        // `livesettings` (row type 11: id -> texture asset name), not the texture's file number.
-        // Song 1001 maps id 1 to `tex_env_live_cmn_projector000`, while song 1005 maps 1/2/3 to
-        // 004/001/002. Fall back to the number when the song has no table (or no such id).
-        public static string GetLightProjectionTexturePath(int textureId, LiveEntry entry) =>
-            ResolveProjectorTexturePath(textureId, entry, false);
-
-        public static string GetMirrorBallProjectionTexturePath(int textureId, LiveEntry entry) =>
-            ResolveProjectorTexturePath(textureId, entry, true);
-
-        private static string ResolveProjectorTexturePath(int textureId, LiveEntry entry, bool mirrorBall)
-        {
-            string name;
-            if (entry != null && entry.TryGetProjectorTextureName(textureId, out name) &&
-                !string.IsNullOrEmpty(name))
-            {
-                bool tableMirror = name.IndexOf("mirrorball", System.StringComparison.OrdinalIgnoreCase) >= 0;
-                if (tableMirror == mirrorBall)
-                    return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                        mirrorBall ? "3d/env/live/common/projectormirrorball/{0}"
-                                   : "3d/env/live/common/projector/{0}", name);
-            }
-            return mirrorBall
-                ? GetMirrorBallProjectionTexturePath(textureId)
-                : GetLightProjectionTexturePath(textureId);
-        }
-
+        // Legacy filename helpers only. Timeline IDs must use LiveSettingsResourceMap.
+        public static string GetLightProjectionTexturePath(int textureId) => string.Format(System.Globalization.CultureInfo.InvariantCulture, "3d/env/live/common/projector/tex_env_live_cmn_projector{0:000}", textureId);
+        public static string GetMirrorBallProjectionTexturePath(int textureId) => string.Format(System.Globalization.CultureInfo.InvariantCulture, "3d/env/live/common/projectormirrorball/tex_env_live_cmn_projector_mirrorball{0:000}", textureId);
         private Texture ResolveMirrorBallProjectionTexture(int textureId)
         {
-            if (textureId < 0) return null;
-            if (_mirrorBallProjectionTextures.TryGetValue(textureId, out var texture)) return texture;
-            texture = LiveFlashResourceUtility.LoadOnView<Texture>(GetMirrorBallProjectionTexturePath(textureId, live));
+            if (textureId < 0)
+                return null;
+            if (_mirrorBallProjectionTextures.TryGetValue(textureId, out var texture))
+                return texture;
+            string path = _liveSettingsResources?.ProjectorPath(textureId, true);
+            if (string.IsNullOrEmpty(path))
+                path = GetMirrorBallProjectionTexturePath(textureId);
+            texture = LiveFlashResourceUtility.LoadOnView<Texture>(path);
             _mirrorBallProjectionTextures.Add(textureId, texture);
             return texture;
         }
 
         private Texture ResolveLightProjectionTexture(int textureId)
         {
-            if (textureId < 0) return null;
-            if (_lightProjectionTextures.TryGetValue(textureId, out var texture)) return texture;
-            texture = LiveFlashResourceUtility.LoadOnView<Texture>(GetLightProjectionTexturePath(textureId, live));
+            if (textureId < 0)
+                return null;
+            if (_lightProjectionTextures.TryGetValue(textureId, out var texture))
+                return texture;
+            string path = _liveSettingsResources?.ProjectorPath(textureId, false);
+            if (string.IsNullOrEmpty(path))
+                path = GetLightProjectionTexturePath(textureId);
+            texture = LiveFlashResourceUtility.LoadOnView<Texture>(path);
             _lightProjectionTextures.Add(textureId, texture);
             return texture;
+        }
+
+        public void NotifyLiveCharacterVisible(UmaContainer character, bool visible)
+        {
+            if (character == null)
+                return;
+            _footLightRuntime?.SetCharacterVisible(character.transform, visible);
         }
 
         private Transform ResolveEffectCharacter(int index)
@@ -118,117 +274,6 @@ namespace Gallop.Live
             return _effectStageObjects.TryGetValue(hash, out var owner) ? owner : null;
         }
 
-        private void EnableRealtimeShadows(List<Transform> characterRoots)
-        {
-            for (int i = 0; i < characterRoots.Count; i++)
-            {
-                Transform root = characterRoots[i];
-                if (root == null) continue;
-                foreach (Renderer target in root.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (target == null) continue;
-                    target.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
-                    target.receiveShadows = true;
-                }
-            }
-            if (_stageController != null)
-            {
-                foreach (Renderer target in _stageController.GetComponentsInChildren<Renderer>(true))
-                {
-                    if (target == null) continue;
-                    target.receiveShadows = true;
-                }
-            }
-        }
-
-        // Los haces/luces de parpadeo del escenario no se registraban en su driver (solo los props),
-        // asi que sus pistas no movian nada y no habia barridos ni fogonazos. Aqui se registran con
-        // el nombre de la pista: objeto `light000_blinkbeamlight_x` -> pista
-        // `pfb_env_live<BackGroundId>_blinkbeamlight_x` (recortando sufijos hasta encontrar la pista,
-        // porque un haz puede estar partido en variantes _outside/_circle/_ground).
-        private void RegisterStageBlinkLights()
-        {
-            if (_stageController == null || _liveTimelineControl == null) return;
-            var driver = GetComponent<StageBlinkLightDriver>();
-            if (driver == null) driver = FindObjectOfType<StageBlinkLightDriver>();
-            if (driver == null) return;
-            var data = _liveTimelineControl.data;
-            if (data == null || data.worksheetList == null) return;
-
-            var tracks = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var sheet in data.worksheetList)
-            {
-                if (sheet == null || sheet.blinkLightList == null) continue;
-                foreach (var group in sheet.blinkLightList)
-                    if (group != null && !string.IsNullOrEmpty(group.name)) tracks.Add(group.name);
-            }
-            if (tracks.Count == 0) return;
-
-            string prefix = "pfb_env_live" + (live != null ? live.BackGroundId : string.Empty) + "_";
-            var registeredTracks = new HashSet<string>(StringComparer.Ordinal);
-            int registered = 0;
-
-            // 1) Objetos cuyo nombre ya es el de la pista (`pfb_env_live10135_blinkbeamlight_x(Clone)`):
-            //    son las raices que giran; sus hijos son las partes del haz.
-            foreach (Transform target in _stageController.GetComponentsInChildren<Transform>(true))
-            {
-                if (target == null) continue;
-                string name = StripCloneSuffix(target.name);
-                if (name == null || !tracks.Contains(name)) continue;
-                if (target.parent != null && tracks.Contains(StripCloneSuffix(target.parent.name))) continue;
-                driver.RegisterRootAs(target.gameObject, name, _stageFlares);
-                registeredTracks.Add(name);
-                registered++;
-            }
-
-            // 2) Objetos renombrados por el runtime (`light000_blinkbeamlight_x`): solo para pistas
-            //    que aun no tengan raiz registrada.
-            foreach (Transform target in _stageController.GetComponentsInChildren<Transform>(true))
-            {
-                if (target == null || target.childCount > 0) continue;
-                string name = StripCloneSuffix(target.name);
-                string rest = StripBlinkLightIndexPrefix(name);
-                if (rest == null) continue;
-                string candidate = prefix + rest;
-                string match = null;
-                while (true)
-                {
-                    if (tracks.Contains(candidate)) { match = candidate; break; }
-                    int cut = candidate.LastIndexOf('_');
-                    if (cut <= prefix.Length) break;
-                    candidate = candidate.Substring(0, cut);
-                }
-                if (match == null || registeredTracks.Contains(match)) continue;
-                driver.RegisterRootAs(target.gameObject, match, _stageFlares);
-                registeredTracks.Add(match);
-                registered++;
-            }
-
-            if (registered == 0)
-                Debug.LogWarning("[Director] No stage blink/beam light matched a timeline track (prefix '" + prefix + "').");
-        }
-
-        private static string StripCloneSuffix(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            const string clone = "(Clone)";
-            return name.EndsWith(clone, StringComparison.Ordinal)
-                ? name.Substring(0, name.Length - clone.Length)
-                : name;
-        }
-
-        // `light000_blinkbeamlight_x` -> `blinkbeamlight_x`
-        private static string StripBlinkLightIndexPrefix(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            int underscore = name.IndexOf('_');
-            if (underscore <= 0) return null;
-            if (!name.StartsWith("light", StringComparison.Ordinal)) return null;
-            for (int i = 5; i < underscore; i++)
-                if (!char.IsDigit(name[i])) return null;
-            return name.Substring(underscore + 1);
-        }
-
         private void InitializeLiveEffects(int normalLayer, int excludedLayer, int transparentLayer)
         {
             if (_effectController != null)
@@ -237,17 +282,17 @@ namespace Gallop.Live
                 _liveTimelineControl.OnUpdateEffectScale -= _effectController.UpdateScale;
                 _effectController.Dispose();
             }
+
             _effectStageObjects.Clear();
             foreach (var item in _liveTimelineControl.StageObjectMap)
-                if (item.Value != null) _effectStageObjects[FNVHash.Generate(item.Key)] = item.Value.transform;
-            _effectController = new LiveEffectController(transform, transform,
-                ResolveEffectCharacter, ResolveEffectStageObject, normalLayer, excludedLayer, transparentLayer);
+                if (item.Value != null)
+                    _effectStageObjects[FNVHash.Generate(item.Key)] = item.Value.transform;
+            _effectController = new LiveEffectController(transform, transform, ResolveEffectCharacter, ResolveEffectStageObject, normalLayer, excludedLayer, transparentLayer);
+            // Effect.Update owner19 reads Director._mainCameraTransform (native
+            // 0x4e8b85f), and must follow switches rather than the Director root.
+            _effectController.CameraOwner = () => MainCameraTransform;
             var sheet = _liveTimelineControl.GetWorkSheetBySheetIndex(LiveTimelineDefine.SheetIndex.MainLive);
-            if (sheet?.effectList != null)
-                foreach (var group in sheet.effectList)
-                    if (group?.keys != null)
-                        for (int i = 0; i < group.keys.Count; i++) group.keys[i]?.OnLoad(_liveTimelineControl);
-            _effectController.Load(sheet, TimelinePlayerMode.Default, variation => variation == 0);
+            _effectController.Load(sheet, TimelinePlayerMode.Default, variation => variation == _liveTimelineControl.SheetVariationId);
             _liveTimelineControl.OnUpdateEffect += _effectController.Update;
             _liveTimelineControl.OnUpdateEffectScale += _effectController.UpdateScale;
             _liveTimelineControl.ResetEffectTimelineForSeek();
@@ -262,7 +307,9 @@ namespace Gallop.Live
                 _spotlightRuntime.Dispose();
                 _spotlightRuntime = null;
             }
-            if (_stageController == null) return;
+
+            if (_stageController == null)
+                return;
             List<LiveTimelineSpotlight3dData> groups = null;
             foreach (var sheet in _liveTimelineControl.data.worksheetList)
                 if (sheet?.spotlight3dList != null && sheet.spotlight3dList.Count != 0)
@@ -270,7 +317,9 @@ namespace Gallop.Live
                     groups = sheet.spotlight3dList;
                     break;
                 }
-            if (groups == null) return;
+
+            if (groups == null)
+                return;
             var prefab = LiveFlashResourceUtility.LoadOnView<GameObject>(Spotlight3dControllerPath);
             var holder = prefab != null ? prefab.GetComponent<AssetHolder>() : null;
             if (holder == null)
@@ -278,12 +327,12 @@ namespace Gallop.Live
                 Debug.LogError("[Spotlight3d] Missing native common controller AssetHolder");
                 return;
             }
+
             var roots = new List<Transform>(CharaContainerScript.Count);
-            for (int i = 0; i < CharaContainerScript.Count; ++i) roots.Add(ResolveEffectCharacter(i));
-            _spotlightRuntime = new Spotlight3dRuntime(roots, MainCameraTransform,
-                GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerBG));
-            _spotlightRuntime.CreateControllers(groups, TimelinePlayerMode.Default,
-                id => holder.Get<GameObject>(LiveTimelineSpotlight3dData.GetAssetName(id)));
+            for (int i = 0; i < CharaContainerScript.Count; ++i)
+                roots.Add(ResolveEffectCharacter(i));
+            _spotlightRuntime = new Spotlight3dRuntime(roots, MainCameraTransform, GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerBG));
+            _spotlightRuntime.CreateControllers(groups, TimelinePlayerMode.Default, id => holder.Get<GameObject>(LiveTimelineSpotlight3dData.GetAssetName(id)));
             _liveTimelineControl.OnUpdateSpotlight3d += _spotlightRuntime.Update;
         }
 
@@ -298,62 +347,68 @@ namespace Gallop.Live
         private const string RANDOM_VOCAL_PATH = "sound/l/{0}/snd_bgm_live_{0}_chara";
         private const string LIVE_PART_PATH = "live/musicscores/m{0}/m{0}_part";
         private const string CYALUME_SCORE_PATH = "live/musicscores/m{0:0000}/m{0:0000}_cyalume";
-
         private UmaViewerBuilder Builder => UmaViewerBuilder.Instance;
 
         public List<Transform> charaObjs;
-
         public List<UmaContainerCharacter> CharaContainerScript = new List<UmaContainerCharacter>();
+        // Host bridge for original TryGetLiveSettingsCharacterData -> master
+        // lookup. Existing loaded models supply slot identity, not raw slot IDs.
+        // Full native LiveLoadSettings construction/lifecycle remains separate.
+        internal static System.Data.DataRow GetLiveCameraCharaData(int index)
+        {
+            if (index < 0)
+                return null;
+            var characters = instance.CharaContainerScript;
+            if (index >= characters.Count)
+                return null;
+            var character = characters[index];
+            if (character == null)
+                return null;
+            // Original CharacterData constructor represents a mob as CharaId=1,
+            // keeping MobId separately. Background lookup still uses chara_data.
+            int id = character.IsMob ? 1 : character.CharaEntry.Id;
+            return UmaDatabaseController.Instance.CharaData.Find(row => Convert.ToInt32(row["id"]) == id);
+        }
+
+        internal bool TryGetPropsCameraNode(int index, int propsIndex, int nodeIndex, out Transform target)
+        {
+            target = null;
+            if (index < 0 || index >= CharaContainerScript.Count || CharaContainerScript[index] == null)
+                return false;
+            // Current host contexts belong to the loaded costume only; native
+            // multi-dress/host-swap installation remains a separate boundary.
+            return _livePropsController.TryGetAttachNodeTransform(index, propsIndex, nodeIndex, out target);
+        }
+
+        internal Transform ResolveStageObjectAttachment(ObjectUpdateInfo info)
+        {
+            if (info.AttachTarget == AttachType.Camera)
+                return info.MultiCameraIndex < 0 ? MainCameraTransform : _multiCameras != null && info.MultiCameraIndex < _multiCameras.Length ? _multiCameras[info.MultiCameraIndex]?.transform : null;
+            if (info.AttachTarget != AttachType.Character)
+                return null;
+            if (!info.IsAttachProps)
+                return ResolveEffectCharacter(info.CharacterPosition);
+            return _livePropsController?.GetStageAttachmentRoot(info.CharacterPosition, info.PropsIndex);
+        }
 
         public List<Animation> charaAnims;
         public List<UmaViewerAudio.CuteAudioSource> liveVocal = new List<UmaViewerAudio.CuteAudioSource>();
-        //(Live: charaId de cada entrada de `liveVocal`, en el MISMO orden e índices. Lo usa el overlay
-        //de depuración de voces para poner nombre a cada slot.)
-        public List<int> liveVocalCharaIds = new List<int>();
         public UmaViewerAudio.CuteAudioSource liveMusic = new UmaViewerAudio.CuteAudioSource();
-
         public PartEntry partInfo;
-
         public bool _syncTime = false;
         public bool _soloMode = false;
-
-        //(Live) Ver InitializeMusic: la MISMA cantante ocupa todas las pistas (incluye Solo concert),
-        //así que AlterUpdate no deja sonar más de `_maxSameVoice` pistas a la vez.
-        public bool _capSameVoice = false;
-
-        //(Live) Nº máximo de pistas de voz que pueden sonar a la vez cuando `_capSameVoice` está
-        //activo. En Solo concert sale de Config.MaxSimultaneousVoiceOnSoloConcert (2 por defecto);
-        //en Mix voices se queda en UmaViewerAudio.MaxSimultaneousSameVoice (3).
-        public int _maxSameVoice = UmaViewerAudio.MaxSimultaneousSameVoice;
-
-        //(Live: modo de voz del directo y cantantes elegidas en el bloque VocalSelect.
-        // Los rellena UmaViewerBuilder.LoadLive desde la UI y los consume InitializeMusic.
-        // -1 = slot sin elegir ("Random": se resuelve una voz al azar para esa posición).)
-        public LiveVocalMode VocalMode = LiveVocalMode.SoloConcert;
-        public int[] VocalCharaIds = new int[] { -1, -1, -1, -1, -1, -1, -1 };
-
         public int characterCount = 0;
         public int allowCount = 0;
-
         public int liveMode = 1;
-
         public LiveViewerUI UI;
-
         public float totalTime;
-
         public SliderControl sliderControl;
-
         public bool IsRecordVMD;
-
-        //(Grabación offline) Cuando está activo, el grabador manda: el tiempo lo fija
-        //`OfflineRenderTime` (frame a frame) y el motor no sale solo al llegar al final.
-        public bool IsOfflineRender;
-        public float OfflineRenderTime;
-
         public bool RequireStage = true;
-
         private bool _lateTimelineAppliedThisFrame;
+        public HandShakeCamera HandShake { get; } = new HandShakeCamera();
 
+        private float _handShakeLastTime;
         public Transform MainCameraTransform => _mainCameraTransform;
 
         public Camera MainRenderCamera
@@ -363,12 +418,13 @@ namespace Gallop.Live
                 if (_mainCameraTransform != null)
                 {
                     var cam = _mainCameraTransform.GetComponent<Camera>();
-                    if (cam == null) cam = _mainCameraTransform.GetComponentInChildren<Camera>(true);
-                    if (cam != null) return cam;
+                    if (cam == null)
+                        cam = _mainCameraTransform.GetComponentInChildren<Camera>(true);
+                    if (cam != null)
+                        return cam;
                 }
-                if (_cameraObjects != null &&
-                    _activeCameraIndex >= 0 &&
-                    _activeCameraIndex < _cameraObjects.Length)
+
+                if (_cameraObjects != null && _activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
                     return _cameraObjects[_activeCameraIndex];
                 return Camera.main;
             }
@@ -391,10 +447,10 @@ namespace Gallop.Live
         }
 
         private Transform _mainCameraTransform;
+        private LiveTransparentCamera _transparentCamera;
+        public Camera FinalRenderCamera => _transparentCamera != null && _transparentCamera.Active ? _transparentCamera.Camera : MainRenderCamera;
 
-        private static readonly Dictionary<string, UmaDatabaseEntry> _laserBundleCache
-            = new Dictionary<string, UmaDatabaseEntry>();
-
+        private static readonly Dictionary<string, UmaDatabaseEntry> _laserBundleCache = new Dictionary<string, UmaDatabaseEntry>();
         public bool isTimelineControlled
         {
             get
@@ -403,6 +459,7 @@ namespace Gallop.Live
                 {
                     return _liveTimelineControl.data != null;
                 }
+
                 return false;
             }
         }
@@ -413,20 +470,23 @@ namespace Gallop.Live
             {
                 return Mathf.RoundToInt(musicScoreTime * 60f) / 60f;
             }
+
             return musicScoreTime;
         }
 
         public float musicScoreTime => Mathf.Clamp(smoothMusicScoreTime, 0f, 99999f);
-
-        private float smoothMusicScoreTime => _liveCurrentTime;//temp to liveCurrentTime
+        private float smoothMusicScoreTime => _liveCurrentTime; //temp to liveCurrentTime
 
         public void Initialize()
         {
+            InitializeRandomTables();
+            foreach (var driver in GetComponentsInChildren<StageBlinkLightDriver>(true))
+                driver.RandomRatios = BlinkRandomRatios;
             if (live != null)
             {
                 _instance = this;
-                LiveRuntimeDiagnostics.BeginDirector(this);
                 Gallop.RenderPipeline.PostImageEffectFeature.ResetRuntimeParameter();
+                Debug.Log(string.Format(CUTT_PATH, live.MusicId));
                 Builder.LoadAssetPath(string.Format(CUTT_PATH, live.MusicId), transform);
                 // Character eye tracking can run while subsequent asset preloads yield.
                 // Establish Camera.main before constructing/enabling those characters.
@@ -434,80 +494,105 @@ namespace Gallop.Live
                 UpdateMainCamera();
                 if (RequireStage)
                 {
-                    string stagePath = string.Format(STAGE_PATH, live.BackGroundId);
-                    if (UmaViewerMain.Instance.AbList.TryGetValue(stagePath, out var stageEntry) &&
-                        !UmaAssetManager.Exist(stageEntry))
+                    Debug.Log(live.BackGroundId);
+                    string stagePath = $"3d/env/live/live{live.BackGroundId}/pfb_env_live{live.BackGroundId}_controller{live.BackGroundVariation:D3}";
+                    if (UmaViewerMain.Instance.AbList.TryGetValue(stagePath, out var stageEntry) && !UmaAssetManager.Exist(stageEntry))
                     {
                         // 正常从 LoadLive 进入时已经异步预载；这里仅作为其他入口的同步兜底。
                         PreloadStageBundlesBeforeInstantiate(live.BackGroundId);
                     }
 
-                    Builder.LoadAssetPath(stagePath, transform);
-
-
-                    _liveTimelineControl.StageObjectMap = _stageController.StageObjectMap;
-                    _liveTimelineControl.StageObjectUnitMap = _stageController.StageObjectUnitMap;
+                    var loadedStageRoot = Builder.LoadAssetPath(stagePath, transform);
+                    _stageController = loadedStageRoot == null ? null : loadedStageRoot.GetComponent<StageController>();
+                    if (LiveStageLoadLifecycle.Complete(_stageController, stage => stage.InitializeLoadedStage(_liveTimelineControl), enabled => IsEnabledStageController = enabled))
+                    {
+                        _liveTimelineControl.StageObjectMap = _stageController.StageObjectMap;
+                        _liveTimelineControl.StageObjectUnitMap = _stageController.StageObjectUnitMap;
+                    }
                 }
 
-
                 //Make CharacterObject
-
                 var characterStandPos = _liveTimelineControl.transform.Find("CharacterStandPos");
                 int counter = 0;
                 var standPos = characterStandPos.GetComponentsInChildren<Transform>();
                 var count = _liveTimelineControl.data.characterSettings.useHighPolygonModel.Length;
                 for (int i = 0; i < count; i++)
                 {
-                    if (i < characterStandPos.childCount)
-                    {
-                        var newObj = Instantiate(standPos[i + 1], transform);
-                        newObj.gameObject.name = string.Format("CharacterObject{0}", counter);
-                        charaObjs.Add(newObj.transform);
-                        counter++;
-                    }
-                    else
-                    {
-                        var newObj = Instantiate(standPos[i % characterStandPos.childCount + 1], transform);
-                        newObj.gameObject.name = string.Format("CharacterObject{0}", counter);
-                        charaObjs.Add(newObj.transform);
-                        counter++;
-                    }
+                    var newObj = Instantiate(standPos[i % characterStandPos.childCount + 1], transform);
+                    newObj.gameObject.name = string.Format("CharacterObject{0}", counter);
+                    charaObjs.Add(newObj.transform);
+                    counter++;
                 }
-                ;
 
-
+                _liveTimelineControl.SetCharacterStandPosLocators(standPos.Skip(1).ToArray());
                 //Get live parts info
                 UmaDatabaseEntry partAsset = UmaViewerMain.Instance.AbList[string.Format(LIVE_PART_PATH, live.MusicId)];
                 UmaViewerAudio.LastAudioPartIndex = -1;
-
+                Debug.Log(partAsset.Name);
                 AssetBundle bundle = UmaAssetManager.LoadAssetBundle(partAsset);
                 TextAsset partData = bundle.LoadAsset<TextAsset>($"m{live.MusicId}_part");
-                if (LiveRuntimeDiagnostics.Enabled)
-                    LiveRuntimeDiagnostics.RecordAssetLoad(partAsset.Name, "LoadAsset", typeof(TextAsset),
-                        new UnityEngine.Object[] { partData }, partData);
                 partInfo = new PartEntry(partData.text);
-
             }
-
         }
 
         public void InitializeUI()
         {
             UI = GameObject.Find("LiveUI").GetComponent<LiveViewerUI>();
-
             sliderControl = UI.ProgressBar.GetComponent<SliderControl>();
             LiveViewerUI.Instance.RecordingUI.SetActive(IsRecordVMD);
             LiveViewerUI.Instance.RecordingText.text = $"�� Recording...\r\n VMD will be saved in {Path.GetFullPath(Application.dataPath + UnityHumanoidVMDRecorder.FileSavePath)}";
         }
 
+        internal static int ResolveCharacterColorMask(string name, int flags)
+        {
+            switch (name)
+            {
+                case "CharaColor":
+                    return flags != 0 ? flags : 0xfffff;
+                case "CharaCenter":
+                    return 1;
+                case "CharaLeft":
+                    return 2;
+                case "CharaRight":
+                    return 4;
+                case "CharaBack":
+                    return 0xffff8;
+                case "CharaOther":
+                    return 0xffffe;
+                default:
+                    return 0;
+            }
+        }
+
+        readonly Dictionary<int, UmaContainerCharacter> _physicalFacialOwners = new Dictionary<int, UmaContainerCharacter>();
+        internal UmaContainerCharacter ResolvePhysicalFacialCharacter(int physicalSlot)
+        {
+            // Original CharacterObject keeps its model reference across
+            // formation/constraint reparenting. Cache by physical root slot,
+            // not the compact loaded cast index (sparse slots are possible).
+            if (_physicalFacialOwners.TryGetValue(physicalSlot, out var bound) && bound != null)
+                return bound;
+            if (charaObjs == null || physicalSlot < 0 || physicalSlot >= charaObjs.Count)
+                return null;
+            var root = charaObjs[physicalSlot];
+            var actor = root != null ? root.GetComponentInChildren<UmaContainerCharacter>(true) : null;
+            if (actor != null)
+                _physicalFacialOwners[physicalSlot] = actor;
+            return actor;
+        }
+
         public void InitializeTimeline(List<LiveCharacterLoadData> characters, int mode)
         {
+            InitializeObjectImages();
+            SyncCharacterFromStage();
+            InitializeMotionSwapContext(characters);
+            InitializeLiveSystemTextCharacters(characters);
+            _physicalFacialOwners.Clear();
+            for (int slot = 0; slot < charaObjs.Count; slot++)
+                ResolvePhysicalFacialCharacter(slot);
             totalTime = _liveTimelineControl.data.timeLength;
-
             liveMode = mode;
-
             allowCount = characters.Count;
-
             for (int i = 0; i < characters.Count; i++)
             {
                 if (characters[i].CharaEntry.Name != "")
@@ -515,45 +600,47 @@ namespace Gallop.Live
                     characterCount += 1;
                 }
             }
+
             if (characterCount == 1)
             {
                 _soloMode = true;
             }
 
             _liveTimelineControl.InitCharaMotionSequence(_liveTimelineControl.data.characterSettings.motionSequenceIndices);
-
             _liveTimelineControl.OnUpdateLipSync += delegate (LiveTimelineKeyIndex keyData_, float liveTime_)
             {
                 var prevKey = keyData_.prevKey as LiveTimelineKeyLipSyncData;
                 var curKey = keyData_.key as LiveTimelineKeyLipSyncData;
                 var nextKey = keyData_.nextKey as LiveTimelineKeyLipSyncData;
+                int characterFlags = (int)curKey.GetCharacterFlags(SongPartVariationId);
                 for (int k = 0; k < charaObjs.Count; k++)
                 {
                     if (k < CharaContainerScript.Count)
                     {
+                        if (_liveTimelineControl.GetLipSyncPatternId(k) >= 0)
+                            continue;
                         var container = CharaContainerScript[k];
-                        container.FaceDrivenKeyTarget.AlterUpdateAutoLip(prevKey, curKey, liveTime_, ((int)curKey.character >> k) % 2);
+                        container.FaceDrivenKeyTarget.AlterUpdateAutoLip(prevKey, curKey, liveTime_, (characterFlags & (1 << k)) != 0 ? 1 : 0);
                     }
                 }
             };
-
             _liveTimelineControl.OnUpdateFacial += delegate (FacialDataUpdateInfo updateInfo_, float liveTime_, int position)
             {
-                if (position < charaObjs.Count)
+                var container = ResolvePhysicalFacialCharacter(position);
+                if (container != null)
                 {
-                    var container = CharaContainerScript[position];
+                    if (container.LiveSystemTextFace?.Active != true)
+                        container.LiveRandomEar?.SetTimelineKey(updateInfo_.earCur);
                     container.FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
                 }
             };
-
+            _liveTimelineControl.OnUpdateFacialToon += OnUpdateFacialToon;
+            BindCharaNodeOffset();
+            BindParentConstraint();
+            _liveTimelineControl.OnUpdateCharaWind += OnUpdateCharaWind;
+            BindSweatLocator();
             _liveTimelineControl.OnUpdateGlobalLight += delegate (ref GlobalLightUpdateInfo updateInfo)
             {
-                // (LUZ) La direccion que recibe el material del personaje se deriva de la CAMARA
-                // (foco pegado a la camara), no del `lightRotation` del timeline. Motivo medido con
-                // el Frame Debugger: el shader del ojo (ToonEye/T) usa esta direccion cuando
-                // `_UseOriginalDirectionalLight` = 1, y con la del timeline (Y positiva) el iris cae
-                // al escalon de sombra y se pinta NEGRO. Con la de la camara (Y negativa) se ve bien.
-                var tmpPos = GetCameraFacingLightDir();
                 foreach (var locator in _liveTimelineControl.liveCharactorLocators)
                 {
                     if (locator != null && updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) && locator is LiveTimelineCharaLocator charaLocator)
@@ -561,6 +648,7 @@ namespace Gallop.Live
                         var container = charaLocator.UmaContainer;
                         if (container)
                         {
+                            container.SetLiveGlobalLightRotation(updateInfo.lightRotation);
                             var propertyBlock = _characterLightingBlock ?? (_characterLightingBlock = new MaterialPropertyBlock());
                             foreach (var renderer in container.Renderers)
                             {
@@ -579,103 +667,62 @@ namespace Gallop.Live
                                 propertyBlock.SetFloat("_RimFeather2", updateInfo.rimFeather2);
                                 propertyBlock.SetFloat("_RimSpecRate2", updateInfo.rimSpecRate2);
                                 propertyBlock.SetFloat("_RimShadowRate2", updateInfo.globalRimShadowRate2);
-                                propertyBlock.SetFloat("_UseOriginalDirectionalLight", 1f);
-                                propertyBlock.SetVector("_OriginalDirectionalLightDir", tmpPos);
                                 renderer.SetPropertyBlock(propertyBlock);
                             }
                         }
                     }
                 }
-                // La orientacion de la luz direccional (la que proyecta la SOMBRA real) la manda la
-                // pista GlobalLight. Sin esto la luz se queda con la rotacion del prefab (~70 grados,
-                // casi vertical) y la sombra sale diminuta. Se limita la elevacion: varias claves
-                // dejan la luz bajo el horizonte y con ella la sombra se estiraria hasta el infinito.
-                if (_liveDirectionalLight == null) _liveDirectionalLight = ResolveDirectionalLight();
-                if (_liveDirectionalLight != null && updateInfo.lightRotation != Quaternion.identity)
-                {
-                    Vector3 forward = updateInfo.lightRotation * Vector3.forward;
-                    Vector3 flat = new Vector3(forward.x, 0f, forward.z);
-                    if (flat.sqrMagnitude < 1e-4f)
-                        forward = new Vector3(0.35f, -0.6f, 0.35f);
-                    else if (-forward.y < MinLightDrop)
-                    {
-                        flat.Normalize();
-                        float horizontal = Mathf.Sqrt(Mathf.Max(0f, 1f - MinLightDrop * MinLightDrop));
-                        forward = flat * horizontal + Vector3.down * MinLightDrop;
-                    }
-                    _liveDirectionalLight.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
-                }
             };
-
-            // (FacialToon) Aplica los parametros de sombreado facial del timeline al personaje
-            // cuya posicion marca el bit de CharacterPos (igual que el cliente).
-            _liveTimelineControl.OnUpdateFacialToon += delegate (ref FacialToonDataUpdateInfo updateInfo)
-            {
-                for (int i = 0; i < CharaContainerScript.Count; i++)
-                {
-                    if (((updateInfo.CharacterPos >> i) & 1) == 0)
-                        continue;
-
-                    var container = CharaContainerScript[i];
-                    if (container != null)
-                        container.ApplyFacialToon(ref updateInfo);
-                }
-            };
-
             _liveTimelineControl.OnUpdateBgColor1 += delegate (ref BgColor1UpdateInfo updateInfo)
             {
-                if (updateInfo.TimelineName != "CharaCenter" && updateInfo.TimelineName != "CharaLeft" &&
-                    updateInfo.TimelineName != "CharaRight" && updateInfo.TimelineName != "CharaColor") return;
+                // StageController.UpdateCharaColor1 0x4eb7ec0 resolves named
+                // singer tracks before flags. A zero flags field is common for
+                // these tracks and must never make the right singer overwrite all.
+                int targetMask = ResolveCharacterColorMask(updateInfo.TimelineName, updateInfo.CurrentFlags);
+                if (targetMask <= 0)
+                    return;
                 foreach (var locator in _liveTimelineControl.liveCharactorLocators)
                 {
-                    var EFlags = (LiveCharaPositionFlag)updateInfo.flags;
-                    if (locator != null && (updateInfo.flags == 0 || EFlags.hasFlag(locator.liveCharaStandingPosition)) && locator is LiveTimelineCharaLocator charaLocator)
+                    if (locator != null && ((LiveCharaPositionFlag)targetMask).hasFlag(locator.liveCharaStandingPosition) && locator is LiveTimelineCharaLocator charaLocator)
                     {
                         var container = charaLocator.UmaContainer;
                         if (container)
                         {
                             var propertyBlock = _characterLightingBlock ?? (_characterLightingBlock = new MaterialPropertyBlock());
                             foreach (var renderer in container.Renderers)
-                            {
-                                renderer.GetPropertyBlock(propertyBlock);
-                                propertyBlock.SetColor("_CharaColor", updateInfo.color * updateInfo.colorPower);
-                                propertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                                propertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                                propertyBlock.SetColor("_OutlineColor", updateInfo.outlineColor);
-                                propertyBlock.SetFloat("_Saturation", updateInfo.Saturation);
-                                renderer.SetPropertyBlock(propertyBlock);
-                            }
+                                LiveCharacterColorBlock.Apply(renderer, propertyBlock, in updateInfo);
+                            SetFakeLightReceiveSetting(container, in updateInfo);
                         }
                     }
                 }
             };
-
             SetupCharacterLocator();
+            _stageController?.StartUpdateTimeline(_liveTimelineControl);
+            InitializeLipSyncPatterns();
+            _modelRenderQueue.Bind(CharaContainerScript);
+            BindModelQueueCameraCallbacks();
             foreach (var sheet in _liveTimelineControl.data.worksheetList)
+            {
                 sheet?.InitializeProps(_liveTimelineControl);
-            var propsLocators = new List<LiveTimelineCharaLocator>(CharaContainerScript.Count);
-            foreach (var character in CharaContainerScript)
-                propsLocators.Add(character != null ? character.LiveLocator : null);
-            _livePropsController?.Dispose();
-            _livePropsController = new LivePropsController(transform,
-                _liveTimelineControl.data.propsSettings, CharaContainerScript, propsLocators);
-            _livePropsController.VariationEnabled = variation => variation == 0;
-            _stageParticleController = new LiveStageParticleController(
-                _stageController != null ? _stageController.transform : null);
+                sheet?.InitializeAudience(_liveTimelineControl);
+            }
+
+            InitializeLiveProps();
+            _stageParticleController = new LiveStageParticleController(_stageController != null ? _stageController.transform : null);
             _liveTimelineControl.OnUpdateParticle += _stageParticleController.Update;
             _liveTimelineControl.OnUpdateParticleGroup += _stageParticleController.UpdateGroup;
             InitializeCamera();
+            _transparentCamera?.Dispose();
+            _transparentCamera = new LiveTransparentCamera(transform);
+            InitializeLiveTitle();
+            InitializeLiveFlash(characters);
             InitializeMirrorReflections();
             _volumeLightController = new LiveVolumeLightController();
-            _volumeLightController.Initialize(_stageController != null ? _stageController.transform : null,
-                "Sunshafts", _liveTimelineControl.data.sunShaftsSettings, MainRenderCamera);
-            _volumeLightController.SetLightShaftsTextures(_liveTimelineControl.data.indirectLightShaftsSettings,
-                LiveLightShaftsResources.LoadTextures(_liveTimelineControl.data.indirectLightShaftsSettings));
+            _volumeLightController.Initialize(_stageController != null ? _stageController.transform : null, "Sunshafts", _liveTimelineControl.data.sunShaftsSettings, MainRenderCamera);
+            _volumeLightController.SetLightShaftsTextures(_liveTimelineControl.data.indirectLightShaftsSettings, LiveLightShaftsResources.LoadTextures(_liveTimelineControl.data.indirectLightShaftsSettings));
             UpdateMainCamera();
             InitializeMultiCamera(_liveTimelineControl);
-            InitializeLiveEffects(GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerEFFECT),
-                GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerCircleProfile),
-                GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerTransparentFX));
+            InitializeLiveEffects(GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerEFFECT), GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerCircleProfile), GraphicSettings.GetLayer(GraphicSettings.LayerIndex.LayerTransparentFX));
             InitializeLiveSpotlights();
             if (_lightProjectionController != null)
             {
@@ -685,16 +732,17 @@ namespace Gallop.Live
                 _lightProjectionTextures.Clear();
                 _mirrorBallProjectionTextures.Clear();
             }
+
             if (_stageController != null)
             {
+                if (_liveSettingsResources == null)
+                    _liveSettingsResources = LiveSettingsResourceMap.Load(live.MusicId);
                 _lightProjectionController = new LightProjectionRuntimeController();
-                _lightProjectionController.Initialize(_stageController.transform,
-                    ResolveLightProjectionTexture, ResolveEffectCharacter);
+                _lightProjectionController.Initialize(_stageController.transform, ResolveLightProjectionTexture, ResolveEffectCharacter);
                 _lightProjectionController.ConfigureCharacterPosition(index =>
                 {
                     var locators = _liveTimelineControl.liveCharactorLocators;
-                    return index >= 0 && index < locators.Length && locators[index] != null
-                        ? locators[index].liveCharaPosition : Vector3.zero;
+                    return index >= 0 && index < locators.Length && locators[index] != null ? locators[index].liveCharaPosition : Vector3.zero;
                 });
                 _lightProjectionController.ConfigureMirrorBallTextures(ResolveMirrorBallProjectionTexture);
                 _liveTimelineControl.OnUpdateLightProjection += _lightProjectionController.Apply;
@@ -702,62 +750,38 @@ namespace Gallop.Live
                 if (monitorDriver != null)
                     _lightProjectionController.ConfigureMovieFrames(monitorDriver.TryGetProjectionMovieFrame);
             }
-            if (_mirrorScanLightRuntime != null)
-            {
-                _liveTimelineControl.OnUpdateProjector -= _mirrorScanLightRuntime.Apply;
-                _mirrorScanLightRuntime.Dispose();
-                _mirrorScanLightRuntime = null;
-            }
-            if (_stageController != null)
-            {
-                _mirrorScanLightRuntime = new MirrorScanLightRuntime();
-                _mirrorScanLightRuntime.Initialize(_stageController.transform,
-                    _liveTimelineControl.GetWorkSheetBySheetIndex(LiveTimelineDefine.SheetIndex.MainLive)?.projecterList,
-                    path => LiveFlashResourceUtility.LoadOnView<GameObject>(path),
-                    id => LiveFlashResourceUtility.LoadOnView<Material>(MirrorScanLightRuntime.GetMaterialPath(id)));
-                _liveTimelineControl.OnUpdateProjector += _mirrorScanLightRuntime.Apply;
-            }
 
             var footRoots = new List<Transform>(CharaContainerScript.Count);
             for (int i = 0; i < CharaContainerScript.Count; i++)
                 footRoots.Add(ResolveEffectCharacter(i));
             _footLightRuntime = new FootLightRuntime();
-            _footLightRuntime.Initialize(
-                _stageController != null ? _stageController.transform : transform,
-                footRoots,
-                index =>
-                {
-                    var locators = _liveTimelineControl.liveCharactorLocators;
-                    return index >= 0 && index < locators.Length && locators[index] != null
-                        ? locators[index].liveCharaPosition : Vector3.zero;
-                },
-                path => LiveFlashResourceUtility.LoadOnView<GameObject>(path),
-                (index, left) =>
-                {
-                    var character = CharaContainerScript[index];
-                    if (character == null || character.LiveLocator?.Bones == null) return null;
-                    character.LiveLocator.Bones.TryGetValue(left ? "Ankle_L" : "Ankle_R", out var foot);
-                    return foot;
-                });
+            _footLightRuntime.Initialize(_stageController != null ? _stageController.transform : transform, footRoots, index =>
+            {
+                var locators = _liveTimelineControl.liveCharactorLocators;
+                return index >= 0 && index < locators.Length && locators[index] != null ? locators[index].liveCharaPosition : Vector3.zero;
+            }, path => LiveFlashResourceUtility.LoadOnView<GameObject>(path), (index, left) =>
+            {
+                var character = CharaContainerScript[index];
+                if (character == null || character.LiveLocator?.Bones == null)
+                    return null;
+                character.LiveLocator.Bones.TryGetValue(left ? "Ankle_L" : "Ankle_R", out var foot);
+                return foot;
+            });
             _liveTimelineControl.OnUpdateBgColor1 += _footLightRuntime.ApplySpotlight;
-            // El juego da sombra real a los personajes (CharacterObject.IsCastShadow /
-            // enableRealtimeShadow, capa CharacterRealtimeShadow). Este proyecto los tenía con
-            // shadowCastingMode Off y el escenario sin receiveShadows: no había ninguna sombra.
-            EnableRealtimeShadows(footRoots);
-            RegisterStageBlinkLights();
+            _liveTimelineControl.OnUpdateBgColor1 += _footLightRuntime.ApplyShadow;
             var flareSetting = _liveTimelineControl.data.lensFlareSetting;
-            _stageFlares = new Gallop.RenderPipeline.RecoveredLensFlareController(
-                _stageController != null ? _stageController.transform : null,
-                flareSetting != null ? flareSetting.lightStandard : 3f,
-                flareSetting != null ? flareSetting.underLimit : 0f);
+            _stageFlares = new Gallop.RenderPipeline.RecoveredLensFlareController(_stageController != null ? _stageController.transform : null, flareSetting != null ? flareSetting.lightStandard : 3f, flareSetting != null ? flareSetting.underLimit : 0f);
             _livePropsController.RegisterStageLighting(_stageController, _stageFlares);
             foreach (var sheet in _liveTimelineControl.data.worksheetList)
             {
                 if (sheet.bgColor1List != null)
-                    foreach (var group in sheet.bgColor1List) group?.UpdateStatus();
+                    foreach (var group in sheet.bgColor1List)
+                        group?.UpdateStatus();
                 if (sheet.lensFlareList != null)
-                    foreach (var group in sheet.lensFlareList) group?.UpdateStatus();
+                    foreach (var group in sheet.lensFlareList)
+                        group?.UpdateStatus();
             }
+
             _liveTimelineControl.OnUpdateLensFlare += _stageFlares.Apply;
             for (int i = 0; i < kTimelineCameraIndices.Length; i++)
             {
@@ -767,17 +791,26 @@ namespace Gallop.Live
                     _liveTimelineControl.SetTimelineCamera(_cameraObjects[num], i);
                 }
             }
+
             _liveTimelineControl.OnUpdatePostEffect_BloomDiffusion += OnUpdatePostEffect_BloomDiffusion;
             _liveTimelineControl.OnUpdatePostEffect_Dof += OnUpdatePostEffect_Dof;
             _liveTimelineControl.OnUpdatePostFilm += OnUpdatePostFilm;
+            // The viewer has no game's three RawImageCommon canvases. Retain the
+            // native controller and publish its landscape surface after final blit.
+            _fadeController.Initialize(_renderFadeSurface, new RenderFadeSurface(), new RenderFadeSurface());
+            _liveTimelineControl.OnUpdateFade += OnUpdateFade;
             _liveTimelineControl.OnUpdateRadialBlur += OnUpdateRadialBlur;
+            SubscribeNativePostTimeline(_liveTimelineControl);
+            SubscribeChromaticAberrationTimeline(_liveTimelineControl);
             _liveTimelineControl.OnUpdateColorCorrection += OnUpdateColorCorrection;
-            _liveTimelineControl.OnUpdateChromaticAberration += OnUpdateChromaticAberration;
-            _liveTimelineControl.OnUpdateTiltShift += OnUpdateTiltShift;
-            _liveTimelineControl.OnUpdateVortex += OnUpdateVortex;
-            _liveTimelineControl.OnUpdateFluctuation += OnUpdateFluctuation;
+            _liveTimelineControl.OnUpdatePreColorCorrection += OnUpdatePreColorCorrection;
+            _liveTimelineControl.OnVoicePlay += OnVoicePlay;
+            _liveTimelineControl.OnVoiceStopAll += StopVoiceAll;
+            _liveTimelineControl.OnUpdateColorCorrectionMultiCamera += OnUpdateColorCorrectionMultiCamera;
             _liveTimelineControl.OnUpdateGlobalFog += OnUpdateGlobalFog;
-
+            _liveTimelineControl.OnUpdateEdgeStyle += OnUpdateEdgeStyle;
+            _liveTimelineControl.OnUpdateTransmittedLight += OnUpdateTransmittedLight;
+            _liveTimelineControl.OnUpdateTransmittedLightMultiCamera += OnUpdateTransmittedLightMultiCamera;
             // [A7b][原生订阅点] Director.InitializeTimeline 在
             // 0x181a5f21d（add_OnUpdateExposure RVA=0x1ae96c0）与
             // 0x181a5f1c9（add_OnUpdateToneCurve RVA=0x1aea4b0）订阅两条轨道，
@@ -787,8 +820,6 @@ namespace Gallop.Live
             _liveTimelineControl.OnUpdateLightShafts += OnUpdateLightShafts;
             _liveTimelineControl.OnUpdateExposure += OnUpdateExposure;
             _liveTimelineControl.OnUpdateToneCurve += OnUpdateToneCurve;
-
-
             _liveTimelineControl.OnUpdateCameraSwitcher += delegate (int cameraIndex_)
             {
                 if (cameraIndex_ < 0)
@@ -799,9 +830,9 @@ namespace Gallop.Live
                 {
                     _activeCameraIndex = kTimelineCameraIndices[cameraIndex_];
                 }
+
                 UpdateMainCamera();
             };
-
         }
 
         public void InitializeCamera()
@@ -818,26 +849,46 @@ namespace Gallop.Live
                     {
                         camera = gameObject.GetComponentInChildren<Camera>();
                     }
-                    //camera.cullingMask = num;
+
+                    // Original prefabs/live/director serializes these defaults
+                    // for MotionCamera and CameraTimeline1/2/3. The Viewer
+                    // prefab's Everything mask also draws layer16 led_dummy
+                    // meshes. Restore the native mask only on first creation;
+                    // flagged timeline keys can subsequently replace it.
+                    Gallop.RenderPipeline.NativeLensFlareCameraRegistry.RestoreSerializedFlareLayer(camera);
+                    camera.clearFlags = CameraClearFlags.Color;
+                    camera.cullingMask = 0x3E283FC8;
                     _cameraObjects[i] = camera;
                     _cameraTransforms[i] = camera.transform;
                 }
             }
+
             if (_cameraImageEffects == null)
             {
                 _cameraImageEffects = new GallopImageEffect[_cameraObjects.Length];
                 for (int i = 0; i < _cameraObjects.Length; ++i)
                 {
                     var camera = _cameraObjects[i];
-                    if (camera == null) continue;
+                    if (camera == null)
+                        continue;
+                    if (i < _cameraNodes.Length)
+                        Gallop.RenderPipeline.NativeLensFlareCameraRegistry.RestoreSerializedFlareLayer(camera);
                     var effect = camera.GetComponent<GallopImageEffect>();
-                    if (effect == null) effect = camera.gameObject.AddComponent<LiveImageEffect>();
+                    if (effect == null)
+                        effect = camera.gameObject.AddComponent<LiveImageEffect>();
                     // Actual Director.InitializeCamera dispatches Initialize slot5
                     // before author enable/bloom state; do not rely on Awake.
                     effect.InitializeVolume();
                     _cameraImageEffects[i] = effect;
                 }
             }
+
+            foreach (var effect in _cameraImageEffects)
+                if (effect is LiveImageEffect live)
+                {
+                    live.MonitorTextureArray = MonitorTextureArray;
+                    live.SetUpEdgeStyleController(_liveTimelineControl.CurrentWorkSheet.edgeStyleKeys.EdgeStyle);
+                }
         }
 
         public void InitializeMultiCamera(LiveTimelineControl control)
@@ -852,9 +903,10 @@ namespace Gallop.Live
             {
                 var camObj = new GameObject($"MultiCamera_{i}");
                 camObj.transform.SetParent(root.transform);
-
                 var sceneCamera = camObj.AddComponent<Camera>();
-                if (presentationCamera != null) sceneCamera.CopyFrom(presentationCamera);
+                if (presentationCamera != null)
+                    sceneCamera.CopyFrom(presentationCamera);
+                sceneCamera.clearFlags = CameraClearFlags.Color;
                 sceneCamera.targetTexture = null;
                 sceneCamera.depth = i + 1;
                 var cameraData = camObj.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
@@ -865,109 +917,45 @@ namespace Gallop.Live
                 cameras[i] = cam;
                 control.MultiRecordFrames.Add(new List<LiveCameraFrame>());
             }
+
             _multiCameras = cameras;
             MultiCameraFinalComposite.Initialize(cameras, presentationCamera);
-            if (presentationCamera != null) presentationCamera.depth = cameraCount + 1;
+            PublishMonitorTextures();
+            if (presentationCamera != null)
+                presentationCamera.depth = cameraCount + 1;
             control.SetMultiCamera(cameras);
-        }
-
-        // (RENDIMIENTO) Caches de UpdateMainCamera: el componente URP de cada camara y cual lleva el
-        // tag MainCamera. Antes se llamaba SetActive a TODOS los nodos y se escribia el tag de la
-        // camara activa en cada frame (escribir un tag y un SetActive son caros).
-        private UnityEngine.Rendering.Universal.UniversalAdditionalCameraData[] _cameraDataCache;
-        private int _taggedCameraIndex = -1;
-        // (VIDEO SPEED) Ultima velocidad aplicada, para reaplicar solo cuando cambia.
-        private float _appliedVideoSpeed = -1f;
-
-        /// <summary>Velocidad que deberia tener el live ahora mismo (grabando siempre va a 1).</summary>
-        private float GetWantedVideoSpeed()
-        {
-            float speed = Config.Instance != null ? Config.Instance.GetVideoSpeed() : 1f;
-            if (IsOfflineRender || IsRecordVMD) speed = 1f;
-            return speed;
-        }
-
-        /// <summary>
-        /// (VIDEO SPEED) Aplica la velocidad del live: `Time.timeScale` para animacion, fisicas,
-        /// pelo, ropa y particulas, y pitch en musica/voces para que el audio siga sincronizado.
-        /// </summary>
-        public void ApplyVideoSpeed()
-        {
-            float speed = GetWantedVideoSpeed();
-            _appliedVideoSpeed = speed;
-            Time.timeScale = speed;
-            UmaViewerAudio.SetPlaybackSpeed(liveMusic, speed);
-
-            if (liveVocal != null)
-            {
-                for (int i = 0; i < liveVocal.Count; i++)
-                    UmaViewerAudio.SetPlaybackSpeed(liveVocal[i], speed);
-            }
-        }
-
-        private void ApplyVideoSpeedIfChanged()
-        {
-            float wanted = GetWantedVideoSpeed();
-            if (!Mathf.Approximately(wanted, _appliedVideoSpeed))
-                ApplyVideoSpeed();
         }
 
         private void UpdateMainCamera()
         {
-            if (_cameraObjects == null) return;
-
-            if (_cameraDataCache == null || _cameraDataCache.Length != _cameraObjects.Length)
-                _cameraDataCache = new UnityEngine.Rendering.Universal.UniversalAdditionalCameraData[_cameraObjects.Length];
-
+            if (_cameraObjects == null)
+                return;
             for (int i = 0; i < _cameraNodes.Length; i++)
             {
                 bool activeSelf = _cameraNodes[i].activeSelf;
                 bool flag = i == _activeCameraIndex;
-
-                if (activeSelf != flag)
-                    _cameraNodes[i].SetActive(flag);
-
+                _cameraNodes[i].SetActive(flag);
                 // Camera.main consumers (eye tracking) must follow the same presentation switch.
                 var camera = _cameraObjects[i];
-                if (camera != null && flag)
+                if (camera != null)
                 {
-                    var cameraData = _cameraDataCache[i];
-                    if (cameraData == null)
+                    if (flag)
+                        camera.gameObject.tag = "MainCamera";
+                    if (flag)
                     {
-                        cameraData = camera.GetComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
+                        var cameraData = camera.GetComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
                         if (cameraData == null)
                             cameraData = camera.gameObject.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
-                        _cameraDataCache[i] = cameraData;
-                    }
-
-                    if (!cameraData.renderPostProcessing)
                         cameraData.renderPostProcessing = true;
+                    }
+                    else if (camera.CompareTag("MainCamera"))
+                        camera.gameObject.tag = "Untagged";
                 }
 
                 if (i == 0 && activeSelf != flag && flag && _cameraLookAt != null)
                 {
                     _cameraLookAt.ActivationUpdate();
                 }
-            }
-
-            // El tag solo se toca cuando CAMBIA la camara activa.
-            if (_taggedCameraIndex != _activeCameraIndex)
-            {
-                if (_taggedCameraIndex >= 0 && _taggedCameraIndex < _cameraObjects.Length)
-                {
-                    var previous = _cameraObjects[_taggedCameraIndex];
-                    if (previous != null && previous.CompareTag("MainCamera"))
-                        previous.gameObject.tag = "Untagged";
-                }
-
-                if (_activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
-                {
-                    var current = _cameraObjects[_activeCameraIndex];
-                    if (current != null)
-                        current.gameObject.tag = "MainCamera";
-                }
-
-                _taggedCameraIndex = _activeCameraIndex;
             }
 
             _mainCameraTransform = _cameraTransforms[_activeCameraIndex];
@@ -978,226 +966,114 @@ namespace Gallop.Live
             }
         }
 
-        // (LUZ) Direccion de luz ESTABLE respecto a la CAMARA para los shaders del personaje
-        // (`Gallop/3D/Chara/Toon*`). Se devuelve la direccion DESDE la que llega la luz
-        // (camara + un poco de arriba), en el mismo espacio que espera el shader.
-        private Vector3 GetCameraFacingLightDir()
-        {
-            var cam = MainRenderCamera;
-            if (cam == null && _cameraObjects != null && _activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
-                cam = _cameraObjects[_activeCameraIndex];
-            if (cam == null)
-                cam = Camera.main;
-            if (cam == null)
-                return new Vector3(0f, -0.3f, -1f).normalized;
-
-            var dirFromCamera = (cam.transform.forward + cam.transform.up * 0.35f).normalized;
-            return -dirFromCamera;
-        }
-
-        // Luz direccional del escenario: la unica Light real del live y la que proyecta la sombra
-        // del personaje (shadow map). Su orientacion la manda la pista GlobalLight.
-        private Light ResolveDirectionalLight()
-        {
-            if (RenderSettings.sun != null) return RenderSettings.sun;
-            Light[] lights = FindObjectsOfType<Light>();
-            for (int i = 0; i < lights.Length; i++)
-                if (lights[i] != null && lights[i].type == LightType.Directional) return lights[i];
-            return null;
-        }
-
         private void SetupCharacterLocator()
         {
-            if (!_liveTimelineControl) return;
+            if (!_liveTimelineControl)
+                return;
             for (int i = 0; i < CharaContainerScript.Count; i++)
             {
                 var container = CharaContainerScript[i];
                 container.LiveLocator = new LiveTimelineCharaLocator(container);
+                var face = container.FaceDrivenKeyTarget;
+                container.LiveEyeHighlight?.Dispose();
+                container.LiveEyeHighlight = LiveEyeHighlightController.Create(container);
+                container.LiveFacePartsScale = LiveFacePartsScaleController.Create(container);
+                container.LiveEyeBlink?.Dispose();
+                container.LiveEyeBlink = LiveEyeBlinkController.Create(container);
+                container.LiveRandomEar?.Dispose();
+                container.LiveRandomEar = null;
+                var randomEarTypes = new HashSet<EarType>();
+                foreach (var sheet in _liveTimelineControl.data.worksheetList)
+                {
+                    var facial = _liveTimelineControl.GetFacialDataNative(sheet, i);
+                    if (facial?.earKeys?.thisList == null)
+                        continue;
+                    foreach (var key in facial.earKeys.thisList)
+                        if (key.useEarRandomMotion)
+                            randomEarTypes.Add(key.randomMotionEarType);
+                }
+
+                if (randomEarTypes.Count > 0 && !container.IsMini)
+                    container.LiveRandomEar = new LiveRandomEarController(container, randomEarTypes);
+                face.LiveEyeTrace?.Dispose();
+                face.LiveEyeTrace = LiveEyeTraceController.Create(container);
+                if (face.LiveEyeTrace != null)
+                    face.SetEyeRange(0, 0, 0, 0);
                 container.LiveLocator.liveCharaStandingPosition = (LiveCharaPosition)i;
                 _liveTimelineControl.liveCharactorLocators[i] = container.LiveLocator;
-                container.LiveLocator.liveCharaInitialPosition = container.transform.position;
+                _liveTimelineControl.InitializeCharacterLocatorStandPosition(i, container.LiveLocator);
             }
-        }
 
-        //(Live: resolución de las pistas de voz a partir de VocalMode/VocalCharaIds.
-        //El modo y las cantantes ya NO se derivan de los slots del panel, sino de los desplegables
-        //del bloque VocalSelect.)
-        //Devuelve los charaId que deben cantar, EN ORDEN DE PISTA (center, left, right, …).
-        //  · SoloConcert → sólo VocalCharaIds[0]; si no hay elección, una voz al azar (comportamiento
-        //    histórico, para que la canción nunca se quede sin voz).
-        //  · MixVoices   → todas las posiciones elegidas; los slots sin elegir (-1) eligen una voz al
-        //    azar para esa posición.
-        //No se descartan duplicados a propósito: la tabla _part tiene una columna por pista, así que
-        //la misma cantante puede ocupar dos columnas distintas (center+left), igual que en el juego.
-        public static List<int> GetVocalCharaIdList(int songid, LiveVocalMode mode, int[] ids)
-        {
-            var result = new List<int>();
-            if (mode == LiveVocalMode.SoloConcert)
+            // These authored slots still drive Formation -> Object even when
+            // the selected cast does not instantiate a character in that slot.
+            var attachmentSlots = new HashSet<int>();
+            foreach (var sheet in _liveTimelineControl.data.worksheetList)
+                if (sheet?.objectList != null)
+                    foreach (var group in sheet.objectList)
+                        foreach (var key in group.keys.thisList)
+                            if (key.AttachTarget == AttachType.Character && !key.IsAttachProps)
+                                attachmentSlots.Add(key.CharacterPosition);
+            foreach (int slot in attachmentSlots)
             {
-                if (ids != null && ids.Length > 0 && ids[0] >= 0) result.Add(ids[0]);
-                if (result.Count == 0) AddRandomVocalCharaId(songid, result);
-                return result;
+                if (slot < 0 || slot >= charaObjs.Count || slot >= _liveTimelineControl.liveCharactorLocators.Length || _liveTimelineControl.liveCharactorLocators[slot] != null)
+                    continue;
+                var locator = new LiveTimelineCharaLocator(charaObjs[slot]);
+                locator.liveCharaStandingPosition = (LiveCharaPosition)slot;
+                _liveTimelineControl.liveCharactorLocators[slot] = locator;
+                _liveTimelineControl.InitializeCharacterLocatorStandPosition(slot, locator);
             }
-            if (ids == null) return result;
-            for (int i = 0; i < ids.Length; i++)
-            {
-                if (ids[i] >= 0) result.Add(ids[i]);
-                else AddRandomVocalCharaId(songid, result);
-            }
-            return result;
-        }
-
-        //(Live: fallback aleatorio por posición. El código antiguo usaba Random.Range(0, Count - 1),
-        // que nunca elegía el último elemento de la lista.)
-        static void AddRandomVocalCharaId(int songid, List<int> result)
-        {
-            var pick = GetRandomVocalEntry(songid);
-            if (pick == null) return;
-            var split = Path.GetFileNameWithoutExtension(pick.Name).Split('_');
-            if (split.Length >= 2 && int.TryParse(split[split.Length - 2], out int id))
-            {
-                result.Add(id);
-            }
-        }
-
-        //(Live: una voz cualquiera de esta canción, o null si no hay ninguna.)
-        static UmaDatabaseEntry GetRandomVocalEntry(int songid)
-        {
-            var candidates = UmaViewerMain.Instance.AbSounds
-                .Where(a => a.Name.Contains(string.Format(RANDOM_VOCAL_PATH, songid)) && a.Name.EndsWith("awb"))
-                .ToList();
-            if (candidates.Count == 0) return null;
-            return candidates[UnityEngine.Random.Range(0, candidates.Count)];
-        }
-
-        //(Live: busca la pista EXACTA de una cantante. Si el AWB exacto no está en disco devuelve
-        //null (la pista queda en silencio); NUNCA sustituye la elección del usuario por otra cantante.
-        //El azar queda reservado a AddRandomVocalCharaId, que sólo se usa cuando no se eligió a nadie.)
-        //Se compara por NOMBRE DE ARCHIVO (no con Contains sobre la ruta), para no confundir ids que
-        //comparten prefijo (chara_1001_01 dentro de chara_10011_01).)
-        static UmaDatabaseEntry ResolveVocalSoundEntry(int songid, int charaid)
-        {
-            var sounds = UmaViewerMain.Instance?.AbSounds;
-            if (sounds == null) return null;
-            string exact = string.Format(VOCAL_PATH, songid, charaid);
-            string exactFile = Path.GetFileNameWithoutExtension(exact);
-
-            foreach (var a in sounds)
-            {
-                if (a == null || !a.Name.EndsWith("awb")) continue;
-                if (Path.GetFileNameWithoutExtension(a.Name)
-                        .Equals(exactFile, StringComparison.OrdinalIgnoreCase)) return a;
-            }
-
-            //Mismo prefijo pero cualquier sufijo de onda (VOCAL_PATH exige '_01').
-            string prefix = $"snd_bgm_live_{songid}_chara_{charaid}_";
-            foreach (var a in sounds)
-            {
-                if (a == null || !a.Name.EndsWith("awb")) continue;
-                if (Path.GetFileNameWithoutExtension(a.Name)
-                        .StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return a;
-            }
-            Debug.LogWarning($"[Live] No existe el AWB de voz de la chara {charaid} en la cancion {songid} " +
-                             $"(buscado '{exact}'); esta pista se queda en silencio.");
-            return null;
         }
 
         public void InitializeMusic(int songid, List<LiveCharacterLoadData> characters)
         {
-            //(Live: las voces ya NO se eligen por los slots del panel, sino por VocalMode/VocalCharaIds
-            // del bloque VocalSelect. 'characters' se conserva en la firma por compatibilidad.)
-            var vocalIds = GetVocalCharaIdList(songid, VocalMode, VocalCharaIds);
-
-            //(Live) Solo concert: la cantante del slot 1 ocupa TODAS las pistas que usa la canción (la UI
-            //sigue mostrando sólo el slot 1). Antes se creaba UNA sola pista y se saltaba la mezcla,
-            //sonando todas sus waves a la vez; ahora pasa por el mismo camino que Mix voices con una
-            //única voz, así que la tabla `_part` elige la onda correcta en cada momento.
-            if (VocalMode == LiveVocalMode.SoloConcert && vocalIds.Count > 0)
-            {
-                int singerCount = (partInfo != null && partInfo.SingerCount > 0) ? partInfo.SingerCount : 1;
-                int singer = vocalIds[0];
-                vocalIds.Clear();
-                for (int i = 0; i < singerCount; i++) vocalIds.Add(singer);
-            }
-
-            //Evita arrastrar voces de una inicialización anterior (si se pulsase Play dos veces,
-            //liveVocal ya tendría tags y ninguna columna del _part casaría, dejando el mix mudo).
+            if (AudioPlan == null || AudioPlan.SongId != songid)
+                PrepareMusic(songid, characters);
             liveVocal.Clear();
-            liveVocalCharaIds.Clear();
-
-            //Recorte por COLUMNAS QUE PUEDEN SONAR (SingerCount = columnas con algún valor > 0), no por
-            //TrackCount (todas las columnas declaradas en la cabecera): una canción puede declarar 5
-            //pistas y usar sólo 3, y las 2 que nunca tienen valor jamás suenan (su columna lee 0 en
-            //todas las filas). Crear esos slots sólo añadía pistas MUDAS ocupadas por voces al azar.
-            //La UI ya limita los desplegables a Clamp(SingerCount, 3, 7), así que con esto van coherentes.
-            int maxVoices = vocalIds.Count;
-            if (VocalMode == LiveVocalMode.MixVoices && partInfo != null)
-            {
-                //Tabla _part presente pero VACÍA (ninguna columna suena nunca): AlterUpdate leería 0 en
-                //todas (silencio absoluto). En ese caso se fuerza una sola voz y suena su canción entera.
-                maxVoices = partInfo.SingerCount == 0
-                    ? Mathf.Min(maxVoices, 1)
-                    : Mathf.Min(maxVoices, partInfo.SingerCount);
-            }
-
-            for (int i = 0; i < vocalIds.Count && i < maxVoices; i++)
-            {
-                var entry = ResolveVocalSoundEntry(songid, vocalIds[i]);
-                if (entry == null) continue;
-                //La columna la fija liveVocal.Count (no el índice del bucle): es el valor que se pasa
-                //a ApplySound y del que sale el tag (PartForm) que AlterUpdate usa para leer la
-                //columna correcta del _part.
-                var source = UmaViewerAudio.ApplySound(entry.Name.Split('.')[0], liveVocal.Count);
-                if (source == null || source.sourceList == null || source.sourceList.Count == 0)
+            foreach (var binding in AudioPlan.Voices)
+                if (binding.Entry != null)
                 {
-                    Debug.LogWarning($"[Live] '{entry.Name}' no produjo ningun AudioSource; se omite.");
-                    continue;
+                    var bank = UmaViewerAudio.ApplySound(binding.Entry, binding.Slot);
+                    bank.characterId = binding.CharacterId;
+                    bank.voiceCharacterId = binding.VoiceCharacterId;
+                    liveVocal.Add(bank);
                 }
-                liveVocal.Add(source);
-                liveVocalCharaIds.Add(vocalIds[i]);
-            }
 
-            //(Live) Flag "la MISMA cantante en todas las pistas" (incluye Solo concert, que rellena todos
-            //los slots con el PJ del slot 1): AlterUpdate no dejará sonar más de `_maxSameVoice` pistas.
-            _capSameVoice = liveVocalCharaIds.Count >= 2 &&
-                            liveVocalCharaIds.TrueForAll(id => id == liveVocalCharaIds[0]);
-
-            //(Live) En Solo concert el tope es configurable desde Config.json
-            //(MaxSimultaneousVoiceOnSoloConcert, 2 por defecto). En Mix voices se mantiene el 3 fijo.
-            if (VocalMode == LiveVocalMode.SoloConcert)
-            {
-                int configured = Config.Instance != null
-                    ? Config.Instance.MaxSimultaneousVoiceOnSoloConcert
-                    : 2;
-                _maxSameVoice = Mathf.Max(1, configured);
-            }
-            else
-            {
-                _maxSameVoice = UmaViewerAudio.MaxSimultaneousSameVoice;
-            }
-
-            //Con 0 o 1 voces no hay nada que mezclar: se salta AlterUpdate y la única pista suena
-            //completa (todos sus waves a volumen 1), que es el "Solo concert".
-            _soloMode = liveVocal.Count < 2;
-
-            liveMusic = UmaViewerAudio.ApplySound(string.Format(SONG_PATH, songid), -1);
+            liveMusic = UmaViewerAudio.ApplySound(AudioPlan.Accompaniment, -1);
         }
+
+        public LiveSongAudioPlan AudioPlan { get; private set; }
+        // Original AudioManager.UpdateSong uses the audio clock, independently
+        // of the smoothed LiveTimeController clock used by scene animation.
+        public Func<float> SongAudioTimeOverride { get; set; }
+
+        public float SongAudioTime
+        {
+            get
+            {
+                if (SongAudioTimeOverride != null)
+                    return SongAudioTimeOverride();
+                var source = liveMusic?.sourceList?.FirstOrDefault();
+                return source != null && source.clip != null ? source.timeSamples / (float)source.clip.frequency : 0f;
+            }
+        }
+
+        public void PrepareMusic(int songid, List<LiveCharacterLoadData> characters)
+        {
+            InitializeLiveVariationSelection(songid, characters);
+            AudioPlan = LiveSongAudioPlan.Create(songid, partInfo.SingerCount, characters, OkeCallOnVariationId, IsLiveCall, _liveSettingsResources.OkeLiveVariationPattern, EnabledLiveVariationOrder);
+        }
+
+        // Native LiveLoadSettings input; 0 keeps RegisterSongCueSheet's default01.
+        public int OkeCallOnVariationId { get; set; }
 
         public void Play()
         {
-
-            foreach (var vocal in liveVocal)
-            {
-                UmaViewerAudio.Play(vocal);
-            }
-            UmaViewerAudio.Play(liveMusic);
-
+            PreparePlaybackClock();
+            StartMainSongAudio(LiveStartControl.MainSongRequest(partInfo, LiveStartControl.StartTimeFromFrame(0), null));
+            _liveTimeController.StartCalcElapsedTime();
             _isLiveSetup = true;
             _liveCurrentTime = 0;
-            // (VIDEO SPEED) Las pistas de audio existen a partir de aqui: aplicar ya la velocidad.
-            ApplyVideoSpeed();
-            LiveRuntimeDiagnostics.RecordPhase("play_started", this);
-
+            // Flash sequences, including Champions, start through their authored keys.
             if (IsRecordVMD)
             {
                 foreach (var container in CharaContainerScript)
@@ -1215,89 +1091,237 @@ namespace Gallop.Live
             }
         }
 
+        // Existing decoded stems are the host audio boundary; original CRI cue,
+        // fade/callback handling and SongPart installation require their own port.
+        internal void StartMainSongAudio(LiveSongStartRequest request)
+        {
+            if (request.Loop || request.FadeInTime != 0f || request.SongVolumeRate != 1f || request.CueName != null || request.StopType != 0 || request.OnComplete != null)
+                throw new NotSupportedException("Decoded main-live adapter supports the original no-loop/no-fade request without a CRI callback.");
+            LiveSongAudioControl.Start(this, request.StartTime);
+        }
+
+        private void OnUpdateFacialToon(ref FacialToonUpdateInfo info)
+        {
+            foreach (var locator in _liveTimelineControl.liveCharactorLocators)
+                if (locator is LiveTimelineCharaLocator character && info.CharacterPos.hasFlag(locator.liveCharaStandingPosition) && character.UmaContainer != null)
+                    character.UmaContainer.SetLiveFacialToon(ref info);
+        }
+
+        private void OnUpdateCharaWind(int physicalSlot, bool enabled, CySpringWindParam parameter)
+        {
+            if (physicalSlot < 0 || physicalSlot >= CharaContainerScript.Count)
+                return;
+            // The current Viewer owns one assembled model per physical slot.
+            // Reserved dress-model lifecycle remains a separate conformance gap.
+            CharaContainerScript[physicalSlot]?.SetLiveWind(enabled, parameter);
+        }
+
         private void OnTimelineUpdate(float _liveCurrentTime)
         {
-            if (_effectController != null)
             {
-                bool seek = sliderControl.is_Touched || sliderControl.is_Outed ||
-                    _liveCurrentTime < _effectLastTimelineTime;
-                if (seek && _liveCurrentTime != _effectLastTimelineTime)
+                liveModelPhases.AlterUpdatePre();
+                if (_effectController != null)
                 {
-                    _effectController.ResetForSeek();
-                    _liveTimelineControl.ResetEffectTimelineForSeek();
+                    bool seek = sliderControl.is_Touched || sliderControl.is_Outed || _liveCurrentTime < _effectLastTimelineTime;
+                    if (seek && _liveCurrentTime != _effectLastTimelineTime)
+                    {
+                        _effectController.ResetForSeek();
+                        _liveTimelineControl.ResetEffectTimelineForSeek();
+                    }
+
+                    _effectLastTimelineTime = _liveCurrentTime;
                 }
-                _effectLastTimelineTime = _liveCurrentTime;
-            }
-            _liveTimelineControl.AlterUpdate(_liveCurrentTime);
-            if (!_soloMode)
-            {
-                UmaViewerAudio.AlterUpdate(_liveCurrentTime, partInfo, liveVocal, sliderControl.is_Outed, _capSameVoice, _maxSameVoice);
+
+                _liveTimelineControl.IsEnablePostEffect = GraphicSettings.IsBloom || GraphicSettings.IsDOF;
+                float highlightDelta = _liveTimeController != null ? _liveTimeController.DeltaTimePauseReset : 0f;
+                if (IsRecordVMD)
+                    highlightDelta = _liveCurrentTime - _eyeHighlightLastTime;
+                _eyeHighlightLastTime = _liveCurrentTime;
+                foreach (var character in CharaContainerScript)
+                    character.LiveEyeHighlight?.BeforeTimeline(_liveCurrentTime, highlightDelta);
+                foreach (var character in CharaContainerScript)
+                    character.FaceDrivenKeyTarget?.BeginLiveFacialSubmissions();
+                try
+                {
+                    _liveTimelineControl.AlterUpdate(_liveCurrentTime);
+                }
+                finally
+                {
+                    foreach (var character in CharaContainerScript)
+                        character.FaceDrivenKeyTarget?.EndLiveFacialSubmissions();
+                }
+
+                _titleController?.AlterUpdate(_liveTimeController != null ? _liveTimeController.DeltaTimePauseReset : 0f);
+                _stageController?.UpdateWaveTime(_liveCurrentTime);
+                _stageParticleController?.Pause(!IsRecordVMD && (IsPlaybackPaused || !_syncTime || sliderControl.is_Touched));
+                _stageParticleController?.AlterUpdate(highlightDelta);
+                foreach (var character in CharaContainerScript)
+                    character.FaceDrivenKeyTarget?.AdvanceLiveFacialWeights(highlightDelta);
+                foreach (var character in CharaContainerScript)
+                    character.LiveEyeHighlight?.AfterTimeline();
+                // Original Director.AlterUpdate flushes Stage after timeline update,
+                // before the independent late camera/postprocessing phase.
+                _stageController?.GetComponent<StageBlinkLightDriver>()?.AlterUpdateStageLights();
+                _stageController?.AlterUpdateTransmittedLightMaskControllers();
+                if (!_soloMode)
+                {
+                    UmaViewerAudio.AlterUpdate(SongAudioTime, partInfo, liveVocal, sliderControl.is_Outed);
+                }
+
+                liveModelPhases.AlterUpdate();
+                liveModelPhases.AlterUpdatePost();
+                EvaluateMiniCharacters();
             }
         }
 
+        // Native Director._isEnabledStageController is an independently owned
+        // gate; complete context installation must set it explicitly.
+        public bool IsEnabledStageController { get; set; }
+
+        float _eyeHighlightLastTime;
+        // Adapter for LiveLoadSettings.StageObjectSelectTargetDictionary (+48).
+        // Original ctor creates an empty dictionary. Full LiveLoadSettings is
+        // still pending; authored selections consume actual supplied overrides.
+        public Dictionary<int, int> StageObjectSelectTargetDictionary { get; } = new Dictionary<int, int>();
+
         private void ApplyTimelineLateUpdate()
         {
-            if (_lateTimelineAppliedThisFrame || _liveTimelineControl == null)
-                return;
-
-            _liveTimelineControl.AlterLateUpdate();
-            _livePropsController?.Evaluate(_liveTimelineControl.data.worksheetList,
-                _liveTimelineControl.currentLiveTime * 60f, _liveTimelineControl.PlayMode);
-            _footLightRuntime?.AlterLateUpdate();
-            _effectController?.Pause(!IsRecordVMD && (!_syncTime || sliderControl.is_Touched));
-            _spotlightRuntime?.AlterLateUpdate();
-            _stageFlares?.AlterUpdate(MainRenderCamera);
-            if (_volumeLightController != null)
             {
-                _volumeLightController.LateUpdateSunShafts(MainRenderCamera);
-                var parameter = Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter;
-                parameter.SunShafts = _volumeLightController.SunShafts;
-                parameter.LightShafts = _volumeLightController.LightShafts;
+                if (_lateTimelineAppliedThisFrame || _liveTimelineControl == null)
+                    return;
+                // GameSystem.LateUpdate 0x4ae9040: the global model PreLate,
+                // IK1 and IK2 passes precede Constraint.Pre and scene late/cameras.
+                {
+                    liveModelPhases.AlterLateUpdatePre();
+                    AlterConstraintLateUpdatePre();
+                }
+
+                // Original Director character AlterLateUpdate precedes props and
+                // timeline camera sampling. Consume animation Position movement
+                // once here, after Update's formation and motion samplers.
+                float modelDelta = _liveTimeController != null ? _liveTimeController.DeltaTime : Time.deltaTime;
+                if (IsRecordVMD)
+                    modelDelta = _liveCurrentTime - _handShakeLastTime;
+                foreach (var character in CharaContainerScript)
+                {
+                    character.UpdateLiveEmissiveTiming(_liveTimelineControl.Timescale, modelDelta, true);
+                    character.LiveLocator?.AlterModelPositionAddParent();
+                    if (character.LiveAnimationMode?.CurrentMode == 1)
+                    {
+                        character.LiveSystemTextIK?.UpdateWristIKBlend();
+#if UNITY_EDITOR
+                        if (character.LiveSystemTextIK != null)
+                            ;
+#endif
+                    }
+
+                    character.AdvanceLiveEmissiveScroll(Time.deltaTime);
+                }
+
+                if (_livePropsController != null)
+                    _livePropsController.ScrollDeltaTime = modelDelta;
+                _livePropsController?.Evaluate(_liveTimelineControl.data.worksheetList, _liveTimelineControl.CurrentFrame, _liveTimelineControl.PlayMode, _liveTimelineControl.currentLiveTime, _liveTimelineControl.CurrentWorkSheet);
+                float propsDelta = _liveTimeController != null ? _liveTimeController.DeltaTimePauseReset : Time.deltaTime;
+                if (IsRecordVMD)
+                    propsDelta = _liveCurrentTime - _handShakeLastTime;
+                _livePropsController?.BeginPhysics(propsDelta);
+                // Original Director.AlterLateUpdate: PropsManager before timeline
+                // camera sampling, so attached cameras read the current prop pose.
+                _liveTimelineControl.AlterLateUpdate();
+                _livePropsController?.EndPhysics();
+                // Original Director 4e21a30: after timeline camera sampling, add the
+                // HandShake result to the selected camera's local position once.
+                {
+                    var shakeCamera = MainRenderCamera;
+                    LiveHandShakeCameraTimeline.Evaluate(_liveTimelineControl.CurrentWorkSheet?.handShakeCameraKeys, _liveTimelineControl.CurrentFrame, _liveTimelineControl.PlayMode, HandShake);
+                    float shakeDelta = _liveTimeController != null ? _liveTimeController.DeltaTimePauseReset : _liveCurrentTime - _handShakeLastTime;
+                    if (IsRecordVMD)
+                        shakeDelta = _liveCurrentTime - _handShakeLastTime;
+                    if (_liveCurrentTime < _handShakeLastTime)
+                    {
+                        HandShake.Reset();
+                        shakeDelta = 0f;
+                    }
+
+                    _handShakeLastTime = _liveCurrentTime;
+                    if (shakeCamera != null && HandShake.UpdateHandShakeCamera(shakeCamera.transform, shakeDelta, live.MusicId, _liveCurrentTime))
+                        shakeCamera.transform.localPosition += HandShake.Position;
+                    _transparentCamera?.Update(MainRenderCamera, _liveTimelineControl.TransparentCameraEnabled, _liveTimelineControl.TransparentCameraOrthographic, _liveTimelineControl.TransparentCameraOrthographicSize, _liveTimelineControl.TransparentCameraDefaultTransform);
+                    UpdateLiveTitleCamera();
+                    LiveViewerUI.Instance.UpdateLyrics(_liveCurrentTime, _liveTimelineControl != null ? _liveTimelineControl.SheetVariationId : 0);
+                    LiveFlashController?.AlterUpdate();
+                    ChampionsTextController?.AlterUpdate();
+
+                    foreach (var character in CharaContainerScript)
+                        character.FaceDrivenKeyTarget?.LiveEyeTrace?.AlterCameraLateUpdate(this, Mathf.Max(0, shakeDelta));
+                    _stageController?.AlterLateUpdateBillboards();
+                    _footLightRuntime?.AlterLateUpdate();
+                    bool effectPaused = !IsRecordVMD && (IsPlaybackPaused || !_syncTime || sliderControl.is_Touched);
+                    _effectController?.Pause(effectPaused);
+                    // StageController.UpdateEffectStatus 0x4eb8af0 also updates the
+                    // shared shader clock, independently of ParticleSystem simulation.
+                    GraphicSettings.SetEffectTimeScale(effectPaused ? 0f : 1f);
+                    _spotlightRuntime?.AlterLateUpdate();
+                    _stageController?.GetComponent<StageWashLightDriver>()?.AlterLateUpdateForLive(MainRenderCamera);
+                    AlterLateUpdateFakeLight();
+                    _stageFlares?.AlterUpdate(MainRenderCamera);
+                    if (_volumeLightController != null)
+                    {
+                        _volumeLightController.LateUpdateSunShafts(MainRenderCamera);
+                        var parameter = Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter;
+                        parameter.SunShafts = _volumeLightController.SunShafts;
+                        parameter.LightShafts = _volumeLightController.LightShafts;
+                    }
+
+                    UpdateDofMaxFocalSize();
+                }
+
+                // Submit this frame's FacialToon/GlobalLight state even when Unity
+                // has already run a character's independent LateUpdate callback.
+                {
+                    foreach (var character in CharaContainerScript)
+                    {
+                        character?.UpdateLiveEnvironmentMirrorRuntime();
+                        character?.UpdateLiveFacialToonMaterialRuntime();
+                    }
+
+                    AlterConstraintLateUpdateBeforeModel();
+                    liveModelPhases.AlterLateUpdate();
+                    liveModelPhases.AlterLateUpdatePost();
+                }
+
+                _lateTimelineAppliedThisFrame = true;
             }
-            UpdateDofMaxFocalSize();
-            _lateTimelineAppliedThisFrame = true;
+        }
+
+        // Both GameTime graphs and automatic Legacy stage animations are
+        // evaluated by Unity between Update and LateUpdate. Scene/model late
+        // phases must wait for both, independently of character motion mode.
+        // The first model LateUpdate flushes any pending scene/model phases.
+        // Director.LateUpdate also flushes them; the frame guard prevents repeats.
+        // This also covers unsynchronized audio frames without a timeline advance.
+        internal void ApplyDeferredLiveTimelineLateUpdate()
+        {
+            if (_isLiveSetup)
+                ApplyTimelineLateUpdate();
         }
 
         bool isExit;
         void Update()
         {
-            if (isExit) return;
-
+            if (isExit)
+                return;
             if (_isLiveSetup)
             {
                 _lateTimelineAppliedThisFrame = false;
-
-                if (!IsOfflineRender &&
-                    ((!UmaViewerMain.TryConsumeEscapeForFullScreen() && Input.GetKeyDown(KeyCode.Escape)) || _liveCurrentTime >= totalTime))
+                if (!IsOfflineRendering && (Input.GetKeyDown(KeyCode.Escape) || _liveCurrentTime >= totalTime))
                 {
                     ExitLive();
                 }
 
-                if (IsOfflineRender)
+                if (_syncTime == false)
                 {
-                    //(Grabación offline) El grabador decide en qué instante se renderiza este frame
-                    //(mantenido durante el calentamiento, o avanzando a la cadencia elegida). Se le
-                    //llama ANTES de que la cámara renderice, para que la escena ya esté actualizada.
-                    LiveRecordDirector recorder = LiveRecordDirector.Instance;
-                    if (recorder != null) recorder.AdvanceTimeline(this);
-
-                    float offlineTime = Mathf.Clamp(OfflineRenderTime, 0f, Mathf.Max(0f, totalTime - 0.0001f));
-                    _liveCurrentTime = offlineTime;
-                    if (UI != null && UI.ProgressBar != null && totalTime > 0f)
-                        UI.ProgressBar.SetValueWithoutNotify(offlineTime / totalTime);
-                    OnTimelineUpdate(offlineTime);
-                    ApplyTimelineLateUpdate();
-                }
-                else if (_syncTime == false)
-                {
-                    if (liveMusic.sourceList.Count == 0)
-                    {
-                        _syncTime = true;
-                    }
-                    //(Final del show) Si la musica ya no esta sonando no hay reloj al que engancharse
-                    //(su clip ha terminado antes que el timeline o el seek cayo fuera de el): se sigue
-                    //con el tiempo que ya lleva el show en vez de saltar atras o volver a cero.
-                    else if (liveMusic.sourceList[0] == null || !liveMusic.sourceList[0].isPlaying)
+                    if (liveMusic?.sourceList == null || liveMusic.sourceList.Count == 0 || liveMusic.sourceList[0] == null)
                     {
                         _syncTime = true;
                     }
@@ -1305,7 +1329,8 @@ namespace Gallop.Live
                     {
                         _liveCurrentTime = UI.ProgressBar.value * totalTime;
                         _liveCurrentTime = Mathf.Clamp(_liveCurrentTime, 0f, Mathf.Max(0f, totalTime - 0.001f));
-                        _liveCurrentTime = liveMusic.sourceList[0].time;
+                        _liveCurrentTime = SongPlaybackClock.Read(AudioSettings.dspTime, Time.realtimeSinceStartupAsDouble);
+                        SetPlaybackClockTime(_liveCurrentTime);
                         _syncTime = true;
                     }
                 }
@@ -1325,48 +1350,24 @@ namespace Gallop.Live
 
                         UI.ProgressBar.SetValueWithoutNotify(_liveCurrentTime / totalTime);
                         OnTimelineUpdate(_liveCurrentTime);
-                        ApplyTimelineLateUpdate();
                     }
                     else if (sliderControl.is_Outed)
                     {
-                        //La reanudacion usa el tiempo que ya seguia el show, no vuelve a leer la
-                        //barra: mientras esta pausado (rama is_Touched) `_liveCurrentTime` ya se
-                        //sincroniza cada frame con la posicion elegida (boton o arrastre), asi que
-                        //un valor estropeado de la barra no puede mandar la reproduccion al
-                        //principio.
-                        _liveCurrentTime = Mathf.Clamp(_liveCurrentTime, 0f, Mathf.Max(0f, totalTime - 0.001f));
-
-                        if (liveMusic != null)
-                        {
-                            UmaViewerAudio.SetTime(liveMusic, _liveCurrentTime);
-
-                            foreach (var vocal in liveVocal)
-                            {
-                                UmaViewerAudio.SetTime(vocal, _liveCurrentTime);
-                            }
-
-                            //Se pasa el tiempo para no reanudar las pistas que ya han terminado: al
-                            //final del show el timeline sigue mas alla de algunas ondas y Unity, al
-                            //no poder posicionarlas, las reiniciaba desde el principio.
-                            UmaViewerAudio.Play(liveMusic, _liveCurrentTime);
-
-                            foreach (var vocal in liveVocal)
-                            {
-                                UmaViewerAudio.Play(vocal, _liveCurrentTime);
-                            }
-                        }
-
+                        _liveCurrentTime = UI.ProgressBar.value * totalTime;
+                        SetPlaybackClockTime(_liveCurrentTime);
+                        bool remainPaused = sliderControl.IsUserPaused || IsPlaybackPaused;
+                        if (liveMusic != null && !remainPaused)
+                            LiveSongAudioControl.Start(this, _liveCurrentTime);
                         OnTimelineUpdate(_liveCurrentTime);
-                        ApplyTimelineLateUpdate();
-
                         sliderControl.is_Outed = false;
-                        sliderControl.is_Touched = false;
-                        _syncTime = false;
+                        sliderControl.is_Touched = sliderControl.IsUserPaused;
+                        // A held seek has no new audio playback to wait for.
+                        _syncTime = remainPaused;
                     }
                     else if (sliderControl.is_Touched)
                     {
                         _liveCurrentTime = UI.ProgressBar.value * totalTime;
-
+                        SetPlaybackClockTime(_liveCurrentTime);
                         if (liveMusic != null)
                         {
                             UmaViewerAudio.Stop(liveMusic);
@@ -1377,39 +1378,26 @@ namespace Gallop.Live
                         }
 
                         OnTimelineUpdate(_liveCurrentTime);
-                        ApplyTimelineLateUpdate();
                     }
                     else
                     {
-                        _liveCurrentTime += Time.deltaTime;
+                        AdvancePlaybackClock(Time.deltaTime);
                         UI.ProgressBar.SetValueWithoutNotify(_liveCurrentTime / totalTime);
                         OnTimelineUpdate(_liveCurrentTime);
-                        ApplyTimelineLateUpdate();
                     }
                 }
 
                 UpdateMainCamera();
-
                 // 时间轴和主相机都更新完后再同步 Laser Renderer/朝向。
                 // 这样既不会读取上一帧 LaserUpdateInfo，也不会读取上一帧相机姿态。
                 if (_stageController != null)
                     _stageController.AlterUpdateLaserControllers();
-
-                // Refresca las etiquetas de tiempo del live (tiempo actual / duracion total).
-                if (UI != null)
-                    UI.UpdateTimeLabels(_liveCurrentTime, totalTime);
-
-                // (VIDEO SPEED) Cambia en caliente si se toca el ajuste (y reaplica el pitch cuando
-                // las pistas de audio se acaban de crear).
-                ApplyVideoSpeedIfChanged();
-
-                LiveRuntimeDiagnostics.RecordFrame(this);
             }
         }
 
         private void LateUpdate()
         {
-            if (_isLiveSetup && _syncTime && !IsRecordVMD)
+            if (_isLiveSetup)
             {
                 ApplyTimelineLateUpdate();
             }
@@ -1418,26 +1406,76 @@ namespace Gallop.Live
             {
                 UpdateMirrorReflections();
             }
+
+            UpdateEyeReflection();
         }
 
-        private void FixedUpdate()
+        // Eye reflection production wiring: the current eye camera key drives the
+        // per-character reflection controller (enabled/power/fov/mask/culling).
+        private void UpdateEyeReflection()
         {
-            LiveViewerUI.Instance.UpdateLyrics(_liveCurrentTime);
+            {
+                if (_liveTimelineControl == null || CharaContainerScript == null || CharaContainerScript.Count == 0)
+                {
+                    return;
+                }
+
+                var sheet = _liveTimelineControl.GetWorkSheetBySheetIndex(LiveTimelineDefine.SheetIndex.MainLive);
+                if (sheet == null || sheet.EyeCameraPosList == null || sheet.EyeCameraPosList.Count == 0)
+                {
+                    bool force = System.Environment.GetEnvironmentVariable("UMA_EYE_REFLECTION_FORCE") == "1";
+                    for (int index = 0; index < CharaContainerScript.Count; index++)
+                    {
+                        var idle = CharaContainerScript[index];
+                        if (idle == null)
+                            continue;
+                        var idleDriver = idle.GetComponent<LiveEyeReflectionDriver>();
+                        if (idleDriver == null)
+                            continue;
+                        bool enable = force && index == 0;
+                        if (enable)
+                        {
+                            var forced = LiveEyeReflectionContext.Default();
+                            forced.Enabled = true;
+                            forced.ReflectionPower = 1f;
+                            forced.FieldOfView = 30f;
+                            idleDriver.Context = forced;
+                            idleDriver.Configure(true, 1f, null, 1, idle.HeadBone != null ? idle.HeadBone.transform : idle.transform);
+                        }
+                        else if (idleDriver.Enabled)
+                        {
+                            idleDriver.SetEnabled(false);
+                        }
+                    }
+
+                    return;
+                }
+
+                for (int groupIndex = 0; groupIndex < sheet.EyeCameraPosList.Count; groupIndex++)
+                {
+                    var group = sheet.EyeCameraPosList[groupIndex];
+                    if (group == null)
+                        continue;
+                    // Authored CharacterIndex is a physical slot, not an index into
+                    // the compact loaded cast. Reuse the persistent owner registry.
+                    int index = group.CharacterIndex;
+                    var container = ResolvePhysicalFacialCharacter(index);
+                    if (container == null)
+                        continue;
+                    var driver = container.GetComponent<LiveEyeReflectionDriver>();
+                    if (driver == null)
+                        continue;
+                    var rates = _liveTimelineControl.data.characterSettings?.EyeReflectionTextureSizeRateArray;
+                    int sizeRate = rates != null && index >= 0 && index < rates.Length ? rates[index] : 1;
+                    _liveTimelineControl.ApplyEyeReflection(sheet, groupIndex, driver, sizeRate);
+                }
+            }
         }
 
         DateTime ExitTime;
-        //Punto de entrada publico para salir del live desde la UI (boton de cancelar/salir del live).
-        //Hace exactamente lo mismo que la rama de Esc de Update(): llamar a ExitLive().
-        public void RequestExit()
-        {
-            if (!isExit) ExitLive();
-        }
-
         private void ExitLive()
         {
             isExit = true;
-            // (VIDEO SPEED) Al salir del live se vuelve a velocidad normal (el timeScale es global).
-            Time.timeScale = 1f;
             if (_liveTimelineControl.IsRecordVMD)
             {
                 ExitTime = DateTime.Now;
@@ -1445,14 +1483,12 @@ namespace Gallop.Live
                 SaveMultiCameraVMD();
                 SaveCharacterVMD();
             }
-            UmaSceneController.LoadScene(
-                "Version2",
-                null,
-                delegate
-                {
-                    // 等旧 LiveScene 完全销毁后再清理，避免过场期间角色/舞台对象失去资源。
-                    UmaAssetManager.UnloadAllBundle(true);
-                });
+
+            UmaSceneController.LoadScene("Version2", null, delegate
+            {
+                // 等旧 LiveScene 完全销毁后再清理，避免过场期间角色/舞台对象失去资源。
+                UmaAssetManager.UnloadAllBundle(true);
+            });
         }
 
         private void SaveCharacterVMD()
@@ -1485,13 +1521,16 @@ namespace Gallop.Live
                     {
                         var index = frames.IndexOf(keyframe);
                         keyframe.FovVaild = true;
-                        if (index + 1 < frames.Count) frames[index + 1].FovVaild = true;
-                        if (index - 1 > 0) frames[index - 1].FovVaild = true;
-                        if (index - 2 > 0) frames[index - 2].FovVaild = true;
-                        if (index - 3 > 0) frames[index - 3].FovVaild = true;
+                        if (index + 1 < frames.Count)
+                            frames[index + 1].FovVaild = true;
+                        if (index - 1 > 0)
+                            frames[index - 1].FovVaild = true;
+                        if (index - 2 > 0)
+                            frames[index - 2].FovVaild = true;
+                        if (index - 3 > 0)
+                            frames[index - 3].FovVaild = true;
                     }
                 });
-
                 UnityCameraVMDRecorder.SaveLiveCameraVMD(live, ExitTime, frames, i);
             }
         }
@@ -1503,34 +1542,39 @@ namespace Gallop.Live
             var fov = _liveTimelineControl.data.worksheetList[0].cameraFovKeys.thisList;
             fov.ForEach(k =>
             {
-
                 var keyframe = frames.Find(f => f.frameIndex == k.frame);
                 if (keyframe != null)
                 {
                     var index = frames.IndexOf(keyframe);
                     keyframe.FovVaild = true;
-                    if (index + 1 < frames.Count) frames[index + 1].FovVaild = true;
-                    if (index - 1 > 0) frames[index - 1].FovVaild = true;
-                    if (index - 2 > 0) frames[index - 2].FovVaild = true;
-                    if (index - 3 > 0) frames[index - 3].FovVaild = true;
+                    if (index + 1 < frames.Count)
+                        frames[index + 1].FovVaild = true;
+                    if (index - 1 > 0)
+                        frames[index - 1].FovVaild = true;
+                    if (index - 2 > 0)
+                        frames[index - 2].FovVaild = true;
+                    if (index - 3 > 0)
+                        frames[index - 3].FovVaild = true;
                 }
             });
-
             UnityCameraVMDRecorder.SaveLiveCameraVMD(live, ExitTime, frames);
         }
 
-        //(Live: ya no se recorre 'characters' sino VocalCharaIds: se descargan exactamente las
-        //pistas que se van a oír, no una por slot del panel.)
-        public static List<UmaDatabaseEntry> GetLiveAllVoiceEntry(int songid, LiveVocalMode mode, int[] vocalCharaIds)
+        public static List<UmaDatabaseEntry> GetLiveAllVoiceEntry(int songid, List<LiveCharacterLoadData> characters)
         {
             List<UmaDatabaseEntry> entryList = new List<UmaDatabaseEntry>();
-            var vocalIds = GetVocalCharaIdList(songid, mode, vocalCharaIds);
-            for (int i = 0; i < vocalIds.Count; i++)
+            for (int i = 0; i < characters.Count; i++)
             {
-                var entry = ResolveVocalSoundEntry(songid, vocalIds[i]);
-                if (entry != null)
+                if (characters[i].CharaEntry.Name != "")
                 {
-                    entryList.Add(entry);
+                    var charaid = characters[i].CharaEntry.Id;
+                    var entry = UmaViewerMain.Instance.AbSounds.FirstOrDefault(a => a.Name.Contains(string.Format(VOCAL_PATH, songid, charaid)) && a.Name.EndsWith("awb"));
+                    // Fallback identities are selected once by PrepareMusic,
+                    // after the score is loaded, then explicitly preloaded.
+                    if (entry != null)
+                    {
+                        entryList.Add(entry);
+                    }
                 }
             }
 
@@ -1539,25 +1583,28 @@ namespace Gallop.Live
             {
                 entryList.Add(bgEntry);
             }
+
+            var voiceSettings = LiveSettingsResourceMap.Load(songid);
+            string voiceSheet = LiveVoiceCueSheet.Select(songid, characters.Select(c => c.CharaEntry.Id), voiceSettings);
+            if (LiveVoiceCueSheet.TryFindEntries(UmaViewerMain.Instance.AbSounds, voiceSheet, out var voiceAcb, out var voiceAwb))
+            {
+                entryList.Add(voiceAcb);
+                if (voiceAwb != null)
+                    entryList.Add(voiceAwb);
+            }
+
             return entryList;
         }
-        public static List<UmaDatabaseEntry> GetLivePreloadEntries(
-            LiveEntry live,
-            List<LiveCharacterLoadData> characters,
-            bool requireStage,
-            LiveVocalMode vocalMode = LiveVocalMode.SoloConcert,
-            int[] vocalCharaIds = null)
+
+        public static List<UmaDatabaseEntry> GetLivePreloadEntries(LiveEntry live, List<LiveCharacterLoadData> characters, bool requireStage)
         {
             var result = new List<UmaDatabaseEntry>();
             if (live == null)
                 return result;
-
-            result.AddRange(GetLiveAllVoiceEntry(live.MusicId, vocalMode, vocalCharaIds));
-
+            result.AddRange(GetLiveAllVoiceEntry(live.MusicId, characters));
             var main = UmaViewerMain.Instance;
             if (main == null || main.AbList == null)
                 return result;
-
             void AddByKey(string key)
             {
                 if (main.AbList.TryGetValue(key, out var entry) && entry != null)
@@ -1570,204 +1617,256 @@ namespace Gallop.Live
             // Target GetLivePreloadEntries calls ResourcePath.GetCyalumeScorePath
             // and passes its result to AddByKey (RVA 0x1a5c18f -> 0x1a5c19f).
             AddByKey(string.Format(CYALUME_SCORE_PATH, live.MusicId));
-
             if (requireStage && !string.IsNullOrEmpty(live.BackGroundId))
             {
                 string folderPrefix = $"3d/env/live/live{live.BackGroundId}/";
-
                 // 保留该舞台目录下全部 AssetBundle，不删 laser、light、monitor 等任何资源。
                 foreach (var kv in main.AbList)
                 {
                     UmaDatabaseEntry entry = kv.Value;
                     if (entry == null || !entry.IsAssetBundle)
                         continue;
-
-                    bool keyMatches = kv.Key.StartsWith(
-                        folderPrefix,
-                        StringComparison.OrdinalIgnoreCase);
-
-                    bool nameMatches = entry.Name != null && entry.Name.StartsWith(
-                        folderPrefix,
-                        StringComparison.OrdinalIgnoreCase);
-
+                    bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase);
+                    bool nameMatches = entry.Name != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase);
                     if (keyMatches || nameMatches)
                         result.Add(entry);
                 }
             }
 
-            return result
-                .Where(e => e != null && !string.IsNullOrEmpty(e.Name))
-                .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToList();
+            return result.Where(e => e != null && !string.IsNullOrEmpty(e.Name)).GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
         }
 
         private void PreloadStageBundlesBeforeInstantiate(string bgId)
         {
             if (string.IsNullOrEmpty(bgId))
                 return;
-
             var main = UmaViewerMain.Instance;
             if (main == null || main.AbList == null)
                 return;
-
             string folderPrefix = $"3d/env/live/live{bgId}/";
             var required = new List<UmaDatabaseEntry>();
-
             foreach (var kv in main.AbList)
             {
                 UmaDatabaseEntry entry = kv.Value;
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
-
-                bool keyMatches = kv.Key.StartsWith(
-                    folderPrefix,
-                    StringComparison.OrdinalIgnoreCase);
-
-                bool nameMatches = entry.Name != null && entry.Name.StartsWith(
-                    folderPrefix,
-                    StringComparison.OrdinalIgnoreCase);
-
+                bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase);
+                bool nameMatches = entry.Name != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase);
                 if (keyMatches || nameMatches)
                     required.AddRange(UmaAssetManager.SearchAB(main, entry));
             }
 
             // 兜底路径也只做“新增加载”，不调用任何 Unload；依赖去重后每个只处理一次。
-            foreach (UmaDatabaseEntry entry in required
-                         .Where(e => e != null && !string.IsNullOrEmpty(e.Name))
-                         .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
-                         .Select(g => g.First()))
+            foreach (UmaDatabaseEntry entry in required.Where(e => e != null && !string.IsNullOrEmpty(e.Name)).GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Select(g => g.First()))
             {
-                UmaAssetManager.LoadAssetBundle(
-                    entry,
-                    neverUnload: false,
-                    isRecursive: false);
+                UmaAssetManager.LoadAssetBundle(entry, neverUnload: false, isRecursive: false);
             }
 
+            Debug.Log($"[StagePreloadFallback] bgId={bgId}, bundles={required.Count}");
         }
+
         private void InitializeMirrorReflections()
         {
+            foreach (var oldMirror in _mirrorReflections)
+                if (oldMirror != null)
+                {
+                    oldMirror.RemoveBeginCameraRenderingCallback(OnBeginModelCamera);
+                    oldMirror.RemoveEndCameraRenderingCallback(OnEndModelCamera);
+                }
+
             _stageController?.DestroyMirrorReflections();
             _mirrorReflections.Clear();
             if (!_enableMirrorReflection)
                 return;
-
-
             AddMirrorReflections(_mirrorReflections, GetComponentsInChildren<MirrorReflection>(true));
-
             if (_stageController != null)
                 AddMirrorReflections(_mirrorReflections, _stageController.GetComponentsInChildren<MirrorReflection>(true));
-
             if (_mirrorReflections.Count == 0)
                 AddMirrorReflections(_mirrorReflections, FindObjectsOfType<MirrorReflection>(true));
-
             if (_mirrorReflections.Count == 0)
             {
+                // Stage prefabs load after Director initialization in the
+                // viewer. Native prefab components exist once the stage is
+                // instantiated, so retry from the mirror late-update instead
+                // of permanently leaving the native components uninitialized.
+                _mirrorInitPending = true;
                 return;
             }
 
+            _mirrorInitPending = false;
             Camera mainCam = null;
             if (_cameraObjects != null && _activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
                 mainCam = _cameraObjects[_activeCameraIndex];
-
             if (mainCam == null)
                 mainCam = Camera.main;
-
             if (_stageController != null)
             {
-                _stageController.InitializeMirrorReflections(_mirrorReflections, mainCam,
-                    GetMainCameraFovFactor, _liveTimelineControl, CharaContainerScript);
+                _stageController.InitializeMirrorReflections(_mirrorReflections, mainCam, GetMainCameraFovFactor, _liveTimelineControl, CharaContainerScript);
             }
             else
             {
                 for (int i = 0; i < _mirrorReflections.Count; i++)
                 {
                     var mirror = _mirrorReflections[i];
-                    if (mirror == null) continue;
+                    if (mirror == null)
+                        continue;
                     mirror.Initialize(mainCam, i, false);
                     mirror.SetupBaseCamera(mainCam, GetMainCameraFovFactor);
                 }
             }
 
+            Debug.Log($"[Mirror] Initialized {_mirrorReflections.Count} mirrors.");
+            foreach (var mirror in _mirrorReflections)
+                if (mirror != null)
+                {
+                    mirror.RemoveBeginCameraRenderingCallback(OnBeginModelCamera);
+                    mirror.RemoveEndCameraRenderingCallback(OnEndModelCamera);
+                    mirror.AddBeginCameraRenderingCallback(OnBeginModelCamera);
+                    mirror.AddEndCameraRenderingCallback(OnEndModelCamera);
+                }
+        }
+
+        private void BindModelQueueCameraCallbacks()
+        {
+            if (_modelQueueCallbacksBound)
+                return;
+            RenderPipelineManager.beginCameraRendering += OnBeginModelCamera;
+            RenderPipelineManager.endCameraRendering += OnEndModelCamera;
+            Camera.onPreCull += OnBeginBuiltInModelCamera;
+            Camera.onPostRender += OnEndBuiltInModelCamera;
+            _modelQueueCallbacksBound = true;
+        }
+
+        private void OnBeginModelCamera(ScriptableRenderContext context, Camera camera)
+        {
+            if (!_isLiveSetup || camera == null || camera.cameraType == CameraType.SceneView || camera.cameraType == CameraType.Preview)
+                return;
+            _modelRenderQueue.BeginCamera(camera);
+        }
+
+        private void OnEndModelCamera(ScriptableRenderContext context, Camera camera)
+        {
+            if (!_isLiveSetup || camera == null || camera.cameraType == CameraType.SceneView || camera.cameraType == CameraType.Preview)
+                return;
+            _modelRenderQueue.EndCamera(camera);
+        }
+
+        private void OnBeginBuiltInModelCamera(Camera camera)
+        {
+            if (GraphicsSettings.currentRenderPipeline == null)
+                OnBeginModelCamera(default, camera);
+        }
+
+        private void OnEndBuiltInModelCamera(Camera camera)
+        {
+            if (GraphicsSettings.currentRenderPipeline == null)
+                OnEndModelCamera(default, camera);
+        }
+
+        private void UnbindModelQueueCameraCallbacks()
+        {
+            if (_modelQueueCallbacksBound)
+            {
+                RenderPipelineManager.beginCameraRendering -= OnBeginModelCamera;
+                RenderPipelineManager.endCameraRendering -= OnEndModelCamera;
+                Camera.onPreCull -= OnBeginBuiltInModelCamera;
+                Camera.onPostRender -= OnEndBuiltInModelCamera;
+                _modelQueueCallbacksBound = false;
+            }
+
+            foreach (var mirror in _mirrorReflections)
+                if (mirror != null)
+                {
+                    mirror.RemoveBeginCameraRenderingCallback(OnBeginModelCamera);
+                    mirror.RemoveEndCameraRenderingCallback(OnEndModelCamera);
+                }
+
+            _modelRenderQueue.Clear();
         }
 
         private static void AddMirrorReflections(List<MirrorReflection> target, MirrorReflection[] mirrors)
         {
             if (target == null || mirrors == null)
                 return;
-
             for (int i = 0; i < mirrors.Length; i++)
             {
                 var mirror = mirrors[i];
                 if (mirror == null || target.Contains(mirror))
                     continue;
-
                 target.Add(mirror);
             }
         }
 
         private float GetMainCameraFovFactor()
         {
-            return 1f;
+            var camera = MainRenderCamera;
+            var cameraData = camera != null ? camera.GetComponent<Gallop.RenderPipeline.CameraData>() : null;
+            return cameraData != null ? cameraData.FieldOfViewFactor : 1f;
+        }
+
+        internal void SetupMirrorReflectionBaseCamera(MirrorReflection mirror, LiveTimelineDefine.MirrorReflectionBaseCameraType cameraType, int cameraIndex)
+        {
+            if (mirror == null)
+                return;
+            if (cameraType == LiveTimelineDefine.MirrorReflectionBaseCameraType.MultiCamera)
+            {
+                var selected = _multiCameras != null && cameraIndex >= 0 && cameraIndex < _multiCameras.Length ? _multiCameras[cameraIndex] : null;
+                if (selected == null)
+                {
+                    // Original failed TryGetMultiCameraInfo leaves the prior
+                    // base camera intact and clears its factor delegate.
+                    mirror.SetFovFactorGetter(null);
+                    return;
+                }
+
+                var camera = selected.GetCamera();
+                if (camera != null)
+                    mirror.SetBaseCamera(camera);
+                mirror.SetFovFactorGetter(() =>
+                {
+                    var cameraData = camera != null ? camera.GetComponent<Gallop.RenderPipeline.CameraData>() : null;
+                    return cameraData != null ? cameraData.FieldOfViewFactor : 1f;
+                });
+            }
+            else
+            {
+                var camera = MainRenderCamera;
+                if (camera != null)
+                    mirror.SetBaseCamera(camera);
+                mirror.SetFovFactorGetter(GetMainCameraFovFactor);
+            }
         }
 
         private void UpdateMirrorReflections()
         {
+            if (_mirrorInitPending)
+            {
+                InitializeMirrorReflections();
+                if (_mirrorReflections.Count == 0)
+                    return;
+            }
+
             _stageController?.PrepareMirrorCharacters();
             if (_mirrorReflections == null || _mirrorReflections.Count == 0)
                 return;
-
             Camera mainCam = null;
             if (_cameraObjects != null && _activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
                 mainCam = _cameraObjects[_activeCameraIndex];
-
             if (mainCam == null)
                 mainCam = Camera.main;
-
             for (int i = 0; i < _mirrorReflections.Count; i++)
             {
                 var mirror = _mirrorReflections[i];
-                if (mirror == null) continue;
-
-                mirror.SetBaseCamera(mainCam);
-                mirror.SetFovFactorGetter(GetMainCameraFovFactor);
-                mirror.ForceRenderOnce();
+                if (mirror == null)
+                    continue;
+                // Native MirrorReflection keeps its camera enabled and lets the
+                // pipeline render it; Director only prepares the mirror actors.
+                mirror.PrepareAutomaticRender();
             }
         }
-        private GallopImageEffect GetActivePostEffect()
-        {
-            Camera mainCamera = null;
 
-            if (_cameraObjects != null &&
-                _activeCameraIndex >= 0 &&
-                _activeCameraIndex < _cameraObjects.Length)
-            {
-                mainCamera = _cameraObjects[_activeCameraIndex];
-            }
-
-            if (mainCamera == null)
-                mainCamera = Camera.main;
-
-            if (mainCamera == null)
-                return null;
-
-            if (_mainGallopImageEffect != null && _mainGallopImageEffect.gameObject == mainCamera.gameObject)
-                return _mainGallopImageEffect;
-
-            _mainGallopImageEffect =
-                mainCamera.GetComponent<GallopImageEffect>();
-
-            if (_mainGallopImageEffect == null)
-            {
-                _mainGallopImageEffect =
-                    mainCamera.gameObject
-                        .AddComponent<LiveImageEffect>();
-            }
-
-            return _mainGallopImageEffect;
-        }
+        private GallopImageEffect GetActivePostEffect() => NativePostEffect();
         private string _lastDofBypassReason;
-
         private float GetMaxForcalSize()
         {
             // Actual game RVA 0x71439d0 / AlterLateUpdate 0x713ec50.
@@ -1786,6 +1885,7 @@ namespace Gallop.Live
                         _cameraImageEffects[i].DofDiffusionBloomOverlayParam.DofMaxFocalSize = maximum;
                         _cameraImageEffects[i].RenderParameter.DofDiffuionBloomOverlay.DofMaxFocalSize = maximum;
                     }
+
             if (_multiCameras != null)
                 for (int i = 0; i < _multiCameras.Length; ++i)
                     if (_multiCameras[i] != null)
@@ -1796,10 +1896,12 @@ namespace Gallop.Live
         private void OnUpdatePostEffect_Dof(LiveTimelineKeyPostEffectDOFData key, Vector3? worldFocus)
         {
             var effect = GetActivePostEffect();
-            if (effect == null) return;
+            if (effect == null)
+                return;
             var param = effect.DofDiffusionBloomOverlayParam;
             param.IsEnableDof = false;
             param.IsEnableOldDof = false;
+            bool dofParametersUpdated = false;
             var renderCamera = MainRenderCamera;
             string bypassReason = null;
             // [REPORT §10.3-B3] 原生无跨相机 DOF bypass（专用多相机 DOF 轨道是独立轨道，
@@ -1819,14 +1921,16 @@ namespace Gallop.Live
                 bool valid = metric || worldFocus.HasValue;
                 // Native PrepareDofParam clamps normalized negative depth, not the
                 // authored focal point. Missing targets remain a DOF-only bypass.
-                float focusDepth = metric ? key.dofFocalPoint
-                    : renderCamera.WorldToViewportPoint(focus).z;
+                float focusDepth = metric ? key.dofFocalPoint : renderCamera.WorldToViewportPoint(focus).z;
                 valid = valid && !float.IsNaN(focusDepth) && !float.IsInfinity(focusDepth);
-                if (!valid) bypassReason = "missing or invalid focus depth";
+                if (!valid)
+                    bypassReason = "missing or invalid focus depth";
                 param.IsEnableDof = valid && ((int)key.attribute & (1 << 18)) != 0;
                 // Source setters select the mode; write only the selected coordinate.
-                if (metric) param.DofFocalPoint = key.dofFocalPoint;
-                else param.DofFocalPosition = focus;
+                if (metric)
+                    param.DofFocalPoint = key.dofFocalPoint;
+                else
+                    param.DofFocalPosition = focus;
                 param.DofQualityType = (DepthBlurAndBloom.DofQuality)key.dofQuality;
                 param.DofFocalSize = key.forcalSize;
                 param.DofMaxFocalSize = GetMaxForcalSize();
@@ -1838,20 +1942,114 @@ namespace Gallop.Live
                 param.BallBlurBrightnessThreshhold = key.BallBlurBrightnessThreshhold;
                 param.BallBlurBrightnessIntensity = key.BallBlurBrightnessIntensity;
                 param.BallBlurSpread = key.BallBlurSpread;
+                param.IsPointBallBlur = ((int)key.attribute & (1 << 19)) != 0;
+                dofParametersUpdated = true;
             }
+
             if (bypassReason != _lastDofBypassReason)
             {
                 _lastDofBypassReason = bypassReason;
                 if (bypassReason != null)
-                    Debug.LogWarning($"[LiveDOF] Bypass DOF only: {bypassReason}; time={_liveCurrentTime:F3}, " +
-                        $"camera={renderCamera?.name}, key={key?.frame}, attr=0x{(key != null ? (int)key.attribute : 0):X}");
+                    Debug.LogWarning($"[LiveDOF] Bypass DOF only: {bypassReason}; time={_liveCurrentTime:F3}, " + $"camera={renderCamera?.name}, key={key?.frame}, attr=0x{(key != null ? (int)key.attribute : 0):X}");
             }
+
             effect.ApplyBloomParameter();
+            if (dofParametersUpdated)
+            {
+                // Native DOF writes these runtime fields directly. Generic
+                // Parameter.Setup deliberately does not copy BallBlur state.
+                ref var render = ref effect.RenderParameter.DofDiffuionBloomOverlay;
+                render.BallBlurPowerFactor = param.BallBlurPowerFactor;
+                render.BallBlurBrightnessThreshhold = param.BallBlurBrightnessThreshhold;
+                render.BallBlurBrightnessIntensity = param.BallBlurBrightnessIntensity;
+                render.BallBlurSpread = param.BallBlurSpread;
+                render.IsPointBallBlur = param.IsPointBallBlur;
+            }
+        }
+
+        private Gallop.ExcludeColorCorrection _excludeColorCorrection;
+        private readonly Gallop.Live.LiveVoicePlayer _voicePlayer = new Gallop.Live.LiveVoicePlayer();
+        private string _voicePlayError;
+        // Original Director.TryPlayVoice 0x4e3c350: the cue sheet path comes from
+        // RegisterSongCueSheet/ResourcePath.GetLiveVoiceCueSheetPath(musicId).
+        public bool TryPlayVoice(int cueId, float startTime)
+        {
+            if (live == null)
+            {
+                _voicePlayError = "no live";
+                return false;
+            }
+
+            var main = UmaViewerMain.Instance;
+            if (main == null || main.AbSounds == null)
+            {
+                _voicePlayError = "no AbSounds";
+                return false;
+            }
+
+            string sheet = LiveVoiceCueSheet.Select(live.MusicId, CharaContainerScript.Select(c => c.CharaEntry.Id), _liveSettingsResources ?? LiveSettingsResourceMap.Load(live.MusicId), _liveTimelineControl.SheetVariationId);
+            if (!LiveVoiceCueSheet.TryFindEntries(main.AbSounds, sheet, out var acb, out var awb))
+            {
+                _voicePlayError = "missing live voice ACB: " + sheet;
+                Debug.LogWarning("[LiveVoice] " + _voicePlayError);
+                return false;
+            }
+
+            bool ok = _voicePlayer.TryPlay(acb.FilePath, awb?.FilePath, cueId, startTime, 1f, out string error);
+            _voicePlayError = ok ? null : error;
+            if (!ok)
+                Debug.LogWarning("[LiveVoice] " + _voicePlayError);
+            return ok;
+        }
+
+        public void StopVoiceAll()
+        {
+            _voicePlayer.Stop();
+        }
+
+        // Original IsEnableVariationId 0x4e2b710 checks the context's enabled
+        // variation list; the Viewer exposes the single active sheet variation id.
+        public bool IsEnableVariationId(int variationId) => _liveTimelineControl != null && _liveTimelineControl.SheetVariationId == variationId;
+        private void OnVoicePlay(int cueId, float startTime)
+        {
+            TryPlayVoice(cueId, startTime);
+        }
+
+        // Native Director.OnUpdatePreColorCorrection 0x4e2f9d0 forwards to
+        // ExcludeColorCorrection.OnUpdatePreColorCorrection.
+        private void OnUpdatePreColorCorrection(Gallop.Live.Cutt.PreColorCorrectionUpdateInfo info)
+        {
+            var camera = MainRenderCamera;
+            if (camera == null)
+                return;
+            if (_excludeColorCorrection == null)
+                _excludeColorCorrection = new Gallop.ExcludeColorCorrection(camera.transform, CharaContainerScript, camera);
+            _excludeColorCorrection.OnUpdatePreColorCorrection(info, camera);
         }
 
         private void OnUpdateColorCorrection(Gallop.RenderPipeline.SimpleColorCorrectionPass.Parameter sample)
         {
+            // Installed OnUpdateColorCorrection0x4e2df70 writes0x25c=604.
+            // This main timeline callback must not change MultiCamera's default550.
+            sample.RenderPassEvent = (UnityEngine.Rendering.Universal.RenderPassEvent)604;
+            _mainColorCorrection = sample;
             Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.ColorCorrection = sample;
+        }
+
+        // Native 0x4e2de50 updates only the addressed MultiCamera image effect.
+        // Its default color event remains550; no main-camera604 owner callback.
+        private void OnUpdateColorCorrectionMultiCamera(Gallop.RenderPipeline.SimpleColorCorrectionPass.Parameter sample, int index)
+        {
+            if (_multiCameras == null || index < 0 || index >= _multiCameras.Length || _multiCameras[index] == null)
+                return;
+            _multiCameras[index].PostEffectParameter.ColorCorrection = sample;
+        }
+
+        public void ApplyColorCorrectionParameter(ref Gallop.RenderPipeline.SimpleColorCorrectionPass.Parameter parameter)
+        {
+            // Equivalent ownership boundary to native0x4e22b70. No blending or
+            // white balance; also copies the disabled state when a track is absent.
+            parameter = _mainColorCorrection;
         }
 
         // [A7b] 原生 Director.OnUpdateExposure(RVA=0x1a63430) 三连：
@@ -1863,11 +2061,11 @@ namespace Gallop.Live
         private void OnUpdateExposure(LiveExposureToneCurveTimeline.ExposureUpdateInfo info)
         {
             var effect = GetActivePostEffect();
-            if (effect == null) return;
+            if (effect == null)
+                return;
             // 原生无 null 门（事件触发即写），这里 GetActivePostEffect 的 null
             // 返回已在上方处理；直接整块覆盖。
-            effect.ExposureParam.Set(info.IsEnable, info.DepthMask, info.Gain,
-                info.Lift, info.MaskGain, info.MaskLift);
+            effect.ExposureParam.Set(info.IsEnable, info.DepthMask, info.Gain, info.Lift, info.MaskGain, info.MaskLift);
             effect.ApplyBloomParameter();
         }
 
@@ -1877,174 +2075,86 @@ namespace Gallop.Live
         private void OnUpdateToneCurve(LiveExposureToneCurveTimeline.ToneCurveUpdateInfo info)
         {
             var effect = GetActivePostEffect();
-            if (effect == null) return;
+            if (effect == null)
+                return;
             effect.ToneCurveParam.Set(info.IsEnable, info.ToneCurve, info.MaskToneCurve);
             effect.ApplyBloomParameter();
         }
 
         private void OnUpdateRadialBlur(Gallop.RenderPipeline.RadialBlurPass.Parameter sample)
         {
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.RadialBlur = sample;
+            var effect = NativePostEffect();
+            if (effect != null)
+                LiveRadialBlurTimeline.Apply(ref effect.RenderParameter.RadialBlur, sample);
         }
 
-        // Native Director.OnUpdateTiltShift (0x7ffffc798490): copies mode, quality, blurArea,
-        // maxBlurSize, downsample, offset and roll into GallopImageEffect.TiltShiftParam, gated by
-        // the param's UnlinkCutt flag (an authored override keeps the timeline from writing).
-        private void OnUpdateTiltShift(Gallop.RenderPipeline.TiltShiftPass.Parameter sample)
+        private void OnUpdateTransmittedLight(LiveTransmittedLightTimeline.UpdateInfo info)
         {
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.TiltShift = sample;
+            LiveTransmittedLightTimeline.ApplyToCameraArray(_cameraImageEffects, _activeCameraIndex, 0, info);
         }
 
-        // Native hook: LiveImageEffect._vortex is drawn from the after-lensflare command buffer
-        // (EntryAfterLensflareCommandBuffer walks _effectCommandBufferList), i.e. after the chain.
-        private void OnUpdateVortex(Gallop.RenderPipeline.VortexPass.Parameter sample)
+        private void OnUpdateTransmittedLightMultiCamera(LiveTransmittedLightTimeline.UpdateInfo info, int index)
         {
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.Vortex = sample;
+            LiveTransmittedLightTimeline.ApplyToMultiCamera(_multiCameras, index, info);
         }
 
-        private void OnUpdateFluctuation(Gallop.RenderPipeline.FluctuationPass.Parameter sample)
+        private void OnUpdateGlobalFog(LiveGlobalFogTimeline.UpdateInfo info)
         {
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.Fluctuation = sample;
+            LiveGlobalFogTimeline.ApplyToCameraArray(_cameraImageEffects, _activeCameraIndex, 0, info);
         }
 
-        // Native Director.OnUpdateChromaticAberration (0x7ffffc7990c0): copies the authored
-        // per-channel offsets scaled by 0.01 and packs _Parameter as (0, 0, power, clip).
-        private void OnUpdateChromaticAberration(ref ChromaticAberrationUpdateInfo info)
+        private void OnUpdateEdgeStyle(ref EdgeStyleUpdateInfo info)
         {
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.ChromaticAberration =
-                Gallop.RenderPipeline.ChromaticAberrationPass.FromUpdateInfo(info);
-        }
-
-        private void OnUpdateGlobalFog(LiveTimelineGlobalFogData fogData, LiveTimelineKeyGlobalFogData key)
-        {
-            if (key == null) return;
-
-            // Height fog: apply via RenderSettings when isHeight is true.
-            // Distance fog: apply via RenderSettings when isDistance is true.
-            // Either branch enables scene fog; both false disables it.
-            bool applyDistanceFog = key.isDistance && !key.isHeight;
-            bool applyHeightFog = key.isHeight;
-
-            RenderSettings.fog = applyDistanceFog || applyHeightFog;
-            RenderSettings.fogColor = key.color;
-
-            if (applyHeightFog)
-            {
-                RenderSettings.fogMode = FogMode.ExponentialSquared;
-                RenderSettings.fogDensity = key.heightDensity;
-                // Forward height and world origin as globals so stage shaders can consume them.
-                Shader.SetGlobalFloat("_Global_FogHeight", key.height);
-                Shader.SetGlobalFloat("_Global_FogHeightDensity", key.heightDensity);
-                // (OJOS) NO escribir `_Global_FogLength`: el shader del ojo
-                // (`Gallop/3D/Chara/ToonEye/T`) lo usa como rango de su degradado y, en cuanto vale
-                // (300,300,300,300), el iris se pinta NEGRO (y el valor no se restaura nunca: se queda
-                // roto para el resto de la sesion). Comprobado con el Frame Debugger y en caliente:
-                // poniendolo a 0 el iris vuelve al instante. El juego lo deja a 0.
-                Shader.SetGlobalVector("_Global_FogLength", Vector4.zero);
-                Shader.SetGlobalVector("_Global_FogWorld_Origin", Vector4.zero);
-            }
-            else if (applyDistanceFog)
-            {
-                switch (key.fogMode)
-                {
-                    case 1:
-                        RenderSettings.fogMode = FogMode.Linear;
-                        RenderSettings.fogStartDistance = key.start + key.startDistance;
-                        RenderSettings.fogEndDistance = key.end;
-                        break;
-                    case 2:
-                        RenderSettings.fogMode = FogMode.Exponential;
-                        RenderSettings.fogDensity = key.expDensity;
-                        break;
-                    default:
-                        RenderSettings.fogMode = FogMode.ExponentialSquared;
-                        RenderSettings.fogDensity = key.expDensity;
-                        break;
-                }
-            }
-
-            // Native GlobalFog is an image effect (GlobalFog.OnRenderImage 0x7ffffc97fa80) drawn with
-            // the frustum corners; feed the recovered pass with the same authored values.
-            Gallop.RenderPipeline.PostImageEffectFeature.RuntimeParameter.GlobalFog =
-                new Gallop.RenderPipeline.GlobalFogPass.Parameter
-                {
-                    DistanceFog = applyDistanceFog,
-                    HeightFog = applyHeightFog,
-                    UseRadialDistance = false,
-                    FogHeight = key.height,
-                    FogHeightDensity = key.heightDensity,
-                    StartDistance = key.startDistance,
-                    FogColor = key.color,
-                    SceneFogMode = key.fogMode == 1 ? 1 : key.fogMode == 2 ? 2 : 3,
-                    SceneFogDensity = key.expDensity,
-                    SceneFogStart = key.start,
-                    SceneFogEnd = key.end
-                };
+            LiveEdgeStyleTimeline.ApplyToCameraArray(_cameraImageEffects, _activeCameraIndex, 0, _liveCurrentTime, info);
         }
 
         private void OnUpdatePostFilm(int layer, Gallop.ImageEffect.ScreenOverlay.Overlay sample)
         {
             var effect = GetActivePostEffect();
-            if (effect == null) return;
+            if (effect == null)
+                return;
             var overlay = effect.DofDiffusionBloomOverlayParam.ScreenOverlay;
             var target = layer == 0 ? overlay.Overlay1 : layer == 1 ? overlay.Overlay2 : overlay.Overlay3;
             LivePostFilmTimeline.Copy(sample, target);
+            // Movie fields are runtime state excluded by Overlay.Setup.
+            // Publish only the selected layer of this active camera.
+            ref var render = ref effect.RenderParameter.DofDiffuionBloomOverlay;
+            if (layer == 0)
+                render.Overlay1.SetMovieInfo(sample.MovieTexture, sample.MovieMaskTexture, sample.MovieTextureScale, sample.MovieTextureOffset);
+            else if (layer == 1)
+                render.Overlay2.SetMovieInfo(sample.MovieTexture, sample.MovieMaskTexture, sample.MovieTextureScale, sample.MovieTextureOffset);
+            else
+                render.Overlay3.SetMovieInfo(sample.MovieTexture, sample.MovieMaskTexture, sample.MovieTextureScale, sample.MovieTextureOffset);
             // Publish only after all three layers, including disabled/empty tracks,
             // have replaced the active camera's old state.
-            if (layer == 2) effect.ApplyBloomParameter();
+            if (layer == 2)
+                effect.ApplyBloomParameter();
         }
 
         private void OnUpdatePostEffect_BloomDiffusion(PostEffectUpdateInfo_BloomDiffusion updateInfo)
         {
             GallopImageEffect imageEffect = GetActivePostEffect();
-
-
-            if (imageEffect == null) return;
-
-            DofDiffusionBloomOverlayParam param =
-                imageEffect.DofDiffusionBloomOverlayParam;
-
-            param.IsEnableBloom =
-                updateInfo.IsEnabledBloom;
-
-            param.BloomDofWeight =
-                updateInfo.bloomDofWeight;
-
-            param.BloomThreshold =
-                updateInfo.threshold;
-
-            param.BloomIntensity =
-                updateInfo.intensity;
-
-            param.BloomBlurSize =
-                updateInfo.BloomBlurSize;
-
-            param.BloomBlendMode =
-                updateInfo.BloomBlendMode;
-
-            param.IsEnableDiffusion =
-                updateInfo.IsEnabledDiffusion;
-
-            param.DiffusionBlurSize =
-                updateInfo.diffusionBlurSize;
-
-            param.DiffusionBright =
-                updateInfo.diffusionBright;
-
-            param.DiffusionThreshold =
-                updateInfo.diffusionThreshold;
-
-            param.DiffusionSaturation =
-                updateInfo.diffusionSaturation;
-
-            param.DiffusionContrast =
-                updateInfo.diffusionContrast;
-
+            if (imageEffect == null)
+                return;
+            DofDiffusionBloomOverlayParam param = imageEffect.DofDiffusionBloomOverlayParam;
+            param.IsEnableBloom = updateInfo.IsEnabledBloom;
+            param.BloomDofWeight = updateInfo.bloomDofWeight;
+            param.BloomThreshold = updateInfo.threshold;
+            param.BloomIntensity = updateInfo.intensity;
+            param.BloomBlurSize = updateInfo.BloomBlurSize;
+            param.BloomBlendMode = updateInfo.BloomBlendMode;
+            param.IsEnableDiffusion = updateInfo.IsEnabledDiffusion;
+            param.DiffusionBlurSize = updateInfo.diffusionBlurSize;
+            param.DiffusionBright = updateInfo.diffusionBright;
+            param.DiffusionThreshold = updateInfo.diffusionThreshold;
+            param.DiffusionSaturation = updateInfo.diffusionSaturation;
+            param.DiffusionContrast = updateInfo.diffusionContrast;
             imageEffect.ApplyBloomParameter();
-            //         Debug.Log(
-            // $"[BloomDirector] activeCameraIndex={_activeCameraIndex}, " +
-            // $"imageEffect={(imageEffect != null ? imageEffect.name : "null")}");
+        //         Debug.Log(
+        // $"[BloomDirector] activeCameraIndex={_activeCameraIndex}, " +
+        // $"imageEffect={(imageEffect != null ? imageEffect.name : "null")}");
         }
+
         private void OnUpdateVolumeLight(LiveVolumeLightTimeline.VolumeUpdateInfo info)
         {
             _volumeLightController?.UpdateVolume(info);
@@ -2057,8 +2167,21 @@ namespace Gallop.Live
 
         private void OnDestroy()
         {
+            ScreenCaptures?.Release();
+            BackgroundImages?.Release();
+            ReleaseLiveTitle();
+            ReleaseLiveFlash();
+            if (_liveTimelineControl != null)
+                _liveTimelineControl.OnUpdateLipSyncPattern -= OnUpdateLipSyncPattern;
+            ReleaseLipSyncPatternAsset();
+            UnbindModelQueueCameraCallbacks();
+            _transparentCamera?.Dispose();
+            _monitorCameraDriver?.SetupCaptureTexture(null);
+            ReleaseMonitorTextures();
             _stageController?.DestroyMirrorReflections();
             UnbindTimelineEvents();
+            ReleaseMiniCharacters();
+            DestroyMiniCharaCamera();
             _footLightRuntime?.Dispose();
             _footLightRuntime = null;
             _livePropsController?.Dispose();
@@ -2067,36 +2190,43 @@ namespace Gallop.Live
             _effectController?.Dispose();
             _spotlightRuntime?.Dispose();
             _lightProjectionController?.Dispose();
-            _mirrorScanLightRuntime?.Dispose();
-            _mirrorScanLightRuntime = null;
             _mirrorBallProjectionTextures.Clear();
             _effectStageObjects.Clear();
-
             if (_instance == this)
             {
                 Gallop.RenderPipeline.PostImageEffectFeature.ResetRuntimeParameter();
-                LiveRuntimeDiagnostics.End();
                 _instance = null;
             }
         }
+
         private void UnbindTimelineEvents()
         {
             if (_liveTimelineControl == null)
                 return;
-
+            _liveTimelineControl.OnUpdateFacialToon -= OnUpdateFacialToon;
+            UnbindCharaNodeOffset();
+            UnbindParentConstraint();
+            _liveTimelineControl.OnUpdateCharaWind -= OnUpdateCharaWind;
+            UnbindSweatLocator();
             if (_footLightRuntime != null)
+            {
                 _liveTimelineControl.OnUpdateBgColor1 -= _footLightRuntime.ApplySpotlight;
+                _liveTimelineControl.OnUpdateBgColor1 -= _footLightRuntime.ApplyShadow;
+            }
+
             _liveTimelineControl.OnUpdatePostEffect_Dof -= OnUpdatePostEffect_Dof;
             _liveTimelineControl.OnUpdatePostFilm -= OnUpdatePostFilm;
+            _liveTimelineControl.OnUpdateFade -= OnUpdateFade;
             _liveTimelineControl.OnUpdateRadialBlur -= OnUpdateRadialBlur;
+            UnsubscribeNativePostTimeline(_liveTimelineControl);
+            UnsubscribeChromaticAberrationTimeline(_liveTimelineControl);
             _liveTimelineControl.OnUpdateColorCorrection -= OnUpdateColorCorrection;
-            _liveTimelineControl.OnUpdateChromaticAberration -= OnUpdateChromaticAberration;
-            _liveTimelineControl.OnUpdateTiltShift -= OnUpdateTiltShift;
-            _liveTimelineControl.OnUpdateVortex -= OnUpdateVortex;
-            _liveTimelineControl.OnUpdateFluctuation -= OnUpdateFluctuation;
+            _liveTimelineControl.OnUpdateColorCorrectionMultiCamera -= OnUpdateColorCorrectionMultiCamera;
             _liveTimelineControl.OnUpdateGlobalFog -= OnUpdateGlobalFog;
-            _liveTimelineControl.OnUpdatePostEffect_BloomDiffusion -=
-                OnUpdatePostEffect_BloomDiffusion;
+            _liveTimelineControl.OnUpdateEdgeStyle -= OnUpdateEdgeStyle;
+            _liveTimelineControl.OnUpdateTransmittedLight -= OnUpdateTransmittedLight;
+            _liveTimelineControl.OnUpdateTransmittedLightMultiCamera -= OnUpdateTransmittedLightMultiCamera;
+            _liveTimelineControl.OnUpdatePostEffect_BloomDiffusion -= OnUpdatePostEffect_BloomDiffusion;
             // [A7b] 原生 UnbindTimelineEvents(RVA=0x1a69920) 对应解除两条轨道。
             _liveTimelineControl.OnUpdateExposure -= OnUpdateExposure;
             _liveTimelineControl.OnUpdateToneCurve -= OnUpdateToneCurve;
@@ -2107,15 +2237,17 @@ namespace Gallop.Live
                 _liveTimelineControl.OnUpdateParticle -= _stageParticleController.Update;
                 _liveTimelineControl.OnUpdateParticleGroup -= _stageParticleController.UpdateGroup;
             }
+
             if (_effectController != null)
             {
                 _liveTimelineControl.OnUpdateEffect -= _effectController.Update;
                 _liveTimelineControl.OnUpdateEffectScale -= _effectController.UpdateScale;
             }
-            if (_spotlightRuntime != null) _liveTimelineControl.OnUpdateSpotlight3d -= _spotlightRuntime.Update;
+
+            if (_spotlightRuntime != null)
+                _liveTimelineControl.OnUpdateSpotlight3d -= _spotlightRuntime.Update;
             if (_lightProjectionController != null)
                 _liveTimelineControl.OnUpdateLightProjection -= _lightProjectionController.Apply;
         }
     }
-
 }

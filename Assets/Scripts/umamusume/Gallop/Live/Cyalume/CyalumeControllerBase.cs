@@ -8,7 +8,6 @@ using UnityEngine;
 
 namespace Gallop.Cyalume
 {
-
     /// 控制器侧的保守还原实现。
     ///
     /// 此版本的重要规则：
@@ -16,51 +15,50 @@ namespace Gallop.Cyalume
     /// 不通过克隆网格来“强制”获得可写性。
     /// 不生成推测的顶点颜色或 UV 数据流。
     /// 当无法确定官方的准确行为时，选择跳过，而不是进行猜测。
-
     public abstract class CyalumeControllerBase : MonoBehaviour
     {
         [Header("Recovered official-ish settings")]
         public int _animationFrameCount = 32;
         public bool _useUVAudienceSpread = true;
-
-        [SerializeField] protected string _cyalumeNameKeyword = "cyalume";
-        [SerializeField] protected string _cyalumeShaderKeyword = "Cyalume";
-        [SerializeField] protected bool _writeCyalumeDebugDump = true;
-        [SerializeField] protected string _cyalumeDebugDumpFileName = "cyalume_shader_snapshot.txt";
-        [SerializeField] protected string _mobShadowShaderKeyword = "MobShadow";
-
-        [SerializeField] protected bool _verboseLog;
-        [SerializeField] protected bool _isInitialized;
-        [SerializeField] protected bool _isEnabledCyalume = true;
-        [SerializeField] protected bool _isEnabledAudience = true;
-
+        [SerializeField]
+        protected string _cyalumeNameKeyword = "cyalume";
+        [SerializeField]
+        protected string _cyalumeShaderKeyword = "Cyalume";
+        [SerializeField]
+        protected bool _writeCyalumeDebugDump = true;
+        [SerializeField]
+        protected string _cyalumeDebugDumpFileName = "cyalume_shader_snapshot.txt";
+        [SerializeField]
+        protected string _mobShadowShaderKeyword = "MobShadow";
+        [SerializeField]
+        protected bool _verboseLog;
+        [SerializeField]
+        protected bool _isInitialized;
+        [SerializeField]
+        protected bool _isEnabledCyalume = true;
+        [SerializeField]
+        protected bool _isEnabledAudience = true;
         private const int GroupMatrixCount = 11;
         private static readonly int CyalumeGroupMatrixPropertyId = Shader.PropertyToID("_CyalumeGroupMatrix");
-
         protected readonly List<Renderer> _allRendererList = new List<Renderer>();
         protected readonly List<Renderer> _targetRendererList = new List<Renderer>();
         protected readonly Matrix4x4[] _groupMatrixArray = CreateIdentityGroupMatrixArray();
         protected bool _isUpdateGroupMatrix = true;
-
         protected MeshFilter[] _meshFilters = Array.Empty<MeshFilter>();
         protected Material[] _materialArray = Array.Empty<Material>();
         protected Color32[][][] _colorsTable = Array.Empty<Color32[][]>();
-
         protected readonly Dictionary<int, Texture2D> _textureSet = new Dictionary<int, Texture2D>();
         protected MaterialPropertyBlock _mpb;
         protected int _mainTexStPropertyId = -1;
-
         protected CyalumePlaybackProvider _playbackProvider;
         protected int _musicIdOverride;
         protected int _lastAppliedPatternId = -1;
         protected float _lastAppliedScrollOffset = float.NaN;
-
         protected bool _hasManualPlaybackState;
         protected int _manualPatternId;
         protected float _manualPatternStartTime;
         protected float _manualPlaySpeed = 1f;
         protected int _manualChoreographyType;
-
         public IReadOnlyList<Renderer> AllRenderers => _allRendererList;
         public IReadOnlyList<Renderer> TargetRenderers => _targetRendererList;
         public bool IsReady => _isInitialized;
@@ -77,7 +75,6 @@ namespace Gallop.Cyalume
             var matrices = new Matrix4x4[GroupMatrixCount];
             for (int i = 0; i < matrices.Length; i++)
                 matrices[i] = Matrix4x4.identity;
-
             return matrices;
         }
 
@@ -92,7 +89,6 @@ namespace Gallop.Cyalume
         {
             if (!_isUpdateGroupMatrix || !_isEnabledCyalume)
                 return;
-
             _isUpdateGroupMatrix = false;
             Shader.SetGlobalMatrixArray(CyalumeGroupMatrixPropertyId, _groupMatrixArray);
         }
@@ -136,8 +132,15 @@ namespace Gallop.Cyalume
             _isEnabledCyalume = enabled;
             if (enabled)
                 _isUpdateGroupMatrix = true;
-
             RefreshRendererEnabledState();
+        }
+
+        readonly Dictionary<Renderer, bool> stageVisibility = new Dictionary<Renderer, bool>();
+        internal void ForgetStageVisibility(Renderer renderer) => stageVisibility.Remove(renderer);
+        internal void SetStageVisibility(Renderer renderer, bool enabled)
+        {
+            stageVisibility[renderer] = enabled;
+            renderer.enabled = enabled && (!_allRendererList.Contains(renderer) || (_isEnabledCyalume && _targetRendererList.Contains(renderer)));
         }
 
         protected void RefreshRendererEnabledState()
@@ -147,8 +150,7 @@ namespace Gallop.Cyalume
                 var renderer = _allRendererList[i];
                 if (!renderer)
                     continue;
-
-                bool shouldEnable = _isEnabledCyalume && _targetRendererList.Contains(renderer);
+                bool shouldEnable = _isEnabledCyalume && _targetRendererList.Contains(renderer) && (!stageVisibility.TryGetValue(renderer, out bool stageEnabled) || stageEnabled);
                 renderer.enabled = shouldEnable;
             }
         }
@@ -168,10 +170,8 @@ namespace Gallop.Cyalume
         {
             if (_musicIdOverride > 0)
                 return _musicIdOverride;
-
             if (Director.instance != null && Director.instance.live != null)
                 return Director.instance.live.MusicId;
-
             return 0;
         }
 
@@ -179,13 +179,11 @@ namespace Gallop.Cyalume
         {
             if (_playbackProvider != null)
                 return _playbackProvider;
-
             _playbackProvider = GetComponent<CyalumePlaybackProvider>();
             if (_playbackProvider == null)
                 _playbackProvider = FindObjectOfType<CyalumePlaybackProvider>(true);
             if (_playbackProvider == null)
                 _playbackProvider = gameObject.AddComponent<CyalumePlaybackProvider>();
-
             return _playbackProvider;
         }
 
@@ -193,20 +191,16 @@ namespace Gallop.Cyalume
         {
             if (renderers == null || renderers.Count == 0)
                 return;
-
             // Native InitializeCyalumeMaterial (0x1a44370) assigns shader kind
             // 0xD4, CyalumeDefault_hq, rather than preserving the prefab shader.
-            var shader = Gallop.ShaderManager.GetShader(
-                Gallop.ShaderManager.ShaderKinds.CyalumeDefault_hq);
+            var shader = Gallop.ShaderManager.GetShader(Gallop.ShaderManager.ShaderKinds.CyalumeDefault_hq);
             if (shader == null)
                 throw new InvalidOperationException("The native CyalumeDefault_hq shader is unavailable.");
-
             for (int i = 0; i < renderers.Count; i++)
             {
                 var renderer = renderers[i];
                 if (renderer == null)
                     continue;
-
                 var materials = renderer.materials;
                 for (int slot = 0; slot < materials.Length; slot++)
                 {
@@ -221,16 +215,12 @@ namespace Gallop.Cyalume
         {
             if (renderer == null)
                 return false;
-
             if (_targetRendererList.Contains(renderer) || _allRendererList.Contains(renderer))
                 return true;
-
             if (IsOfficialCyalumeRenderer(renderer))
                 return true;
-
             string rendererName = renderer.name ?? string.Empty;
-            if (!string.IsNullOrEmpty(_cyalumeNameKeyword) &&
-                rendererName.IndexOf(_cyalumeNameKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (!string.IsNullOrEmpty(_cyalumeNameKeyword) && rendererName.IndexOf(_cyalumeNameKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
             }
@@ -238,23 +228,19 @@ namespace Gallop.Cyalume
             var materials = renderer.sharedMaterials;
             if (materials == null || materials.Length == 0)
                 return false;
-
             for (int i = 0; i < materials.Length; i++)
             {
                 var material = materials[i];
                 if (material == null)
                     continue;
-
                 string materialName = material.name ?? string.Empty;
-                if (!string.IsNullOrEmpty(_cyalumeNameKeyword) &&
-                    materialName.IndexOf(_cyalumeNameKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (!string.IsNullOrEmpty(_cyalumeNameKeyword) && materialName.IndexOf(_cyalumeNameKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }
 
                 string shaderName = material.shader != null ? material.shader.name : string.Empty;
-                if (!string.IsNullOrEmpty(_cyalumeShaderKeyword) &&
-                    shaderName.IndexOf(_cyalumeShaderKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (!string.IsNullOrEmpty(_cyalumeShaderKeyword) && shaderName.IndexOf(_cyalumeShaderKeyword, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }
@@ -267,11 +253,9 @@ namespace Gallop.Cyalume
         {
             if (renderer == null)
                 return false;
-
             var materials = renderer.sharedMaterials;
             if (materials == null || materials.Length == 0)
                 return false;
-
             for (int i = 0; i < materials.Length; i++)
             {
                 if (IsOfficialCyalumeMaterial(materials[i]))
@@ -285,19 +269,15 @@ namespace Gallop.Cyalume
         {
             if (material == null)
                 return false;
-
             string keyword = _mobShadowShaderKeyword ?? string.Empty;
             if (string.IsNullOrEmpty(keyword))
                 keyword = "MobShadow";
-
             string shaderName = material.shader != null ? (material.shader.name ?? string.Empty) : string.Empty;
             if (shaderName.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
-
             string materialName = material.name ?? string.Empty;
             if (materialName.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
-
             return false;
         }
 
@@ -305,30 +285,23 @@ namespace Gallop.Cyalume
         {
             if (material == null || material.shader == null)
                 return false;
-
             if (IsMobShadowMaterial(material))
                 return false;
-
-            return material.shader.name.StartsWith("Gallop/3D/Live/Cyalume/CyalumeDefault",
-                StringComparison.Ordinal);
+            return material.shader.name.StartsWith("Gallop/3D/Live/Cyalume/CyalumeDefault", StringComparison.Ordinal);
         }
-
 
         protected void LogTargetShaderSummary(string context)
         {
             if (!_verboseLog)
                 return;
-
             var shaderCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var sb = new StringBuilder();
             sb.AppendLine($"[CyalumeControllerBase] {context} target shader summary");
-
             for (int i = 0; i < _targetRendererList.Count; i++)
             {
                 var renderer = _targetRendererList[i];
                 if (renderer == null)
                     continue;
-
                 var materials = renderer.materials;
                 var shaderNames = new List<string>();
                 if (materials != null)
@@ -338,7 +311,6 @@ namespace Gallop.Cyalume
                         var material = materials[j];
                         string shaderName = material != null && material.shader != null ? material.shader.name : "<null>";
                         shaderNames.Add(shaderName);
-
                         if (!shaderCounts.TryGetValue(shaderName, out int count))
                             count = 0;
                         shaderCounts[shaderName] = count + 1;
@@ -353,20 +325,19 @@ namespace Gallop.Cyalume
                 sb.AppendLine("  uniqueShaders=" + string.Join(", ", shaderCounts.Select(pair => $"{pair.Key} x{pair.Value}")));
             }
 
+            Debug.Log(sb.ToString());
         }
 
         protected void WriteCyalumeSceneSnapshot(string context)
         {
             if (!_writeCyalumeDebugDump)
                 return;
-
             try
             {
                 var sb = new StringBuilder();
                 sb.AppendLine($"context={context}");
                 sb.AppendLine($"time={DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
                 sb.AppendLine($"unityTime={Time.time}");
-
                 var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>(true);
                 int hitCount = 0;
                 for (int i = 0; i < renderers.Length; i++)
@@ -374,7 +345,6 @@ namespace Gallop.Cyalume
                     var renderer = renderers[i];
                     if (!IsLikelyCyalumeRenderer(renderer))
                         continue;
-
                     var materials = renderer.sharedMaterials;
                     var entries = new List<string>();
                     if (materials != null)
@@ -394,11 +364,8 @@ namespace Gallop.Cyalume
                 }
 
                 sb.AppendLine($"hitCount={hitCount}");
-
                 string path = System.IO.Path.Combine(Application.persistentDataPath, _cyalumeDebugDumpFileName);
                 System.IO.File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
-
-                
             }
             catch (Exception ex)
             {
@@ -410,7 +377,6 @@ namespace Gallop.Cyalume
         {
             if (transform == null)
                 return "<null>";
-
             string path = transform.name;
             while (transform.parent != null)
             {
@@ -425,16 +391,11 @@ namespace Gallop.Cyalume
         {
             if (string.IsNullOrEmpty(liveKey))
                 return;
-
             var main = FindObjectOfType<UmaViewerMain>();
             if (main == null || main.AbList == null)
                 return;
-
             string needle = $"tex_live_cyalume_{liveKey}_";
-            foreach (var entry in main.AbList.Values.Where(e =>
-                         e != null &&
-                         !string.IsNullOrEmpty(e.Name) &&
-                         e.Name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0))
+            foreach (var entry in main.AbList.Values.Where(e => e != null && !string.IsNullOrEmpty(e.Name) && e.Name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0))
             {
                 UmaAssetManager.LoadAssetBundle(entry, neverUnload: true, isRecursive: true);
             }
@@ -445,12 +406,10 @@ namespace Gallop.Cyalume
             var result = new Dictionary<int, Texture2D>();
             if (string.IsNullOrEmpty(liveKey))
                 return result;
-
             foreach (var assetBundle in AssetBundle.GetAllLoadedAssetBundles())
             {
                 if (!assetBundle)
                     continue;
-
                 string[] names;
                 try
                 {
@@ -464,30 +423,19 @@ namespace Gallop.Cyalume
                 foreach (var path in names)
                 {
                     string file = System.IO.Path.GetFileNameWithoutExtension(path);
-                    var match = System.Text.RegularExpressions.Regex.Match(
-                        file,
-                        @"^tex_live_cyalume_(m\d+)_(\d{3})$",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
+                    var match = System.Text.RegularExpressions.Regex.Match(file, @"^tex_live_cyalume_(m\d+)_(\d{3})$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (!match.Success)
                         continue;
-
                     if (!string.Equals(match.Groups[1].Value, liveKey, StringComparison.OrdinalIgnoreCase))
                         continue;
-
                     if (!int.TryParse(match.Groups[2].Value, out int patternId))
                         continue;
-
                     if (result.ContainsKey(patternId))
                         continue;
-
                     Texture2D tex = null;
                     try
                     {
                         tex = assetBundle.LoadAsset<Texture2D>(path);
-                        if (LiveRuntimeDiagnostics.Enabled)
-                            LiveRuntimeDiagnostics.RecordAssetLoad(assetBundle.name, "LoadAsset", typeof(Texture2D),
-                                new UnityEngine.Object[] { tex }, tex, path);
                     }
                     catch
                     {
@@ -506,21 +454,17 @@ namespace Gallop.Cyalume
         {
             var meshFilters = new List<MeshFilter>();
             var materials = new List<Material>();
-
             for (int i = 0; i < _targetRendererList.Count; i++)
             {
                 var renderer = _targetRendererList[i];
                 if (!renderer)
                     continue;
-
                 var mf = renderer.GetComponent<MeshFilter>();
                 if (mf != null)
                     meshFilters.Add(mf);
-
                 var slots = renderer.materials;
                 if (slots == null)
                     continue;
-
                 for (int j = 0; j < slots.Length; j++)
                 {
                     var material = slots[j];
@@ -536,7 +480,6 @@ namespace Gallop.Cyalume
         protected bool TryGetCurrentPlayback(out int patternId, out float patternStartTime, out float playSpeed, out int choreographyType, out float liveTime)
         {
             liveTime = GetCurrentLiveTime();
-
             if (_hasManualPlaybackState)
             {
                 patternId = _manualPatternId;
@@ -567,7 +510,6 @@ namespace Gallop.Cyalume
         {
             if (Director.instance != null && Director.instance._liveTimelineControl != null)
                 return Director.instance._liveTimelineControl.currentLiveTime;
-
             return Time.time;
         }
 
@@ -575,7 +517,6 @@ namespace Gallop.Cyalume
         {
             int frameCount = Mathf.Max(1, _animationFrameCount);
             int frameNo;
-
             if (choreographyType >= 8)
             {
                 frameNo = 0;
@@ -594,10 +535,8 @@ namespace Gallop.Cyalume
         {
             if (_textureSet.TryGetValue(patternId, out var exact) && exact != null)
                 return exact;
-
             if (_textureSet.TryGetValue(0, out var fallbackZero) && fallbackZero != null)
                 return fallbackZero;
-
             return _textureSet.Values.FirstOrDefault(x => x != null);
         }
 
@@ -605,31 +544,25 @@ namespace Gallop.Cyalume
         {
             if (patternId == _lastAppliedPatternId)
                 return;
-
             var texture = ResolveTextureForPatternId(patternId);
             if (texture == null)
                 return;
-
             for (int i = 0; i < _targetRendererList.Count; i++)
             {
                 var renderer = _targetRendererList[i];
                 if (!renderer)
                     continue;
-
                 var materials = renderer.materials;
                 if (materials == null)
                     continue;
-
                 for (int slot = 0; slot < materials.Length; slot++)
                 {
                     var material = materials[slot];
                     if (material == null)
                         continue;
-
                     string prop = ResolveTextureProperty(material);
                     if (string.IsNullOrEmpty(prop))
                         continue;
-
                     material.SetTexture(prop, texture);
 #if UNITY_2021_2_OR_NEWER
                     renderer.GetPropertyBlock(_mpb, slot);
@@ -650,29 +583,23 @@ namespace Gallop.Cyalume
         {
             if (!float.IsNaN(_lastAppliedScrollOffset) && Mathf.Abs(_lastAppliedScrollOffset - yOffset) < 0.0001f)
                 return;
-
             for (int i = 0; i < _targetRendererList.Count; i++)
             {
                 var renderer = _targetRendererList[i];
                 if (!renderer)
                     continue;
-
                 var materials = renderer.materials;
                 if (materials == null)
                     continue;
-
                 for (int slot = 0; slot < materials.Length; slot++)
                 {
                     var material = materials[slot];
                     if (material == null)
                         continue;
-
                     string prop = ResolveTextureProperty(material);
                     if (string.IsNullOrEmpty(prop) || !material.HasProperty(prop))
                         continue;
-
                     material.SetTextureOffset(prop, new Vector2(0f, yOffset));
-
 #if UNITY_2021_2_OR_NEWER
                     if (_mainTexStPropertyId >= 0)
                     {
@@ -692,12 +619,10 @@ namespace Gallop.Cyalume
         {
             if (material == null)
                 return null;
-
             if (material.HasProperty("_MainTex"))
                 return "_MainTex";
             if (material.HasProperty("_BaseMap"))
                 return "_BaseMap";
-
             var props = material.GetTexturePropertyNames();
             return props != null && props.Length > 0 ? props[0] : null;
         }
@@ -711,19 +636,16 @@ namespace Gallop.Cyalume
         {
             if (!_useUVAudienceSpread || _meshFilters == null || _meshFilters.Length == 0)
                 return;
-
             for (int i = 0; i < _meshFilters.Length; i++)
             {
                 var filter = _meshFilters[i];
                 if (filter == null || filter.sharedMesh == null)
                     continue;
-
                 var mesh = filter.sharedMesh;
                 if (!mesh.isReadable)
                     continue;
-
-                // No guessed UV rewrite here. Exact official filter/name condition is not fully restored yet.
-                // Keep the conservative official rule: readable meshes may be handled; unreadable meshes are skipped.
+            // No guessed UV rewrite here. Exact official filter/name condition is not fully restored yet.
+            // Keep the conservative official rule: readable meshes may be handled; unreadable meshes are skipped.
             }
         }
 
@@ -742,7 +664,6 @@ namespace Gallop.Cyalume
             }
 
             _colorsTable = new Color32[_meshFilters.Length][][];
-
             for (int i = 0; i < _meshFilters.Length; i++)
             {
                 var filter = _meshFilters[i];
@@ -771,7 +692,10 @@ namespace Gallop.Cyalume
                     // Keep only the readable source colors as a single conservative slot.
                     var copy = new Color32[colors.Length];
                     Array.Copy(colors, copy, colors.Length);
-                    _colorsTable[i] = new[] { copy };
+                    _colorsTable[i] = new[]
+                    {
+                        copy
+                    };
                 }
                 catch
                 {
@@ -791,10 +715,8 @@ namespace Gallop.Cyalume
         {
             if (!_isInitialized)
                 return;
-
             if (!TryGetCurrentPlayback(out int patternId, out float patternStartTime, out float playSpeed, out int choreographyType, out float liveTime))
                 return;
-
             bool patternChanged = patternId != _lastAppliedPatternId;
             if (isForceUpdate || patternChanged)
             {
@@ -803,22 +725,17 @@ namespace Gallop.Cyalume
                     var filter = _meshFilters[i];
                     if (filter == null || filter.sharedMesh == null)
                         continue;
-
                     var mesh = filter.sharedMesh;
                     if (!mesh.isReadable)
                         continue;
-
                     if (_colorsTable == null || i >= _colorsTable.Length)
                         continue;
-
                     var perMesh = _colorsTable[i];
                     if (perMesh == null || perMesh.Length == 0)
                         continue;
-
                     var colors = perMesh[0];
                     if (colors == null || colors.Length != mesh.vertexCount)
                         continue;
-
                     try
                     {
                         mesh.colors32 = colors;
@@ -832,7 +749,6 @@ namespace Gallop.Cyalume
             }
 
             ApplyPatternTextureToCurrentTargets(patternId);
-
             float yOffset = ComputeRecoveredYOffset(liveTime, patternStartTime, playSpeed, choreographyType);
             yOffset -= Mathf.Floor(yOffset);
             ApplyScrollOffsetToCurrentTargets(yOffset);

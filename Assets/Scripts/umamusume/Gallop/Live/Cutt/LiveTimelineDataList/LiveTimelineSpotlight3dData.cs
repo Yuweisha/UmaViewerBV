@@ -7,6 +7,7 @@ namespace Gallop.Live.Cutt
     [Serializable]
     public class LiveTimelineKeySpotlight3dData : LiveTimelineKeyWithInterpolate
     {
+        public enum PositionType { Key, Character, World }
         public const int ATTR_DISABLE_BILLBOARD = 0x10000;
         public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.Spotlight3d;
         public bool isActive;
@@ -21,6 +22,9 @@ namespace Gallop.Live.Cutt
         public int targetCameraIndex;
         public string assetName = "spotlight3d000";
         public int characterIndex = -1;
+        public PositionType PositionTypeValue;
+        public bool EnableLookAt;
+        public string TargetNodeName = "Position";
 
         // Native 0x1af80e0/0x1af80f0: bit 16 disables billboarding.
         public bool IsEnabledBillboard
@@ -42,8 +46,12 @@ namespace Gallop.Live.Cutt
     {
         public LiveTimelineKeySpotlight3dDataList keys = new LiveTimelineKeySpotlight3dDataList();
         // These are runtime bindings, not additional serialized track fields.
-        public int CharacterIndex { get; set; } = -1;
-        public int AssetId { get; set; }
+        [SerializeField, Newtonsoft.Json.JsonProperty("_characterIndex")]
+        private int _characterIndex = -1;
+        [SerializeField, Newtonsoft.Json.JsonProperty("_assetId")]
+        private int _assetId;
+        public int CharacterIndex { get => _characterIndex; set => _characterIndex = value; }
+        public int AssetId { get => _assetId; set => _assetId = value; }
 
         public LiveTimelineSpotlight3dData() : base("Spotlight3d") { }
         public override ILiveTimelineKeyDataList GetKeyList() => keys;
@@ -54,8 +62,8 @@ namespace Gallop.Live.Cutt
         public override void UpdateStatus()
         {
             base.UpdateStatus();
-            CharacterIndex = -1;
-            AssetId = -1;
+            // 2.32.0 UpdateStatus only updates the name hash. Preserve explicit
+            // runtime bindings; legacy worksheets still carry these on keys.
             if (keys == null || keys.Count == 0 || keys[0] == null) return;
             var first = (LiveTimelineKeySpotlight3dData)keys[0];
             if (first.characterIndex < 0) return;

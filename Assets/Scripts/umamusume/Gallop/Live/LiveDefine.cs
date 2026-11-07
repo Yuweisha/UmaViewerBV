@@ -81,7 +81,8 @@ namespace Gallop
         public enum ConstraintObjectType
         {
             Props,
-            MiniChara
+            MiniChara,
+            StageObject
         }
 
         public static bool IsValidLiveVariationId(int liveVariationId)

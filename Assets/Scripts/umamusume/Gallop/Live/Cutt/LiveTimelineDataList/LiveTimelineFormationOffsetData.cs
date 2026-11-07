@@ -56,9 +56,12 @@ namespace Gallop.Live.Cutt
         public Vector3 Position;
         public float RotationY;
         public float LocalRotationY;
+        public float ScaleFactor;
         public bool visible;
         public int DressIndex;
         public bool warmUpCySpring;
+        public float CySpringWarmUpTime;
+        public float PropCySpringWarmUpTime;
         public bool isEnabledOffset;
         public Vector3 offsetMaxPosition;
         public Vector3 offsetMinPosition;
@@ -77,6 +80,18 @@ namespace Gallop.Live.Cutt
         public Color EmissiveColor;
         public float EmissiveScrollTimeScale;
         public float EmissiveScrollEnergyScale;
+        public bool IsEmissiveIntensity;
+        public float EmissiveIntensity;
+        public bool IsEmissiveSoftEdge;
+        public float EmissiveRimPower;
+        public float EmissiveRimIntensity;
+        public bool IsEmissiveCenter;
+        public float DirtEnergyR;
+        public float DirtEnergyG;
+        public float DirtEnergyB;
+        public Color DirtColor;
+        public Color DirtRimSpecularColor;
+        public Color DirtToonColor;
         private static readonly string[] IKSYSTEM_HOLD_HAND_TARGET_NODE_NAME_ARRAY;
         public LiveTimelineKeyFormationOffsetData.IKSystemType IKSystem;
         public int IKSystemParam1;
@@ -107,20 +122,24 @@ namespace Gallop.Live.Cutt
         private Transform _parentObjectTransform;
         private int _parentObjectTargetCount;
 
+        public bool IsEnabledParentObject => ((int)attribute & ATTR_PARENT_OBJECT) != 0;
+
+        public int ParentObjectTargetCount => _parentObjectTargetCount;
+
         public Transform GetParentObjectTransform(LiveTimelineControl liveTimelineControl)
         {
-            if (_parentObjectTransform != null)
+            // Original0x4ef7fe0 caches a completed lookup even when it returned
+            // null. Object destruction or another call does not repeat it.
+            if (_isUpdatedParentObject)
             {
                 return _parentObjectTransform;
             }
 
-            if (liveTimelineControl.StageObjectMap.TryGetValue(ParentObjectName, out GameObject gameObject))
-            {
-                _parentObjectTransform = gameObject.transform;
-                return _parentObjectTransform;
-            }
-
-            return null;
+            _parentObjectNameHash = FNVHash.Generate(ParentObjectName ?? string.Empty);
+            _parentObjectTransform = Gallop.Live.Director.instance._stageController.GetObjectWorkInfoTransform(
+                _parentObjectNameHash, out _parentObjectTargetCount);
+            _isUpdatedParentObject = true;
+            return _parentObjectTransform;
         }
     }
 

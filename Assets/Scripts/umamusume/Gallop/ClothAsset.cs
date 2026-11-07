@@ -99,6 +99,8 @@ namespace Gallop
                 _clothAsset[(int)ClothParts.Bust][category] = prefab;
         }
 
+        public GameObject GetClothAsset(ClothParts parts,int category)=>_clothAsset[(int)parts][category];
+
         public enum ClothParts
         {
             Head,

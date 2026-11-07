@@ -129,7 +129,7 @@ namespace Gallop
             HipMoveInfluenceDistance = container.HipMoveInfluenceDistance;
             HipMoveInfluenceMaxDistance = container.HipMoveInfluenceMaxDistance;
 
-            // Ö»ÓĞÄãµÄ CySpringParamDataAsset ÀïÕæµÄÓĞÕâ¸ö×Ö¶Î²Å±£Áô
+            // åªæœ‰ä½ çš„ CySpringParamDataAsset é‡ŒçœŸçš„æœ‰è¿™ä¸ªå­—æ®µæ‰ä¿ç•™
             UseCorrectScaleCalc = container.UseCorrectScaleCalc;
         }
 

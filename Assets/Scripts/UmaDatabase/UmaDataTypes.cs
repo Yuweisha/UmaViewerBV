@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 using Gallop;
 using System;
@@ -21,6 +21,10 @@ public class UmaLyricsData
 {
     public float time;
     public string text;
+    // Original LyricsController.LyricsData: AdditionalSettingType / Value.
+    // 0 = none, 1 = SheetVariationId.
+    public int additionalSettingType;
+    public int additionalSettingValue;
 }
 
 [System.Serializable]
@@ -71,13 +75,9 @@ public class CharaEntry
             case Language.Cn:
                 Localize.CurrentRegion = Localize.Region.CN;
 
-                // LocalizeEn carries the full localised table (1187 constants plus the runtime
-                // names loaded from Resources/Localize/zh-CN-names.json). Localize.CN only ever
-                // covered 1001..2005 and 9001/9002, so everything from 9003 on fell back to the
-                // Japanese name from the database.
                 return IsMob
-                    ? LocalizeEn.GetMobName(Id, Name)
-                    : LocalizeEn.GetCharaName(Id, Name);
+                    ? Localize.GetMobName(Id, Name)
+                    : Localize.GetCharaName(Id, Name);
 
             case Language.Jp:
             default:
@@ -92,9 +92,13 @@ public class LiveEntry
 {
     public int MusicId;
     public string SongName;
+    public int MusicType;
     public int MemberCount;
     public int DefaultDress;
+    public int BackdancerOrder;
+    public int BackdancerDress;
     public string BackGroundId;
+    public int BackGroundVariation;
     public Sprite Icon;
     public List<string[]> LiveSettings = new List<string[]>();
 
@@ -106,64 +110,13 @@ public class LiveEntry
             LiveSettings.Add(lines[i].Split(','));
         }
         BackGroundId = LiveSettings[1][2];
-    }
-
-    private Dictionary<int, string> _projectorTextureNames;
-    // Si la canción declara una sola textura de proyector, se usa para cualquier id.
-    private string _singleProjectorName;
-
-    // `livesettings` row type 11 is the per-song projector texture table: texture id -> texture
-    // asset name. A LightProjection key's TextureId is an id into this table, so the asset name
-    // cannot be derived from the number (song 1001: id 1 -> tex_env_live_cmn_projector000;
-    // song 1005: id 1/2/3 -> tex_env_live_cmn_projector004/001/002).
-    //
-    // Row layout: [index, 11, texture asset name, id, content type, ...]. Several songs leave the
-    // id column empty (1091, 1156, 1180, 1181). Those songs declare exactly ONE projector texture,
-    // so that row is the song's projector regardless of the key's TextureId: the table says what it
-    // projects, and the numeric fallback (tex_env_live_cmn_projector0NN) is only a file-name guess.
-    public bool TryGetProjectorTextureName(int textureId, out string name)
-    {
-        if (_projectorTextureNames == null)
-        {
-            _projectorTextureNames = new Dictionary<int, string>();
-            string onlyName = null;
-            int rows = 0;
-            if (LiveSettings != null)
-            {
-                foreach (var row in LiveSettings)
-                {
-                    if (row == null || row.Length <= 2 || row[1].Trim() != "11") continue;
-                    string textureName = row[2].Trim();
-                    if (string.IsNullOrEmpty(textureName)) continue;
-                    rows++;
-                    onlyName = textureName;
-                    int id = 0;
-                    bool explicitId = row.Length > 3 && int.TryParse(row[3].Trim(),
-                        System.Globalization.NumberStyles.Integer,
-                        System.Globalization.CultureInfo.InvariantCulture, out id);
-                    // An id written in the table always wins over an empty cell mapping to 0.
-                    if (!explicitId && _projectorTextureNames.ContainsKey(0)) continue;
-                    _projectorTextureNames[id] = textureName;
-                }
-            }
-            _singleProjectorName = rows == 1 ? onlyName : null;
-        }
-        if (_projectorTextureNames.TryGetValue(textureId, out name)) return true;
-        // A song with a single declared projector projects that texture for every key.
-        name = _singleProjectorName;
-        return !string.IsNullOrEmpty(name);
+        if(LiveSettings[1].Length>3)int.TryParse(LiveSettings[1][3],out BackGroundVariation);
     }
 }
 
 public class PartEntry
 {
     public Dictionary<string, List<float>> PartSettings = new Dictionary<string, List<float>>();
-
-    //(Live: nº de columnas de PISTA reales de la tabla (center/left/right/left2/right2/left3/
-    //right3). Es el límite físico de pistas que admite una canción y el recorte correcto de
-    //maxVoices en Director, a diferencia de SingerCount ("columnas con algún valor > 0").)
-    public int TrackCount = 0;
-
     public int SingerCount = 0;
     public PartEntry(string data)
     {
@@ -194,9 +147,7 @@ public class PartEntry
         }
         foreach (var part in PartSettings)
         {
-            if (part.Key == "time" || part.Key.Contains("_")) continue;
-            TrackCount++;
-            if (part.Value.Exists(v => v > 0f))
+            if (part.Key != "time" && !part.Key.Contains("_") && part.Value.Exists(v => v > 0f))
                 SingerCount++;
         }
     }
@@ -206,19 +157,13 @@ public class PartEntry
 [System.Serializable]
 public class CostumeEntry
 {
+    public int MasterDressId;
     public string Id;
     public int CharaId;
     public string DressName;
     public int BodyType;
     public int BodyTypeSub;
     public Sprite Icon;
-}
-
-//(Live: modo de voz del directo — Solo concert / Mix voices)
-public enum LiveVocalMode
-{
-    SoloConcert = 0,
-    MixVoices = 1
 }
 
 public enum UIMessageType

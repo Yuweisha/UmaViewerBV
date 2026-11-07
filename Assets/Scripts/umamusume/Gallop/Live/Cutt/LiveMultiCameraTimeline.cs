@@ -56,24 +56,54 @@ namespace Gallop.Live.Cutt
             MultiCamera[] cameras, float frame, TimelinePlayerMode mode,
             LivePostFilmTimeline.BlinkColorResolver blinkColor = null)
         {
+            EvaluatePostFilms(film1,film2,film3,cameras,frame,mode,blinkColor);
+            EvaluateBloomDiffusion(bloomDiffusion,cameras,frame,mode);
+        }
+
+        // Film tracks run before the native post-effect gate. Only their overlays
+        // are published here; a disabled post gate preserves prior Bloom/DOF state.
+        public static void EvaluatePostFilms(
+            IList<LiveTimelineMultiCameraPostFilmData> film1,
+            IList<LiveTimelineMultiCameraPostFilmData> film2,
+            IList<LiveTimelineMultiCameraPostFilmData> film3,
+            MultiCamera[] cameras,float frame,TimelinePlayerMode mode,
+            LivePostFilmTimeline.BlinkColorResolver blinkColor=null)
+        {
             if (cameras == null) return;
-            // Reset all cameras, including currently disabled ones. Timeline seeks and
-            // runtime switchers must not inherit a previous key/sheet's film or bloom.
-            for (int i = 0; i < cameras.Length; i++)
-            {
-                if (cameras[i] == null || cameras[i].Composite == null) continue;
-                var p = cameras[i].Composite.ImageEffect.DofDiffusionBloomOverlayParam;
-                LivePostFilmTimeline.Reset(p.ScreenOverlay.Overlay1);
-                LivePostFilmTimeline.Reset(p.ScreenOverlay.Overlay2);
-                LivePostFilmTimeline.Reset(p.ScreenOverlay.Overlay3);
-                p.IsEnableBloom = false;
-                p.IsEnableDiffusion = false;
-                p.IsEnableDof = false;
-                p.IsEnableOldDof = false;
-            }
+            // The main-camera post-film pass has already published Overlay1..3
+            // for the active camera. Multi-camera film tracks are a separate
+            // group: only an active group may replace its destination. Resetting
+            // every camera here erased the main overlay on frames whose
+            // multi-camera track was inactive (1083 frame flicker).
             EvaluateFilms(film1, cameras, frame, mode, 0, blinkColor);
             EvaluateFilms(film2, cameras, frame, mode, 1, blinkColor);
             EvaluateFilms(film3, cameras, frame, mode, 2, blinkColor);
+            for(int i=0;i<cameras.Length;i++)
+            {
+                if(cameras[i]==null||cameras[i].Composite==null)continue;
+                var source=cameras[i].Composite.ImageEffect.DofDiffusionBloomOverlayParam;
+                var incoming=default(Gallop.RenderPipeline.DofDiffusionBloomOverlayPass.Parameter);
+                incoming.Setup(source);
+                ref var target=ref cameras[i].PostEffectParameter.DofDiffuionBloomOverlay;
+                target.Overlay1=incoming.Overlay1;target.Overlay2=incoming.Overlay2;target.Overlay3=incoming.Overlay3;
+                target.TargetCamera=cameras[i].GetCamera();
+                target.DecideDrawType(target.IsEnableDof&&!target.IsDisableDofTemporary&&GallopImageEffect.UserDofEnabled);
+                cameras[i].PostEffectParameter.TargetCamera=cameras[i].GetCamera();
+            }
+        }
+
+        // Caller owns the native post-effect gate and invokes this after MultiDOF.
+        public static void EvaluateBloomDiffusion(
+            IList<LiveTimelineMultiCameraPostEffectBloomDiffusionData> bloomDiffusion,
+            MultiCamera[] cameras,float frame,TimelinePlayerMode mode)
+        {
+            if(cameras==null)return;
+            for(int i=0;i<cameras.Length;i++)
+            {
+                if(cameras[i]==null||cameras[i].Composite==null)continue;
+                var p=cameras[i].Composite.ImageEffect.DofDiffusionBloomOverlayParam;
+                p.IsEnableBloom=false;p.IsEnableDiffusion=false;
+            }
             if (bloomDiffusion != null)
                 for (int i = 0; i < bloomDiffusion.Count; i++)
                 {
@@ -107,8 +137,7 @@ namespace Gallop.Live.Cutt
                 var p = cameras[i].Composite.ImageEffect.DofDiffusionBloomOverlayParam;
                 p.TargetCamera = cameras[i].GetCamera();
                 p.DecideDrawType(false, p.IsEnableDiffusion, p.IsEnableBloom, p.IsEnableOverlay);
-                cameras[i].PostEffectParameter.DofDiffuionBloomOverlay.Setup(p);
-                cameras[i].PostEffectParameter.DofDiffuionBloomOverlay.DecideDrawType(false);
+                LiveMultiCameraDofTimeline.PublishFilmAndBloom(ref cameras[i].PostEffectParameter.DofDiffuionBloomOverlay,p);
                 cameras[i].PostEffectParameter.TargetCamera = cameras[i].GetCamera();
             }
         }
@@ -122,7 +151,7 @@ namespace Gallop.Live.Cutt
             {
                 var group = groups[i];
                 var camera = group == null ? null : CameraAt(cameras, group.MultiCameraNo);
-                if (camera == null) continue;
+                if (camera == null || !Active(group.keys, frame, mode)) continue;
                 var overlay = camera.Composite.ImageEffect.DofDiffusionBloomOverlayParam.ScreenOverlay;
                 LivePostFilmTimeline.Evaluate(group.keys, frame, mode,
                     layer == 0 ? overlay.Overlay1 : layer == 1 ? overlay.Overlay2 : overlay.Overlay3,

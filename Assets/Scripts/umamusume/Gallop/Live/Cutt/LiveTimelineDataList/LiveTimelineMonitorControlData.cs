@@ -108,6 +108,9 @@ namespace Gallop.Live.Cutt
     {
         private const string default_name = "Monitor";
         public LiveTimelineKeyMonitorControlDataList keys;
+        [SerializeField, Newtonsoft.Json.JsonProperty("_aspectRatio")]
+        private Vector2Int _aspectRatio;
+        public Vector2Int AspectRatio => _aspectRatio;
 
 
         /// 不要!在这里重新声明名为 `name` 的序列化字段或属性。

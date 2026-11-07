@@ -30,22 +30,16 @@ namespace Gallop.Live
     {
         public string Name;
         public int ImageCount;
-
         [JsonProperty("FramePerImage")]
         public int FramePerImage = -1;
-
         [JsonProperty("FramePerWidth")]
         public int FramePerWidth = -1;
-
         [JsonProperty("FremePerImage")]
         public int FremePerImage = -1;
-
         [JsonProperty("FremePerWidth")]
         public int FremePerWidth = -1;
-
         public MonitorUvMovieFrameInfo FrameInfo = new MonitorUvMovieFrameInfo();
         public bool ExistMaskTex;
-
         [JsonIgnore]
         public int EffectiveFramePerImage
         {
@@ -85,14 +79,18 @@ namespace Gallop.Live
         public string lightTexturePath;
         public string lightMaskTexturePath;
         public bool ownsLoadedTextures;
-
-        [NonSerialized] public List<Texture2D> frameTextures = new List<Texture2D>();
-        [NonSerialized] public List<Texture2D> maskTextures = new List<Texture2D>();
-        [NonSerialized] public Texture2D lightTexture;
-        [NonSerialized] public Texture2D lightMaskTexture;
-        [NonSerialized] public Vector2 texturePixelOffset = Vector2.zero;
-        [NonSerialized] public Vector2 texturePixelScale = Vector2.zero;
-
+        [NonSerialized]
+        public List<Texture2D> frameTextures = new List<Texture2D>();
+        [NonSerialized]
+        public List<Texture2D> maskTextures = new List<Texture2D>();
+        [NonSerialized]
+        public Texture2D lightTexture;
+        [NonSerialized]
+        public Texture2D lightMaskTexture;
+        [NonSerialized]
+        public Vector2 texturePixelOffset = Vector2.zero;
+        [NonSerialized]
+        public Vector2 texturePixelScale = Vector2.zero;
         public string DisplayName
         {
             get
@@ -109,10 +107,10 @@ namespace Gallop.Live
             {
                 if (metadata != null && metadata.ImageCount > 0)
                     return metadata.ImageCount;
-
                 return framePaths != null ? framePaths.Count : 0;
             }
         }
+
         /// 获取动画总帧数
         /// 优先读取明确的帧数,其次通过图片数和每图帧数计算
         public int FrameCount
@@ -121,10 +119,8 @@ namespace Gallop.Live
             {
                 if (metadata != null && metadata.FrameInfo != null && metadata.FrameInfo.Count > 0)
                     return metadata.FrameInfo.Count;
-
                 if (metadata != null && metadata.ImageCount > 0 && metadata.EffectiveFramePerImage > 0)
                     return metadata.ImageCount * metadata.EffectiveFramePerImage;
-
                 return framePaths != null ? framePaths.Count : 0;
             }
         }
@@ -144,7 +140,6 @@ namespace Gallop.Live
             texture = null;
             if (frameTextures == null || imageIndex < 0 || imageIndex >= frameTextures.Count)
                 return false;
-
             texture = frameTextures[imageIndex];
             return texture != null;
         }
@@ -154,7 +149,6 @@ namespace Gallop.Live
             texture = null;
             if (maskTextures == null || imageIndex < 0 || imageIndex >= maskTextures.Count)
                 return false;
-
             texture = maskTextures[imageIndex];
             return texture != null;
         }
@@ -163,14 +157,11 @@ namespace Gallop.Live
         {
             SortPairs(framePaths, frameTextures);
             SortPairs(maskTexturePaths, maskTextures);
-
             int imageCount = Mathf.Max(ImageCount, frameTextures.Count);
-
             if (maskTextures.Count == 1 && imageCount > 1)
             {
                 Texture2D single = maskTextures[0];
                 maskTextures = Enumerable.Repeat(single, imageCount).ToList();
-
                 string singlePath = maskTexturePaths.Count > 0 ? maskTexturePaths[0] : null;
                 if (!string.IsNullOrEmpty(singlePath))
                     maskTexturePaths = Enumerable.Repeat(singlePath, imageCount).ToList();
@@ -195,19 +186,12 @@ namespace Gallop.Live
         {
             if (paths == null || textures == null || paths.Count != textures.Count || paths.Count <= 1)
                 return;
-
             List<KeyValuePair<string, Texture2D>> pairs = new List<KeyValuePair<string, Texture2D>>(paths.Count);
             for (int i = 0; i < paths.Count; i++)
                 pairs.Add(new KeyValuePair<string, Texture2D>(paths[i], textures[i]));
-
-            pairs = pairs
-                .OrderBy(p => MonitorUvMovieProvider.GetTextureSortKey(p.Key))
-                .ThenBy(p => Path.GetFileName(p.Key), StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
+            pairs = pairs.OrderBy(p => MonitorUvMovieProvider.GetTextureSortKey(p.Key)).ThenBy(p => Path.GetFileName(p.Key), StringComparer.OrdinalIgnoreCase).ToList();
             paths.Clear();
             textures.Clear();
-
             for (int i = 0; i < pairs.Count; i++)
             {
                 paths.Add(pairs[i].Key);
@@ -215,7 +199,6 @@ namespace Gallop.Live
             }
         }
     }
-
 
     [Serializable]
     public class MonitorUvMovieContextSlot
@@ -231,8 +214,8 @@ namespace Gallop.Live
         public int playConditionValue;
         public string resolvedClipFolder;
         public string resolvedBy;
-
-        [NonSerialized] public MonitorUvMovieClipData clip;
+        [NonSerialized]
+        public MonitorUvMovieClipData clip;
     }
 
     [Serializable]
@@ -253,24 +236,25 @@ namespace Gallop.Live
         public bool autoLoadForCurrentLive = true;
         public bool loadTexturesOnInitialize = true;
         public bool verboseLog = false;
-
         [Header("Official slot table from decrypted liveSettings data")]
         public string decryptedLiveSettingsRootOverride = string.Empty;
-
         [Header("Debug view of loaded clips.")]
         public List<MonitorUvMovieClipData> clips = new List<MonitorUvMovieClipData>();
-
         [Header("Resolved UVMovie context slots from official liveSettings slot table.")]
         public List<MonitorUvMovieContextSlot> contextSlots = new List<MonitorUvMovieContextSlot>();
-
-        [SerializeField] private int _loadedMusicId;
-        [SerializeField] private string _loadedRootPath;
-        [SerializeField] private bool _hasTriedLoad;
-        [SerializeField] private bool _lastLoadSucceeded;
-        [SerializeField] private int _lastSyncedStageInstanceId;
-        [SerializeField] private int _lastContextSlotHash;
+        [SerializeField]
+        private int _loadedMusicId;
+        [SerializeField]
+        private string _loadedRootPath;
+        [SerializeField]
+        private bool _hasTriedLoad;
+        [SerializeField]
+        private bool _lastLoadSucceeded;
+        [SerializeField]
+        private int _lastSyncedStageInstanceId;
+        [SerializeField]
+        private int _lastContextSlotHash;
         private bool _hasResolvedContextSlots;
-
         public int LoadedMusicId => _loadedMusicId;
         public string LoadedRootPath => _loadedRootPath;
         public bool HasTriedLoad => _hasTriedLoad;
@@ -284,7 +268,6 @@ namespace Gallop.Live
         {
             if (!autoLoadForCurrentLive || _loadedMusicId > 0 || clips.Count > 0)
                 return;
-
             int musicId = Director.instance?.live?.MusicId ?? 0;
             if (musicId > 0)
                 InitializeForMusicId(musicId);
@@ -301,7 +284,6 @@ namespace Gallop.Live
 
             if (!forceReload && _loadedMusicId == musicId && _hasTriedLoad)
                 return _lastLoadSucceeded;
-
             ReleaseLoadedTextures();
             clips.Clear();
             ClearContextSlots();
@@ -309,16 +291,13 @@ namespace Gallop.Live
             _loadedRootPath = null;
             _hasTriedLoad = true;
             _lastLoadSucceeded = false;
-
             if (TryLoadClipsFromAssetBundles(musicId, out List<MonitorUvMovieClipData> bundleClips, out string bundleSource))
             {
                 clips = bundleClips;
                 _loadedRootPath = bundleSource;
                 _lastLoadSucceeded = clips.Count > 0;
-
                 if (verboseLog)
                     Debug.Log($"[MonitorUvMovieProvider] Loaded uvmovie clips from AssetBundles: musicId={musicId}, clips={clips.Count}, source={bundleSource}");
-
                 return _lastLoadSucceeded;
             }
 
@@ -331,7 +310,6 @@ namespace Gallop.Live
             }
 
             _loadedRootPath = rootPath;
-
             List<string> folderPaths = FindClipFolders(rootPath, musicId);
             if (folderPaths.Count == 0)
             {
@@ -347,13 +325,9 @@ namespace Gallop.Live
                     clips.Add(clip);
             }
 
-            clips = clips
-                .OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
+            clips = clips.OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase).ToList();
             if (verboseLog)
                 Debug.Log($"[MonitorUvMovieProvider] Loaded uvmovie clips: musicId={musicId}, clips={clips.Count}, root={rootPath}");
-
             _lastLoadSucceeded = clips.Count > 0;
             return _lastLoadSucceeded;
         }
@@ -372,13 +346,11 @@ namespace Gallop.Live
         {
             if (contextSlots == null)
                 return string.Empty;
-
             for (int i = 0; i < contextSlots.Count; i++)
             {
                 MonitorUvMovieContextSlot slot = contextSlots[i];
                 if (slot == null || slot.slotId != slotId)
                     continue;
-
                 if (!string.IsNullOrWhiteSpace(slot.effectiveResourceName))
                     return slot.effectiveResourceName;
                 if (!string.IsNullOrWhiteSpace(slot.resourceName))
@@ -394,7 +366,6 @@ namespace Gallop.Live
             slot = null;
             if (contextSlots == null || slotId <= 0)
                 return false;
-
             for (int i = 0; i < contextSlots.Count; i++)
             {
                 MonitorUvMovieContextSlot item = contextSlots[i];
@@ -411,7 +382,6 @@ namespace Gallop.Live
         public bool TryGetClipBySlotId(int slotId, out MonitorUvMovieClipData clip)
         {
             clip = null;
-
             if (TryGetContextSlot(slotId, out MonitorUvMovieContextSlot slot))
             {
                 clip = slot.clip;
@@ -463,13 +433,11 @@ namespace Gallop.Live
             HashSet<int> referencedSlotIds = CollectReferencedSlotIds(timelineControl);
             ApplyRegisterUvMovieRules(finalRows, referencedSlotIds);
             EnsureClipsLoadedForRows(finalRows);
-
             List<MonitorUvMovieContextSlot> resolvedSlots = new List<MonitorUvMovieContextSlot>(finalRows.Count);
             for (int i = 0; i < finalRows.Count; i++)
             {
                 LiveSettingsUvMovieRow row = finalRows[i];
                 string effectiveResourceName = row.isEnabledLoad ? (row.resourceName ?? string.Empty) : string.Empty;
-
                 MonitorUvMovieContextSlot slot = new MonitorUvMovieContextSlot
                 {
                     slotIndex = row.slotIndex,
@@ -482,7 +450,6 @@ namespace Gallop.Live
                     useStandardMode = ShouldUseStandardMode(row.playConditionValue),
                     playConditionValue = row.playConditionValue,
                 };
-
                 if (!string.IsNullOrWhiteSpace(effectiveResourceName))
                 {
                     slot.clip = ResolveClipByResourceName(effectiveResourceName, out string matchKind);
@@ -519,7 +486,6 @@ namespace Gallop.Live
             _lastSyncedStageInstanceId = musicId;
             _lastContextSlotHash = slotHash;
             _hasResolvedContextSlots = true;
-
             if (verboseLog)
             {
                 int resolvedCount = 0;
@@ -529,6 +495,7 @@ namespace Gallop.Live
                         resolvedCount++;
                 }
 
+                Debug.Log($"[MonitorUvMovieProvider] rebuilt context slots from liveSettings: total={contextSlots.Count}, resolved={resolvedCount}, musicId={musicId}");
             }
 
             return contextSlots.Count > 0;
@@ -539,16 +506,13 @@ namespace Gallop.Live
             List<LiveSettingsUvMovieRow> finalRows = new List<LiveSettingsUvMovieRow>(sourceRows != null ? sourceRows.Count : 0);
             if (sourceRows == null || sourceRows.Count == 0)
                 return finalRows;
-
             bool highQualityMode = IsHighQualityMonitorMode();
             string lowQualityLightResourceName = BuildLowQualityLightResourceName(musicId);
-
             for (int i = 0; i < sourceRows.Count; i++)
             {
                 LiveSettingsUvMovieRow row = sourceRows[i];
                 if (row == null)
                     continue;
-
                 string resourceName = (row.resourceName ?? string.Empty).Trim();
                 int playConditionValue = row.playConditionValue;
                 if (ShouldSwapToLowQualityLightResource(resourceName, playConditionValue, highQualityMode, lowQualityLightResourceName))
@@ -557,16 +521,7 @@ namespace Gallop.Live
                     playConditionValue = 1;
                 }
 
-                finalRows.Add(new LiveSettingsUvMovieRow
-                {
-                    recordId = row.recordId,
-                    slotIndex = row.slotIndex >= 0 ? row.slotIndex : finalRows.Count,
-                    slotId = row.slotId > 0 ? row.slotId : finalRows.Count + 1,
-                    resourceName = resourceName,
-                    loadConditionValue = row.loadConditionValue,
-                    playConditionValue = playConditionValue,
-                    isEnabledLoad = row.isEnabledLoad,
-                });
+                finalRows.Add(new LiveSettingsUvMovieRow { recordId = row.recordId, slotIndex = row.slotIndex >= 0 ? row.slotIndex : finalRows.Count, slotId = row.slotId > 0 ? row.slotId : finalRows.Count + 1, resourceName = resourceName, loadConditionValue = row.loadConditionValue, playConditionValue = playConditionValue, isEnabledLoad = row.isEnabledLoad, });
             }
 
             return finalRows;
@@ -577,43 +532,34 @@ namespace Gallop.Live
             HashSet<int> result = new HashSet<int>();
             if (timelineControl == null || timelineControl.data == null || timelineControl.data.worksheetList == null)
                 return result;
-
             List<LiveTimelineWorkSheet> worksheets = timelineControl.data.worksheetList;
             for (int wsIndex = 0; wsIndex < worksheets.Count; wsIndex++)
             {
                 LiveTimelineWorkSheet worksheet = worksheets[wsIndex];
                 if (worksheet == null || worksheet.monitorControlList == null)
                     continue;
-
                 for (int monitorIndex = 0; monitorIndex < worksheet.monitorControlList.Count; monitorIndex++)
                 {
                     LiveTimelineMonitorControlData monitor = worksheet.monitorControlList[monitorIndex];
                     LiveTimelineKeyMonitorControlDataList keys = monitor != null ? monitor.keys : null;
                     if (keys == null || keys.Count == 0)
                         continue;
-
                     for (int keyIndex = 0; keyIndex < keys.Count; keyIndex++)
                     {
                         LiveTimelineKeyMonitorControlData key = keys.At(keyIndex) as LiveTimelineKeyMonitorControlData;
                         if (key == null)
                             continue;
-
                         if (key.dispID > 0)
                             result.Add(key.dispID);
                         if (key.DispID2 > 0)
                             result.Add(key.DispID2);
-
                         LiveTimelineMonitorChangeUVSetting[] changes = key.ChangeUVSettingArray;
                         if (changes == null || changes.Length == 0)
                             continue;
-
                         for (int changeIndex = 0; changeIndex < changes.Length; changeIndex++)
                         {
                             LiveTimelineMonitorChangeUVSetting change = changes[changeIndex];
-                            if (change != null &&
-                                change.IsEnabled &&
-                                change.DispID > 0 &&
-                                DoesChangeConditionMatchCurrentCharacters(change.ConditionArray))
+                            if (change != null && change.IsEnabled && change.DispID > 0 && DoesChangeConditionMatchCurrentCharacters(change.ConditionArray))
                             {
                                 result.Add(change.DispID);
                             }
@@ -634,20 +580,17 @@ namespace Gallop.Live
         {
             if (rows == null || rows.Count == 0)
                 return;
-
             HashSet<string> requiredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < rows.Count; i++)
             {
                 LiveSettingsUvMovieRow row = rows[i];
                 if (row == null || !row.isEnabledLoad || string.IsNullOrWhiteSpace(row.resourceName))
                     continue;
-
                 requiredNames.Add(row.resourceName.Trim());
             }
 
             if (requiredNames.Count == 0)
                 return;
-
             List<string> missingNames = new List<string>();
             foreach (string resourceName in requiredNames)
             {
@@ -657,21 +600,13 @@ namespace Gallop.Live
 
             if (missingNames.Count == 0)
                 return;
-
             if (clips == null)
                 clips = new List<MonitorUvMovieClipData>();
-
-            string[] folderKeys = missingNames
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
+            string[] folderKeys = missingNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (folderKeys.Length == 0)
                 return;
-
             TryLoadUvMovieBundlesFromIndex(folderKeys);
             MergeResolvedClips(ResolveUvMovieClipsFromLoadedBundles(folderKeys));
-
             string rootPath = ResolveUvMovieRootPath();
             if (!string.IsNullOrWhiteSpace(rootPath) && Directory.Exists(rootPath))
             {
@@ -679,28 +614,22 @@ namespace Gallop.Live
                 {
                     if (ResolveClipByResourceName(folderKeys[i], out _) != null)
                         continue;
-
                     string folderPath = ResolveClipFolderPath(rootPath, folderKeys[i]);
                     if (string.IsNullOrWhiteSpace(folderPath))
                         continue;
-
                     MonitorUvMovieClipData clip = BuildClipData(folderPath, loadTexturesOnInitialize);
                     if (clip != null)
                         MergeClip(clip);
                 }
             }
 
-            clips = clips
-                .Where(c => c != null)
-                .OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            clips = clips.Where(c => c != null).OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private void MergeResolvedClips(Dictionary<string, MonitorUvMovieClipData> resolved)
         {
             if (resolved == null || resolved.Count == 0)
                 return;
-
             foreach (MonitorUvMovieClipData clip in resolved.Values)
                 MergeClip(clip);
         }
@@ -709,16 +638,13 @@ namespace Gallop.Live
         {
             if (clip == null)
                 return;
-
             if (clips == null)
                 clips = new List<MonitorUvMovieClipData>();
-
             for (int i = 0; i < clips.Count; i++)
             {
                 MonitorUvMovieClipData existing = clips[i];
                 if (existing == null)
                     continue;
-
                 if (string.Equals(existing.folderName, clip.folderName, StringComparison.OrdinalIgnoreCase))
                     return;
             }
@@ -730,11 +656,9 @@ namespace Gallop.Live
         {
             if (string.IsNullOrWhiteSpace(rootPath) || string.IsNullOrWhiteSpace(resourceName) || !Directory.Exists(rootPath))
                 return null;
-
             string directPath = Path.Combine(rootPath, resourceName);
             if (Directory.Exists(directPath))
                 return directPath;
-
             string[] directories;
             try
             {
@@ -759,13 +683,11 @@ namespace Gallop.Live
         {
             if (conditions == null || conditions.Length == 0)
                 return true;
-
             for (int i = 0; i < conditions.Length; i++)
             {
                 LiveTimelineMonitorDressCondition condition = conditions[i];
                 if (condition == null || !condition.IsEnabled)
                     continue;
-
                 if (!DoesSingleConditionMatchCurrentCharacters(condition))
                     return false;
             }
@@ -777,20 +699,16 @@ namespace Gallop.Live
         {
             if (condition == null || !condition.IsEnabled)
                 return true;
-
             Director director = Director.instance;
             if (director == null || director.CharaContainerScript == null || director.CharaContainerScript.Count == 0)
                 return false;
-
             for (int i = 0; i < director.CharaContainerScript.Count; i++)
             {
                 UmaContainerCharacter container = director.CharaContainerScript[i];
                 if (container == null)
                     continue;
-
                 int charaId = GetContainerCharaId(container);
                 int dressId = GetContainerDressId(container);
-
                 bool charaMatched = condition.CharaId <= 0 || condition.CharaId == charaId;
                 bool dressMatched = condition.DressId <= 0 || condition.DressId == dressId;
                 if (charaMatched && dressMatched)
@@ -804,10 +722,8 @@ namespace Gallop.Live
         {
             if (container == null)
                 return 0;
-
             if (container.CharaEntry != null && container.CharaEntry.Id > 0)
                 return container.CharaEntry.Id;
-
             if (container.CharaData != null)
             {
                 try
@@ -828,12 +744,10 @@ namespace Gallop.Live
         {
             if (container == null)
                 return 0;
-
             if (TryParseDressIdPrefix(container.VarCostumeIdLong, out int dressId))
                 return dressId;
             if (TryParseDressIdPrefix(container.VarCostumeIdShort, out dressId))
                 return dressId;
-
             return 0;
         }
 
@@ -842,11 +756,9 @@ namespace Gallop.Live
             dressId = 0;
             if (string.IsNullOrWhiteSpace(costumeId))
                 return false;
-
             string[] parts = costumeId.Split('_');
             if (parts.Length == 0)
                 return false;
-
             return int.TryParse(parts[0], out dressId);
         }
 
@@ -855,22 +767,15 @@ namespace Gallop.Live
             return musicId > 0 ? $"gal_UVmovie_{musicId}_Light" : string.Empty;
         }
 
-        private static bool ShouldSwapToLowQualityLightResource(
-            string resourceName,
-            int playConditionValue,
-            bool highQualityMode,
-            string lowQualityLightResourceName)
+        private static bool ShouldSwapToLowQualityLightResource(string resourceName, int playConditionValue, bool highQualityMode, string lowQualityLightResourceName)
         {
-            if (highQualityMode ||
-                string.IsNullOrWhiteSpace(resourceName) ||
-                string.IsNullOrWhiteSpace(lowQualityLightResourceName))
+            if (highQualityMode || string.IsNullOrWhiteSpace(resourceName) || string.IsNullOrWhiteSpace(lowQualityLightResourceName))
             {
                 return false;
             }
 
             if (playConditionValue == 1)
                 return false;
-
             return !resourceName.EndsWith("_Light", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -879,22 +784,18 @@ namespace Gallop.Live
             matchKind = null;
             if (clips == null || clips.Count == 0 || string.IsNullOrWhiteSpace(resourceName))
                 return null;
-
             string normalized = NormalizeLookupName(resourceName);
             if (string.IsNullOrEmpty(normalized))
                 return null;
-
             string fileName = NormalizeLookupName(Path.GetFileName(resourceName));
             string fileStem = NormalizeLookupName(Path.GetFileNameWithoutExtension(resourceName));
             MonitorUvMovieClipData bestLooseMatch = null;
             string bestLooseMatchKind = null;
             int bestLooseScore = int.MinValue;
-
             void EvaluateCandidate(MonitorUvMovieClipData clip, string candidate, string candidateKind)
             {
                 if (clip == null || string.IsNullOrWhiteSpace(candidate))
                     return;
-
                 if (NameEqualsExact(candidate, normalized, fileName, fileStem))
                 {
                     bestLooseMatch = clip;
@@ -906,15 +807,12 @@ namespace Gallop.Live
                 string candidateNorm = NormalizeLookupName(candidate);
                 if (string.IsNullOrEmpty(candidateNorm))
                     return;
-
                 int score = int.MinValue;
-                if (candidateNorm.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) ||
-                    normalized.EndsWith(candidateNorm, StringComparison.OrdinalIgnoreCase))
+                if (candidateNorm.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) || normalized.EndsWith(candidateNorm, StringComparison.OrdinalIgnoreCase))
                 {
                     score = 600 - Mathf.Abs(candidateNorm.Length - normalized.Length);
                 }
-                else if (candidateNorm.Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
-                         normalized.Contains(candidateNorm, StringComparison.OrdinalIgnoreCase))
+                else if (candidateNorm.Contains(normalized, StringComparison.OrdinalIgnoreCase) || normalized.Contains(candidateNorm, StringComparison.OrdinalIgnoreCase))
                 {
                     score = 400 - Mathf.Abs(candidateNorm.Length - normalized.Length);
                 }
@@ -932,7 +830,6 @@ namespace Gallop.Live
                 MonitorUvMovieClipData clip = clips[i];
                 if (clip == null)
                     continue;
-
                 EvaluateCandidate(clip, clip.metadata != null ? clip.metadata.Name : null, "metadata-name");
                 if (bestLooseScore == int.MaxValue)
                 {
@@ -963,16 +860,13 @@ namespace Gallop.Live
         {
             if (string.IsNullOrWhiteSpace(value))
                 return string.Empty;
-
             string normalized = value.Trim().Replace('\\', '/');
             int slashIndex = normalized.LastIndexOf('/');
             if (slashIndex >= 0 && slashIndex + 1 < normalized.Length)
                 normalized = normalized.Substring(slashIndex + 1);
-
             string fileStem = Path.GetFileNameWithoutExtension(normalized);
             if (!string.IsNullOrEmpty(fileStem))
                 normalized = fileStem;
-
             StringBuilder builder = new StringBuilder(normalized.Length);
             for (int i = 0; i < normalized.Length; i++)
             {
@@ -988,14 +882,10 @@ namespace Gallop.Live
         {
             if (string.IsNullOrWhiteSpace(candidate))
                 return false;
-
             string candidateNorm = NormalizeLookupName(candidate);
             if (string.IsNullOrEmpty(candidateNorm))
                 return false;
-
-            return string.Equals(candidateNorm, normalized, StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(candidateNorm, fileName, StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(candidateNorm, fileStem, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(candidateNorm, normalized, StringComparison.OrdinalIgnoreCase) || string.Equals(candidateNorm, fileName, StringComparison.OrdinalIgnoreCase) || string.Equals(candidateNorm, fileStem, StringComparison.OrdinalIgnoreCase);
         }
 
         private static int ComputeSlotHash(List<MonitorUvMovieContextSlot> slots)
@@ -1005,7 +895,6 @@ namespace Gallop.Live
                 int hash = 17;
                 if (slots == null)
                     return hash;
-
                 for (int i = 0; i < slots.Count; i++)
                 {
                     MonitorUvMovieContextSlot slot = slots[i];
@@ -1030,7 +919,6 @@ namespace Gallop.Live
             string bundledText = LoadLiveSettingsTextFromAssetBundle(musicId);
             if (!string.IsNullOrWhiteSpace(bundledText))
                 return bundledText;
-
             string csvPath = ResolveLiveSettingsCsvPath(musicId);
             if (string.IsNullOrWhiteSpace(csvPath) || !File.Exists(csvPath))
             {
@@ -1046,28 +934,20 @@ namespace Gallop.Live
         {
             if (musicId <= 0)
                 return null;
-
             UmaViewerMain main = UmaViewerMain.Instance;
             if (main == null || main.AbList == null)
                 return null;
-
             if (!main.AbList.TryGetValue("livesettings", out UmaDatabaseEntry asset) || asset == null)
                 return null;
-
             try
             {
                 AssetBundle bundle = UmaAssetManager.LoadAssetBundle(asset, true);
                 if (!bundle)
                     return null;
-
                 string assetName = musicId.ToString();
                 if (!bundle.Contains(assetName))
                     return null;
-
                 TextAsset textAsset = bundle.LoadAsset<TextAsset>(assetName);
-                if (LiveRuntimeDiagnostics.Enabled)
-                    LiveRuntimeDiagnostics.RecordAssetLoad(asset.Name, "LoadAsset", typeof(TextAsset),
-                        new UnityEngine.Object[] { textAsset }, textAsset, assetName);
                 return textAsset != null ? textAsset.text : null;
             }
             catch (Exception ex)
@@ -1081,7 +961,6 @@ namespace Gallop.Live
         private string ResolveLiveSettingsCsvPath(int musicId)
         {
             List<string> candidates = new List<string>();
-
             void AddCandidate(string path)
             {
                 if (!string.IsNullOrWhiteSpace(path) && !candidates.Contains(path))
@@ -1098,14 +977,11 @@ namespace Gallop.Live
             List<string> roots = new List<string>();
             if (Config.Instance != null && !string.IsNullOrWhiteSpace(Config.Instance.MainPath))
                 roots.Add(Config.Instance.MainPath);
-
             roots.Add(Path.GetFullPath(Path.Combine(Application.dataPath, "..")));
-
             foreach (string root in roots)
             {
                 if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                     continue;
-
                 AddCandidate(Path.Combine(root, $"{musicId}.csv"));
                 AddCandidate(Path.Combine(root, $"m{musicId}.csv"));
                 AddCandidate(Path.Combine(root, "Assets", $"{musicId}.csv"));
@@ -1129,12 +1005,10 @@ namespace Gallop.Live
 
             string keyword1 = $",4,gal_UVmovie_{musicId}_";
             string keyword2 = $",4,gal_uvmovie_{musicId}_";
-
             foreach (string root in roots)
             {
                 if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                     continue;
-
                 try
                 {
                     string[] csvFiles = Directory.GetFiles(root, "*.csv", SearchOption.AllDirectories);
@@ -1142,20 +1016,25 @@ namespace Gallop.Live
                     {
                         string path = csvFiles[i];
                         string fileName = Path.GetFileNameWithoutExtension(path) ?? string.Empty;
-                        if (!fileName.Contains(musicId.ToString(), StringComparison.OrdinalIgnoreCase) &&
-                            !path.Contains("livesettings", StringComparison.OrdinalIgnoreCase))
+                        if (!fileName.Contains(musicId.ToString(), StringComparison.OrdinalIgnoreCase) && !path.Contains("livesettings", StringComparison.OrdinalIgnoreCase))
                             continue;
-
                         string text;
-                        try { text = File.ReadAllText(path); }
-                        catch { continue; }
+                        try
+                        {
+                            text = File.ReadAllText(path);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
 
-                        if (text.IndexOf(keyword1, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            text.IndexOf(keyword2, StringComparison.OrdinalIgnoreCase) >= 0)
+                        if (text.IndexOf(keyword1, StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf(keyword2, StringComparison.OrdinalIgnoreCase) >= 0)
                             return path;
                     }
                 }
-                catch { }
+                catch
+                {
+                }
             }
 
             return null;
@@ -1171,14 +1050,11 @@ namespace Gallop.Live
                     {
                         if (type == null)
                             continue;
-
                         if (!type.Name.Contains("ApplicationSettingSaveLoader", StringComparison.OrdinalIgnoreCase))
                             continue;
-
                         object instance = GetStaticMemberValue(type, "Instance") ?? GetStaticMemberValue(type, "instance");
                         if (instance == null)
                             continue;
-
                         MethodInfo getter = type.GetMethod("get_GameQuality", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                         if (getter != null)
                         {
@@ -1213,17 +1089,28 @@ namespace Gallop.Live
         private static object GetStaticMemberValue(Type type, string memberName)
         {
             const BindingFlags flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-
             FieldInfo field = type.GetField(memberName, flags);
             if (field != null)
             {
-                try { return field.GetValue(null); } catch { }
+                try
+                {
+                    return field.GetValue(null);
+                }
+                catch
+                {
+                }
             }
 
             PropertyInfo property = type.GetProperty(memberName, flags);
             if (property != null && property.CanRead)
             {
-                try { return property.GetValue(null, null); } catch { }
+                try
+                {
+                    return property.GetValue(null, null);
+                }
+                catch
+                {
+                }
             }
 
             return null;
@@ -1234,38 +1121,23 @@ namespace Gallop.Live
             List<LiveSettingsUvMovieRow> rows = new List<LiveSettingsUvMovieRow>();
             if (string.IsNullOrWhiteSpace(csvText))
                 return rows;
-
             string[] lines = csvText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             int slotIndex = 0;
-
             for (int i = 1; i < lines.Length; i++)
             {
                 string line = lines[i].Trim();
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
-
                 string[] cols = line.Split(',');
                 if (cols.Length < 3)
                     continue;
-
                 int type = ParseCsvInt(cols, 1, -1);
                 if (type != 4)
                     continue;
-
                 string resourceName = GetCsvCell(cols, 2);
                 int loadConditionValue = ParseCsvInt(cols, 3, 0);
                 int playConditionValue = ParseCsvInt(cols, 4, 0);
-
-                rows.Add(new LiveSettingsUvMovieRow
-                {
-                    recordId = ParseCsvInt(cols, 0, 0),
-                    slotIndex = slotIndex,
-                    slotId = slotIndex + 1,
-                    resourceName = resourceName,
-                    loadConditionValue = loadConditionValue,
-                    playConditionValue = playConditionValue,
-                });
-
+                rows.Add(new LiveSettingsUvMovieRow { recordId = ParseCsvInt(cols, 0, 0), slotIndex = slotIndex, slotId = slotIndex + 1, resourceName = resourceName, loadConditionValue = loadConditionValue, playConditionValue = playConditionValue, });
                 slotIndex++;
             }
 
@@ -1289,13 +1161,11 @@ namespace Gallop.Live
         {
             if (rows == null)
                 return;
-
             for (int i = 0; i < rows.Count; i++)
             {
                 LiveSettingsUvMovieRow row = rows[i];
                 if (row == null)
                     continue;
-
                 switch (row.loadConditionValue)
                 {
                     case -1:
@@ -1321,15 +1191,12 @@ namespace Gallop.Live
                 MonitorUvMovieClipData clip = clips[i];
                 if (clip == null)
                     continue;
-
                 ReleaseTextureList(clip.frameTextures, clip.ownsLoadedTextures);
                 ReleaseTextureList(clip.maskTextures, clip.ownsLoadedTextures);
-
                 if (clip.ownsLoadedTextures && clip.lightTexture != null)
                     UnityEngine.Object.Destroy(clip.lightTexture);
                 if (clip.ownsLoadedTextures && clip.lightMaskTexture != null)
                     UnityEngine.Object.Destroy(clip.lightMaskTexture);
-
                 clip.lightTexture = null;
                 clip.lightMaskTexture = null;
                 clip.texturePixelOffset = Vector2.zero;
@@ -1341,13 +1208,11 @@ namespace Gallop.Live
         {
             if (textures == null)
                 return;
-
             for (int i = 0; i < textures.Count; i++)
             {
                 Texture2D tex = textures[i];
                 if (tex == null || !ownsLoadedTextures)
                     continue;
-
                 UnityEngine.Object.Destroy(tex);
             }
 
@@ -1357,7 +1222,6 @@ namespace Gallop.Live
         private static string ResolveUvMovieRootPath()
         {
             List<string> candidates = new List<string>();
-
             if (Config.Instance != null && !string.IsNullOrWhiteSpace(Config.Instance.MainPath))
             {
                 candidates.Add(Path.Combine(Config.Instance.MainPath, "assets", "_gallopresources", "bundle", "resources", "live", "uvmovie"));
@@ -1367,7 +1231,6 @@ namespace Gallop.Live
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             candidates.Add(Path.Combine(projectRoot, "assets", "_gallopresources", "bundle", "resources", "live", "uvmovie"));
             candidates.Add(Path.Combine(projectRoot, "Assets", "_gallopresources", "bundle", "resources", "live", "uvmovie"));
-
             for (int i = 0; i < candidates.Count; i++)
             {
                 string candidate = candidates[i];
@@ -1382,29 +1245,19 @@ namespace Gallop.Live
         {
             string rawId = musicId.ToString();
             string padded4 = musicId.ToString("D4");
-
-            return Directory
-                .GetDirectories(rootPath)
-                .Where(path =>
-                {
-                    string name = Path.GetFileName(path);
-                    if (string.IsNullOrEmpty(name))
-                        return false;
-
-                    return name.StartsWith($"gal_uvmovie_{rawId}_", StringComparison.OrdinalIgnoreCase) ||
-                           name.StartsWith($"gal_uvmovie_{padded4}_", StringComparison.OrdinalIgnoreCase) ||
-                           name.StartsWith($"gal_UVmovie_{rawId}_", StringComparison.OrdinalIgnoreCase) ||
-                           name.StartsWith($"gal_UVmovie_{padded4}_", StringComparison.OrdinalIgnoreCase);
-                })
-                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            return Directory.GetDirectories(rootPath).Where(path =>
+            {
+                string name = Path.GetFileName(path);
+                if (string.IsNullOrEmpty(name))
+                    return false;
+                return name.StartsWith($"gal_uvmovie_{rawId}_", StringComparison.OrdinalIgnoreCase) || name.StartsWith($"gal_uvmovie_{padded4}_", StringComparison.OrdinalIgnoreCase) || name.StartsWith($"gal_UVmovie_{rawId}_", StringComparison.OrdinalIgnoreCase) || name.StartsWith($"gal_UVmovie_{padded4}_", StringComparison.OrdinalIgnoreCase);
+            }).OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private MonitorUvMovieClipData BuildClipData(string folderPath, bool loadTextures)
         {
             if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
                 return null;
-
             string metadataPath = FindMetadataPath(folderPath);
             MonitorUvMovieMetadata metadata = null;
             if (!string.IsNullOrEmpty(metadataPath))
@@ -1422,21 +1275,14 @@ namespace Gallop.Live
 
             string folderName = Path.GetFileName(folderPath);
             string clipName = GetClipResourceName(metadata, folderName);
-            List<string> imagePaths = Directory.GetFiles(folderPath)
-                .Where(IsImagePath)
-                .OrderBy(GetTextureSortKey)
-                .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
+            List<string> imagePaths = Directory.GetFiles(folderPath).Where(IsImagePath).OrderBy(GetTextureSortKey).ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToList();
             List<string> framePaths = BuildOfficialStandardPathList(folderPath, clipName, metadata, false);
             List<string> maskPaths = BuildOfficialStandardPathList(folderPath, clipName, metadata, true);
             string lightPath = FindOfficialLightPath(folderPath, clipName, false);
             string lightMaskPath = FindOfficialLightPath(folderPath, clipName, true);
-
             //  metadata ȱʧԴٷȫһʱ˵Ŀ¼ɨ
             if (framePaths.Count == 0)
                 framePaths = imagePaths.Where(IsStandardFrameTexturePath).ToList();
-
             if (metadata != null && metadata.ExistMaskTex)
             {
                 if (maskPaths.Count == 0)
@@ -1449,7 +1295,6 @@ namespace Gallop.Live
 
             if (string.IsNullOrEmpty(lightPath))
                 lightPath = imagePaths.FirstOrDefault(IsLightTexturePath);
-
             if (metadata != null && metadata.ExistMaskTex)
             {
                 if (string.IsNullOrEmpty(lightMaskPath))
@@ -1472,7 +1317,6 @@ namespace Gallop.Live
                 lightMaskTexturePath = lightMaskPath,
                 ownsLoadedTextures = loadTextures,
             };
-
             if (loadTextures)
             {
                 for (int i = 0; i < framePaths.Count; i++)
@@ -1511,18 +1355,15 @@ namespace Gallop.Live
             List<string> result = new List<string>();
             if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(clipName) || metadata == null)
                 return result;
-
             int imageCount = Mathf.Max(metadata.ImageCount, 0);
             if (imageCount <= 0 || imageCount > 10000)
                 return result;
-
             int digits = imageCount <= 100 ? 2 : imageCount <= 1000 ? 3 : 4;
             for (int i = 0; i < imageCount; i++)
             {
                 string stem = $"{clipName}_tex_{i.ToString().PadLeft(digits, '0')}";
                 if (mask)
                     stem += "_mask";
-
                 string found = FindImageByStem(folderPath, stem);
                 if (!string.IsNullOrEmpty(found))
                     result.Add(found);
@@ -1535,7 +1376,6 @@ namespace Gallop.Live
         {
             if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(clipName))
                 return null;
-
             string stem = mask ? $"{clipName}_tex_mask" : $"{clipName}_tex";
             return FindImageByStem(folderPath, stem);
         }
@@ -1544,12 +1384,7 @@ namespace Gallop.Live
         {
             if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(expectedStem) || !Directory.Exists(folderPath))
                 return null;
-
-            string[] candidates = Directory.GetFiles(folderPath)
-                .Where(IsImagePath)
-                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
+            string[] candidates = Directory.GetFiles(folderPath).Where(IsImagePath).OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray();
             for (int i = 0; i < candidates.Length; i++)
             {
                 string stem = Path.GetFileNameWithoutExtension(candidates[i]);
@@ -1562,22 +1397,12 @@ namespace Gallop.Live
 
         private static string FindMetadataPath(string folderPath)
         {
-            string[] jsonFiles = Directory
-                .GetFiles(folderPath, "*.json")
-                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
+            string[] jsonFiles = Directory.GetFiles(folderPath, "*.json").OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray();
             if (jsonFiles.Length > 0)
                 return jsonFiles[0];
-
-            string[] txtFiles = Directory
-                .GetFiles(folderPath, "*.txt")
-                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
+            string[] txtFiles = Directory.GetFiles(folderPath, "*.txt").OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray();
             if (txtFiles.Length > 0)
                 return txtFiles[0];
-
             return null;
         }
 
@@ -1590,15 +1415,12 @@ namespace Gallop.Live
         {
             if (!IsImagePath(path))
                 return false;
-
             string fileName = Path.GetFileNameWithoutExtension(path);
             if (fileName.IndexOf("mask", StringComparison.OrdinalIgnoreCase) >= 0)
                 return false;
-
             int texIndex = fileName.LastIndexOf("_tex_", StringComparison.OrdinalIgnoreCase);
             if (texIndex < 0)
                 return false;
-
             string suffix = fileName.Substring(texIndex + 5);
             return suffix.Length > 0 && suffix.All(char.IsDigit);
         }
@@ -1607,16 +1429,13 @@ namespace Gallop.Live
         {
             if (!IsImagePath(path))
                 return false;
-
             string fileName = Path.GetFileNameWithoutExtension(path);
             if (fileName.IndexOf("mask", StringComparison.OrdinalIgnoreCase) < 0)
                 return false;
-
             int texIndex = fileName.LastIndexOf("_tex_", StringComparison.OrdinalIgnoreCase);
             int maskIndex = fileName.LastIndexOf("_mask", StringComparison.OrdinalIgnoreCase);
             if (texIndex < 0 || maskIndex < 0 || maskIndex <= texIndex)
                 return false;
-
             string suffix = fileName.Substring(texIndex + 5, maskIndex - (texIndex + 5));
             return suffix.Length > 0 && suffix.All(char.IsDigit);
         }
@@ -1625,11 +1444,9 @@ namespace Gallop.Live
         {
             if (!IsImagePath(path))
                 return false;
-
             string fileName = Path.GetFileNameWithoutExtension(path);
             if (fileName.IndexOf("mask", StringComparison.OrdinalIgnoreCase) >= 0)
                 return false;
-
             return fileName.EndsWith("_tex", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -1637,7 +1454,6 @@ namespace Gallop.Live
         {
             if (!IsImagePath(path))
                 return false;
-
             string fileName = Path.GetFileNameWithoutExtension(path);
             return fileName.EndsWith("_tex_mask", StringComparison.OrdinalIgnoreCase);
         }
@@ -1645,17 +1461,13 @@ namespace Gallop.Live
         private static bool IsImagePath(string path)
         {
             string ext = Path.GetExtension(path);
-            return string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(ext, ".jpg", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(ext, ".jpeg", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(ext, ".tga", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".jpg", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".jpeg", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".tga", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static int GetTextureSortKey(string path)
         {
             string fileName = Path.GetFileNameWithoutExtension(path);
-            string digits = new string(fileName.Where(char.IsDigit).ToArray());
+            string digits = new string (fileName.Where(char.IsDigit).ToArray());
             if (int.TryParse(digits, out int key))
                 return key;
             return int.MaxValue;
@@ -1672,7 +1484,6 @@ namespace Gallop.Live
                     wrapMode = TextureWrapMode.Clamp,
                     filterMode = FilterMode.Bilinear,
                 };
-
                 if (!texture.LoadImage(bytes, false))
                 {
                     UnityEngine.Object.Destroy(texture);
@@ -1691,18 +1502,12 @@ namespace Gallop.Live
         {
             loadedClips = new List<MonitorUvMovieClipData>();
             sourceName = null;
-
             string[] folderKeys = BuildClipFolderCandidates(musicId);
             TryLoadUvMovieBundlesFromIndex(folderKeys);
-
             Dictionary<string, MonitorUvMovieClipData> resolved = ResolveUvMovieClipsFromLoadedBundles(folderKeys);
             if (resolved.Count == 0)
                 return false;
-
-            loadedClips = resolved.Values
-                .OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
+            loadedClips = resolved.Values.OrderBy(c => c.folderName, StringComparer.OrdinalIgnoreCase).ToList();
             sourceName = "AssetBundle/live/uvmovie";
             return loadedClips.Count > 0;
         }
@@ -1711,16 +1516,13 @@ namespace Gallop.Live
         {
             string rawId = musicId.ToString();
             string padded4 = musicId.ToString("D4");
-
             return new[]
             {
                 $"gal_uvmovie_{rawId}_",
                 $"gal_uvmovie_{padded4}_",
                 $"gal_UVmovie_{rawId}_",
                 $"gal_UVmovie_{padded4}_",
-            }
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         private void TryLoadUvMovieBundlesFromIndex(string[] folderKeys)
@@ -1728,23 +1530,15 @@ namespace Gallop.Live
             UmaViewerMain main = FindObjectOfType<UmaViewerMain>();
             if (main == null || main.AbList == null || folderKeys == null || folderKeys.Length == 0)
                 return;
-
-            List<UmaDatabaseEntry> entries = main.AbList
-                .Where(kv =>
-                {
-                    UmaDatabaseEntry entry = kv.Value;
-                    if (entry == null || !entry.IsAssetBundle)
-                        return false;
-
-                    return IsMatchingUvMovieEntry(kv.Key, entry, folderKeys);
-                })
-                .Select(kv => kv.Value)
-                .Distinct()
-                .ToList();
-
+            List<UmaDatabaseEntry> entries = main.AbList.Where(kv =>
+            {
+                UmaDatabaseEntry entry = kv.Value;
+                if (entry == null || !entry.IsAssetBundle)
+                    return false;
+                return IsMatchingUvMovieEntry(kv.Key, entry, folderKeys);
+            }).Select(kv => kv.Value).Distinct().ToList();
             if (verboseLog)
                 Debug.Log($"[MonitorUvMovieProvider] uvmovie bundle index hits={entries.Count} for [{string.Join(",", folderKeys)}]");
-
             for (int i = 0; i < entries.Count; i++)
             {
                 try
@@ -1762,12 +1556,10 @@ namespace Gallop.Live
         private Dictionary<string, MonitorUvMovieClipData> ResolveUvMovieClipsFromLoadedBundles(string[] folderKeys)
         {
             Dictionary<string, MonitorUvMovieClipData> result = new Dictionary<string, MonitorUvMovieClipData>(StringComparer.OrdinalIgnoreCase);
-
             foreach (AssetBundle assetBundle in AssetBundle.GetAllLoadedAssetBundles())
             {
                 if (!assetBundle)
                     continue;
-
                 string[] names;
                 try
                 {
@@ -1780,14 +1572,12 @@ namespace Gallop.Live
 
                 if (names == null || names.Length == 0)
                     continue;
-
                 for (int i = 0; i < names.Length; i++)
                 {
                     string assetPath = names[i];
                     string folderName = ExtractUvMovieFolderName(assetPath, folderKeys);
                     if (string.IsNullOrEmpty(folderName))
                         continue;
-
                     if (!result.TryGetValue(folderName, out MonitorUvMovieClipData clip))
                     {
                         clip = new MonitorUvMovieClipData
@@ -1813,7 +1603,6 @@ namespace Gallop.Live
                     Texture2D texture = TryLoadTexture(assetBundle, assetPath);
                     if (texture == null)
                         continue;
-
                     if (IsLightMaskTexturePath(assetPath))
                     {
                         if (clip.lightMaskTexture == null)
@@ -1821,6 +1610,7 @@ namespace Gallop.Live
                             clip.lightMaskTexturePath = assetPath;
                             clip.lightMaskTexture = texture;
                         }
+
                         continue;
                     }
 
@@ -1831,6 +1621,7 @@ namespace Gallop.Live
                             clip.lightTexturePath = assetPath;
                             clip.lightTexture = texture;
                         }
+
                         continue;
                     }
 
@@ -1841,6 +1632,7 @@ namespace Gallop.Live
                             clip.maskTexturePaths.Add(assetPath);
                             clip.maskTextures.Add(texture);
                         }
+
                         continue;
                     }
 
@@ -1854,7 +1646,6 @@ namespace Gallop.Live
 
             foreach (MonitorUvMovieClipData clip in result.Values)
                 clip.FinalizeDerivedData();
-
             return result;
         }
 
@@ -1862,7 +1653,6 @@ namespace Gallop.Live
         {
             if (string.IsNullOrEmpty(assetPath) || folderKeys == null || folderKeys.Length == 0)
                 return null;
-
             string normalized = assetPath.Replace('\\', '/');
             const string needle = "live/uvmovie/";
             int idx = normalized.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
@@ -1886,16 +1676,13 @@ namespace Gallop.Live
                 int folderIndex = normalized.IndexOf(folderKeys[i], StringComparison.OrdinalIgnoreCase);
                 if (folderIndex < 0)
                     continue;
-
                 string remain = normalized.Substring(folderIndex);
                 int slash = remain.IndexOf('/');
                 if (slash > 0)
                     return remain.Substring(0, slash);
-
                 int dot = remain.IndexOf('.');
                 if (dot > 0)
                     return remain.Substring(0, dot);
-
                 return remain;
             }
 
@@ -1904,8 +1691,12 @@ namespace Gallop.Live
 
         private static bool IsMatchingUvMovieEntry(string key, UmaDatabaseEntry entry, string[] folderKeys)
         {
-            string[] candidates = { key, entry?.Name, entry?.Url };
-
+            string[] candidates =
+            {
+                key,
+                entry?.Name,
+                entry?.Url
+            };
             bool hasUvMovieSegment = false;
             bool hasFolderKey = false;
             for (int i = 0; i < candidates.Length; i++)
@@ -1913,9 +1704,7 @@ namespace Gallop.Live
                 string normalized = NormalizePathCandidate(candidates[i]);
                 if (string.IsNullOrEmpty(normalized))
                     continue;
-
-                if (normalized.IndexOf("live/uvmovie", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    normalized.IndexOf("_uvmovie_", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (normalized.IndexOf("live/uvmovie", StringComparison.OrdinalIgnoreCase) >= 0 || normalized.IndexOf("_uvmovie_", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     hasUvMovieSegment = true;
                 }
@@ -1946,9 +1735,6 @@ namespace Gallop.Live
             try
             {
                 TextAsset asset = assetBundle.LoadAsset<TextAsset>(assetPath);
-                if (LiveRuntimeDiagnostics.Enabled)
-                    LiveRuntimeDiagnostics.RecordAssetLoad(assetBundle.name, "LoadAsset", typeof(TextAsset),
-                        new UnityEngine.Object[] { asset }, asset, assetPath);
                 return asset;
             }
             catch
@@ -1962,9 +1748,6 @@ namespace Gallop.Live
             try
             {
                 Texture2D asset = assetBundle.LoadAsset<Texture2D>(assetPath);
-                if (LiveRuntimeDiagnostics.Enabled)
-                    LiveRuntimeDiagnostics.RecordAssetLoad(assetBundle.name, "LoadAsset", typeof(Texture2D),
-                        new UnityEngine.Object[] { asset }, asset, assetPath);
                 return asset;
             }
             catch
@@ -1978,7 +1761,6 @@ namespace Gallop.Live
             metadata = null;
             if (string.IsNullOrWhiteSpace(jsonText))
                 return false;
-
             try
             {
                 metadata = JsonConvert.DeserializeObject<MonitorUvMovieMetadata>(jsonText);

@@ -20,6 +20,7 @@ namespace LibMMD.Reader
             {
                 throw new MMDFileParseException("File is not a PMD 1.0 file");
             }
+
             ReadDescription(reader, model);
             ReadVertices(reader, model);
             ReadTriangles(reader, model);
@@ -34,30 +35,32 @@ namespace LibMMD.Reader
             {
                 goto PMD_READER_READ_LEGACY_30;
             }
+
             ReadInfoEn(reader, model, context);
             if (MMDReaderWriteUtil.Eof(reader))
             {
                 goto PMD_READER_READ_LEGACY_30;
             }
+
             ReadCustomTextures(reader, config, model, toonTextureIds);
             if (MMDReaderWriteUtil.Eof(reader))
             {
                 goto PMD_READER_READ_LEGACY_50;
             }
+
             ReadRigidBodies(reader, model, context);
             ReadConstraints(reader, model);
             goto PMD_READER_READ_SUCCEED;
-
             PMD_READER_READ_LEGACY_30:
+                for (var i = 0; i < model.Parts.Length; ++i)
+                {
+                    var material = model.Parts[i].Material;
+                    material.Toon = MMDTextureUtil.GetGlobalToon(toonTextureIds[i]);
+                }
 
-            for (var i = 0; i < model.Parts.Length; ++i)
-            {
-                var material = model.Parts[i].Material;
-                material.Toon = MMDTextureUtil.GetGlobalToon(toonTextureIds[i]);
-            }
             PMD_READER_READ_LEGACY_50:
-            PMD_READER_READ_SUCCEED:
-            model.Normalize();
+                PMD_READER_READ_SUCCEED:
+                    model.Normalize();
             return model;
         }
 
@@ -90,7 +93,6 @@ namespace LibMMD.Reader
             for (var i = 0; i < rigidBodyNum; ++i)
             {
                 var rigidBody = new MMDRigidBody();
-
                 rigidBody.Name = MMDReaderWriteUtil.ReadStringFixedLength(reader, 20, Tools.JapaneseEncoding).Trim();
                 var boneIndex = reader.ReadUInt16();
                 if (boneIndex < context.BoneNum)
@@ -108,9 +110,10 @@ namespace LibMMD.Reader
                         rigidBody.AssociatedBoneIndex = context.CenterBoneIndex.Value;
                     }
                 }
+
                 rigidBody.CollisionGroup = reader.ReadSByte();
                 rigidBody.CollisionMask = reader.ReadUInt16();
-                rigidBody.Shape = (MMDRigidBody.RigidBodyShape) reader.ReadByte();
+                rigidBody.Shape = (MMDRigidBody.RigidBodyShape)reader.ReadByte();
                 rigidBody.Dimemsions = MMDReaderWriteUtil.ReadVector3(reader);
                 var rbPosition = MMDReaderWriteUtil.ReadVector3(reader);
                 rigidBody.Position = model.Bones[rigidBody.AssociatedBoneIndex].Position + rbPosition;
@@ -120,28 +123,26 @@ namespace LibMMD.Reader
                 rigidBody.RotateDamp = reader.ReadSingle();
                 rigidBody.Restitution = reader.ReadSingle();
                 rigidBody.Friction = reader.ReadSingle();
-
                 var type = reader.ReadByte();
                 if (boneIndex < context.BoneNum)
                 {
-                    rigidBody.Type = (MMDRigidBody.RigidBodyType) type;
+                    rigidBody.Type = (MMDRigidBody.RigidBodyType)type;
                 }
                 else
                 {
                     rigidBody.Type = MMDRigidBody.RigidBodyType.RigidTypePhysicsGhost;
                 }
+
                 model.Rigidbodies[i] = rigidBody;
             }
         }
 
-        private static void ReadCustomTextures(BinaryReader reader, ModelConfig config, RawMMDModel model,
-            List<int> toonTextureIds)
+        private static void ReadCustomTextures(BinaryReader reader, ModelConfig config, RawMMDModel model, List<int> toonTextureIds)
         {
             var customTextures = new MMDTexture[10];
             for (var i = 0; i < 10; ++i)
             {
-                customTextures[i] =
-                    new MMDTexture(MMDReaderWriteUtil.ReadStringFixedLength(reader, 100, Tools.JapaneseEncoding));
+                customTextures[i] = new MMDTexture(MMDReaderWriteUtil.ReadStringFixedLength(reader, 100, Tools.JapaneseEncoding));
             }
 
             for (var i = 0; i < model.Parts.Length; ++i)
@@ -161,10 +162,10 @@ namespace LibMMD.Reader
         private static void ReadInfoEn(BinaryReader reader, RawMMDModel model, PmdReadContext context)
         {
             var hasInfoEn = reader.ReadSByte() == 1;
-            if (!hasInfoEn) return;
+            if (!hasInfoEn)
+                return;
             model.NameEn = MMDReaderWriteUtil.ReadStringFixedLength(reader, 20, Tools.JapaneseEncoding);
             model.DescriptionEn = MMDReaderWriteUtil.ReadStringFixedLength(reader, 256, Tools.JapaneseEncoding);
-
             for (var i = 0; i < context.BoneNum; ++i)
             {
                 var bone = model.Bones[i];
@@ -175,6 +176,7 @@ namespace LibMMD.Reader
             {
                 model.Morphs[0].NameEn = model.Morphs[0].Name;
             }
+
             for (var i = 1; i < model.Morphs.Length; ++i)
             {
                 var morph = model.Morphs[i];
@@ -227,11 +229,12 @@ namespace LibMMD.Reader
                 var morph = new Morph();
                 var fp = ReadPmdFacePreamble(reader);
                 morph.Name = fp.Name;
-                morph.Category = (Morph.MorphCategory) fp.FaceType;
+                morph.Category = (Morph.MorphCategory)fp.FaceType;
                 if (morph.Category == Morph.MorphCategory.MorphCatSystem)
                 {
                     baseMorphIndex = i;
                 }
+
                 morph.Type = Morph.MorphType.MorphTypeVertex;
                 morph.MorphDatas = new Morph.MorphData[fp.VertexNum];
                 for (var j = 0; j < fp.VertexNum; ++j)
@@ -241,6 +244,7 @@ namespace LibMMD.Reader
                     vertexMorphData.Offset = MMDReaderWriteUtil.ReadVector3(reader);
                     morph.MorphDatas[j] = vertexMorphData;
                 }
+
                 model.Morphs[i] = morph;
             }
 
@@ -253,13 +257,13 @@ namespace LibMMD.Reader
                     {
                         continue;
                     }
+
                     var morph = model.Morphs[i];
                     for (var j = 0; j < morph.MorphDatas.Length; ++j)
                     {
-                        var vertexMorphData = (Morph.VertexMorphData) morph.MorphDatas[j];
+                        var vertexMorphData = (Morph.VertexMorphData)morph.MorphDatas[j];
                         var morphDataVertexIndex = vertexMorphData.VertexIndex;
-                        vertexMorphData.VertexIndex = ((Morph.VertexMorphData) baseMorph.MorphDatas[morphDataVertexIndex])
-                            .VertexIndex;
+                        vertexMorphData.VertexIndex = ((Morph.VertexMorphData)baseMorph.MorphDatas[morphDataVertexIndex]).VertexIndex;
                     }
                 }
             }
@@ -298,6 +302,7 @@ namespace LibMMD.Reader
                 {
                     rawIk.Chain[j] = reader.ReadUInt16();
                 }
+
                 rawIkList.Add(rawIk);
             }
 
@@ -309,15 +314,15 @@ namespace LibMMD.Reader
                 {
                     a1 = ik1.Chain[0];
                 }
+
                 if (ik2.Chain.Length > 0)
                 {
                     a2 = ik2.Chain[0];
                 }
+
                 return a1.CompareTo(a2);
             });
-
             var boneList = new List<Bone>();
-
             int? centerBoneIndex = null;
             model.Bones = new Bone[boneNum];
             for (var i = 0; i < boneNum; ++i)
@@ -330,6 +335,7 @@ namespace LibMMD.Reader
                 {
                     centerBoneIndex = i;
                 }
+
                 bone.Position = rawBone.Position;
                 // TODO - workaround here, need fix, see [1].
                 if (i != rawBone.ParentId)
@@ -340,15 +346,15 @@ namespace LibMMD.Reader
                 {
                     bone.ParentIndex = 0; //TODO mmdlib里是nil
                 }
+
                 bone.TransformLevel = 0;
                 bone.ChildBoneVal.ChildUseId = true;
                 bone.ChildBoneVal.Index = rawBone.ChildId;
                 bone.Rotatable = true;
-                var type = (PmdBoneTypes) rawBone.Type;
+                var type = (PmdBoneTypes)rawBone.Type;
                 bone.HasIk = type == PmdBoneTypes.PmdBoneIk || ikBoneIds.Contains(i);
                 bone.Movable = type == PmdBoneTypes.PmdBoneRotateAndTranslate || bone.HasIk;
-                bone.Visible = type != PmdBoneTypes.PmdBoneIkTo && type != PmdBoneTypes.PmdBoneInvisible &&
-                               type != PmdBoneTypes.PmdBoneRotateRatio;
+                bone.Visible = type != PmdBoneTypes.PmdBoneIkTo && type != PmdBoneTypes.PmdBoneInvisible && type != PmdBoneTypes.PmdBoneRotateRatio;
                 bone.Controllable = true;
                 bone.AppendRotate = type == PmdBoneTypes.PmdBoneRotateEffect || type == PmdBoneTypes.PmdBoneRotateRatio;
                 bone.AppendTranslate = false;
@@ -356,7 +362,6 @@ namespace LibMMD.Reader
                 bone.UseLocalAxis = false;
                 bone.PostPhysics = false;
                 bone.ReceiveTransform = false;
-
                 if (bone.AppendRotate)
                 {
                     if (type == PmdBoneTypes.PmdBoneRotateEffect)
@@ -373,6 +378,7 @@ namespace LibMMD.Reader
                         bone.AppendBoneVal.Ratio = rawBone.IkNumber * 0.01f;
                     }
                 }
+
                 if (bone.HasIk)
                 {
                     bone.TransformLevel = 1;
@@ -385,6 +391,7 @@ namespace LibMMD.Reader
                     {
                         childId = 0;
                     }
+
                     bone.RotAxis = (rawBones[childId].Position - bone.Position).normalized;
                     if (bone.ChildBoneVal.ChildUseId)
                     {
@@ -398,9 +405,8 @@ namespace LibMMD.Reader
 
             var loLimit = Vector3.zero;
             var hiLimit = Vector3.zero;
-            loLimit.x = (float) -Math.PI;
-            hiLimit.x = (float) (-0.5f / 180.0f * Math.PI);
-
+            loLimit.x = (float)-Math.PI;
+            hiLimit.x = (float)(-0.5f / 180.0f * Math.PI);
             for (var i = 0; i < boneNum; ++i)
             {
                 if (!ikBoneIds.Contains(i))
@@ -411,6 +417,7 @@ namespace LibMMD.Reader
                     };
                     continue;
                 }
+
                 var associatedIkCount = 0;
                 for (var j = 0; j < ikNum; ++j)
                 {
@@ -419,6 +426,7 @@ namespace LibMMD.Reader
                     {
                         continue;
                     }
+
                     Bone bone;
                     if (associatedIkCount == 0)
                     {
@@ -438,12 +446,12 @@ namespace LibMMD.Reader
                         bone.IkInfoVal.IkLinks = new Bone.IkLink[rawIk.Preamble.IkChainLength];
                         bone.HasIk = true;
                     }
+
                     bone.IkInfoVal = new Bone.IkInfo();
                     bone.IkInfoVal.IkTargetIndex = rawIk.Preamble.IkTargetBoneIndex;
                     bone.IkInfoVal.CcdIterateLimit = rawIk.Preamble.CcdIterateLimit;
                     bone.IkInfoVal.CcdAngleLimit = rawIk.Preamble.CcdAngleLimit;
                     bone.IkInfoVal.IkLinks = new Bone.IkLink[rawIk.Preamble.IkChainLength];
-
                     for (var k = 0; k < rawIk.Preamble.IkChainLength; ++k)
                     {
                         var link = new Bone.IkLink();
@@ -468,9 +476,7 @@ namespace LibMMD.Reader
             }
 
             model.Bones = boneList.ToArray();
-
             // TODO - need verification
-
             for (var i = 0; i < boneNum; ++i)
             {
                 var stable = true;
@@ -487,15 +493,19 @@ namespace LibMMD.Reader
                             transformLevel = parentTransformLevel;
                             stable = false;
                         }
+
                         parentId = model.Bones[parentId].ParentIndex;
                     }
+
                     bone.TransformLevel = transformLevel;
                 }
+
                 if (stable)
                 {
                     break;
                 }
             }
+
             context.CenterBoneIndex = centerBoneIndex;
         }
 
@@ -532,10 +542,12 @@ namespace LibMMD.Reader
                         {
                             material.Texture = new MMDTexture(texPath);
                         }
+
                         if (!string.IsNullOrEmpty(sphPath))
                         {
                             material.SubTexture = new MMDTexture(sphPath);
                         }
+
                         if (sphPath.EndsWith("a") || sphPath.EndsWith("A"))
                         {
                             material.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexSpa;
@@ -559,7 +571,6 @@ namespace LibMMD.Reader
                             else
                             {
                                 material.SubTexture = new MMDTexture(textureName);
-                                ;
                                 if (ext.EndsWith("a"))
                                 {
                                     material.SubTextureType = MMDMaterial.SubTextureTypeEnum.MatSubTexSpa;
@@ -576,6 +587,7 @@ namespace LibMMD.Reader
                         }
                     }
                 }
+
                 var part = new Part();
                 part.Material = material;
                 tooTextureIds.Add(toonId);
@@ -594,6 +606,7 @@ namespace LibMMD.Reader
             {
                 throw new MMDFileParseException("triangle index count " + triangleIndexCount + " is not multiple of 3");
             }
+
             for (var i = 0; i < triangleIndexCount; ++i)
             {
                 model.TriangleIndexes[i] = reader.ReadUInt16();
@@ -626,7 +639,6 @@ namespace LibMMD.Reader
                 model.Vertices[i] = vertex;
             }
         }
-
 
         private static void ReadDescription(BinaryReader reader, RawMMDModel model)
         {
@@ -672,7 +684,6 @@ namespace LibMMD.Reader
                 CcdAngleLimit = reader.ReadSingle()
             };
         }
-
 
         private class PmdBone
         {

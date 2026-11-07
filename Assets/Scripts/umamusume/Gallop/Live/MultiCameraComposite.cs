@@ -100,6 +100,8 @@ namespace Gallop.Live
             FinalComposite = owner;
             _timelineIndex = timelineIndex;
             RenderCamera = GetComponent<Camera>();
+            // Original Prefabs/Live/MultiCameraComposite carries FlareLayer.
+            NativeLensFlareCameraRegistry.RestoreSerializedFlareLayer(RenderCamera);
             ImageEffect = GetComponent<GallopImageEffect>();
             if (ImageEffect == null) ImageEffect = gameObject.AddComponent<GallopImageEffect>();
             EnsureMaterial();
@@ -192,8 +194,12 @@ namespace Gallop.Live
                 RenderCamera.nearClipPlane = current.nearClip;
                 RenderCamera.farClipPlane = current.farClip;
                 RenderCamera.fieldOfView = Mathf.LerpUnclamped(current.fov, next.fov, t);
+                // Native AlterUpdate_MultiCameraPosition: set_cullingMask at 0x4edbcfd
+                // invokes GetCullingMask/set_cullingMask for every accepted
+                // active camera key. Only the background-color write is gated.
+                RenderCamera.cullingMask = current.GetCullingMask();
                 if (((int)current.attribute & 0x40000) != 0)
-                    RenderCamera.backgroundColor = current.BgColor;
+                    RenderCamera.backgroundColor = current.GetBgColor();
             }
             if (current.maskType == LiveTimelineKeyMultiCameraPositionData.MaskType.Single && transitioning)
             {

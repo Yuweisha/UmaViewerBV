@@ -35,19 +35,19 @@ namespace Gallop.Live
 
         [Header("Shader UV 滚动属性名称")]
         [InspectorName("水平滚动偏移属性")]
-        public string scrollOffsetXProperty = "_ScrollOffsetX";
+        public string scrollOffsetXProperty = "_UVScrollOffsetX";
 
         [InspectorName("垂直滚动偏移属性")]
-        public string scrollOffsetYProperty = "_ScrollOffsetY";
+        public string scrollOffsetYProperty = "_UVScrollOffsetY";
 
         [InspectorName("水平滚动速度属性")]
-        public string scrollSpeedXProperty = "_ScrollSpeedX";
+        public string scrollSpeedXProperty = "_UVScrollX";
 
         [InspectorName("垂直滚动速度属性")]
-        public string scrollSpeedYProperty = "_ScrollSpeedY";
+        public string scrollSpeedYProperty = "_UVScrollY";
 
         [InspectorName("经过时间属性")]
-        public string elapsedTimeProperty = "_ElapsedTime";
+        public string elapsedTimeProperty = "_AppTime";
 
         private LiveTimelineControl _ctl;
         private StageController _stage;
@@ -57,6 +57,19 @@ namespace Gallop.Live
 
         private readonly HashSet<string> _missingLogged =
             new HashSet<string>();
+
+        // Material assignment and renaming have no general Unity notification.
+        // A missing target therefore still checks the current bindings, but
+        // unchanged bindings no longer allocate dictionaries/controllers or
+        // instantiate all renderer material arrays again on every request.
+        readonly List<Renderer> _bindingRenderers=new List<Renderer>(512);
+        readonly List<int> _bindingMaterialCounts=new List<int>(512);
+        readonly List<Material> _bindingMaterials=new List<Material>(1024);
+        readonly List<string> _bindingNames=new List<string>(1024);
+        readonly List<Renderer> _scanRenderers=new List<Renderer>(512);
+        readonly List<Material> _scanMaterials=new List<Material>(8);
+        StageController _bindingStage;
+        bool _bindingIncludeInactive,_bindingsCaptured;
 
         private void OnEnable()
         {
@@ -93,6 +106,7 @@ namespace Gallop.Live
                 return;
 
             Unbind();
+            ReleaseControllers();
 
             _ctl = newCtl;
             _stage = newStage;
@@ -114,6 +128,9 @@ namespace Gallop.Live
 
         private void ReleaseControllers()
         {
+            _bindingsCaptured=false;
+            _bindingRenderers.Clear();_bindingMaterialCounts.Clear();
+            _bindingMaterials.Clear();_bindingNames.Clear();
             foreach (KeyValuePair<string, UVScrollLightController> kv in _controllerMap)
             {
                 kv.Value?.Release();
@@ -136,7 +153,9 @@ namespace Gallop.Live
                     out UVScrollLightController controller) ||
                 controller == null)
             {
-                if (rebuildCacheWhenTargetMissing)
+                bool rebuild;
+                rebuild=rebuildCacheWhenTargetMissing&&!BindingsUnchanged();
+                if (rebuild)
                     RebuildCache();
 
                 _controllerMap.TryGetValue(materialName, out controller);
@@ -159,6 +178,7 @@ namespace Gallop.Live
 
         public void RebuildCache()
         {
+            {
             ReleaseControllers();
             _missingLogged.Clear();
 
@@ -167,6 +187,9 @@ namespace Gallop.Live
 
             Renderer[] renderers =
                 _stage.GetComponentsInChildren<Renderer>(includeInactiveRenderers);
+            _bindingStage=_stage;_bindingIncludeInactive=includeInactiveRenderers;
+            bool complete=true;
+            bool captureBindings=true;
 
             Dictionary<string, List<Material>> materialMap =
                 new Dictionary<string, List<Material>>(64);
@@ -174,8 +197,12 @@ namespace Gallop.Live
             for (int i = 0; i < renderers.Length; i++)
             {
                 Renderer renderer = renderers[i];
+                if(captureBindings){_bindingRenderers.Add(renderer);_bindingMaterialCounts.Add(0);}
                 if (renderer == null)
+                {
+                    complete=false;
                     continue;
+                }
 
                 Material[] materials;
 
@@ -185,6 +212,7 @@ namespace Gallop.Live
                 }
                 catch (Exception e)
                 {
+                    complete=false;
                     if (verboseLog)
                     {
                         Debug.LogWarning(
@@ -198,13 +226,17 @@ namespace Gallop.Live
                 if (materials == null || materials.Length == 0)
                     continue;
 
+                if(captureBindings)_bindingMaterialCounts[_bindingMaterialCounts.Count-1]=materials.Length;
+
                 for (int j = 0; j < materials.Length; j++)
                 {
                     Material material = materials[j];
+                    string rawName=material!=null?material.name:null;
+                    if(captureBindings){_bindingMaterials.Add(material);_bindingNames.Add(rawName);}
                     if (material == null)
                         continue;
 
-                    string key = NormalizeMaterialName(material.name);
+                    string key = NormalizeMaterialName(rawName);
                     if (string.IsNullOrEmpty(key))
                         continue;
 
@@ -217,6 +249,8 @@ namespace Gallop.Live
                     list.Add(material);
                 }
             }
+
+            _bindingsCaptured=captureBindings&&complete;
 
             foreach (KeyValuePair<string, List<Material>> kv in materialMap)
             {
@@ -242,6 +276,33 @@ namespace Gallop.Live
                 Debug.Log(
                     $"[StageUVScrollLightDriver] cache rebuilt: " +
                     $"controllers={_controllerMap.Count}");
+            }
+        
+            }
+        }
+
+        bool BindingsUnchanged()
+        {
+            {
+                if(!_bindingsCaptured||_stage==null||_bindingStage!=_stage||_bindingIncludeInactive!=includeInactiveRenderers)return false;
+                _stage.GetComponentsInChildren(includeInactiveRenderers,_scanRenderers);
+                if(_scanRenderers.Count!=_bindingRenderers.Count)return false;
+                int materialIndex=0;
+                for(int i=0;i<_scanRenderers.Count;i++)
+                {
+                    var renderer=_scanRenderers[i];
+                    if(renderer==null||renderer!=_bindingRenderers[i])return false;
+                    renderer.GetSharedMaterials(_scanMaterials);
+                    if(_scanMaterials.Count!=_bindingMaterialCounts[i])return false;
+                    for(int j=0;j<_scanMaterials.Count;j++,materialIndex++)
+                    {
+                        var material=_scanMaterials[j];
+                        if(material!=_bindingMaterials[materialIndex])return false;
+                        string name=material!=null?material.name:null;
+                        if(!string.Equals(name,_bindingNames[materialIndex],StringComparison.Ordinal))return false;
+                    }
+                }
+                return materialIndex==_bindingMaterials.Count;
             }
         }
 

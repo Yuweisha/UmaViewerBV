@@ -392,7 +392,10 @@ namespace Gallop.Live.Cyalume
                     childName.IndexOf("cyalume", StringComparison.OrdinalIgnoreCase) >= 0;
 
                 if (isKnownCyalumeChild)
+                {
+                    GetComponentInParent<StageController>()?.UnregisterCyalumeObject(child.gameObject,this);
                     Destroy(child.gameObject);
+                }
             }
         }
 
@@ -411,6 +414,7 @@ namespace Gallop.Live.Cyalume
             instance = Instantiate(prefab, transform);
             instance.name = prefab.name;
             SetLayerRecursively(instance, gameObject.layer);
+            GetComponentInParent<StageController>()?.RegisterCyalumeObject(instance,this);
 
             if (destination != null)
             {

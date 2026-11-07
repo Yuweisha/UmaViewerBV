@@ -12,6 +12,7 @@ namespace Gallop.Live
         private struct Beam
         {
             public MeshRenderer Source, Renderer;
+            public MeshFilter SourceFilter, Filter;
             public Vector3 Axis, Normal;
             public bool SourceWasForcedOff;
         }
@@ -57,6 +58,8 @@ namespace Gallop.Live
                 var beam = new Beam {
                     Source = renderer,
                     Renderer = copyRenderer,
+                    SourceFilter = filter,
+                    Filter = copyObject.GetComponent<MeshFilter>(),
                     Axis = size.x >= size.y && size.x >= size.z ? Vector3.right : size.y >= size.z ? Vector3.up : Vector3.forward,
                     Normal = size.x <= size.y && size.x <= size.z ? Vector3.right : size.y <= size.z ? Vector3.up : Vector3.forward,
                     SourceWasForcedOff = renderer.forceRenderingOff
@@ -77,6 +80,10 @@ namespace Gallop.Live
                 var source = beam.Source;
                 var copy = beam.Renderer;
                 if (source == null || copy == null) continue;
+                // BgBeamLight.Start replaces its mesh after Stage Awake.
+                // Forward the converted source to the existing draw copy.
+                if (beam.Filter.sharedMesh != beam.SourceFilter.sharedMesh)
+                    beam.Filter.sharedMesh = beam.SourceFilter.sharedMesh;
                 source.forceRenderingOff = true;
                 var node = source.transform;
                 var billboard = copy.transform;
@@ -85,16 +92,9 @@ namespace Gallop.Live
                 billboard.localScale = node.localScale;
                 Quaternion baseRotation = node.localRotation;
                 billboard.localRotation = baseRotation;
-                if (copy.gameObject.layer != source.gameObject.layer)
-                    copy.gameObject.layer = source.gameObject.layer;
-
-                // (RENDIMIENTO) SetActive/enabled solo si cambian: esto corre por haz y frame, y antes
-                // activaba/desactivaba cientos de GameObjects en cada frame aunque no cambiara nada.
-                bool wantActive = node.gameObject.activeSelf;
-                if (copy.gameObject.activeSelf != wantActive)
-                    copy.gameObject.SetActive(wantActive);
-                if (copy.enabled != source.enabled)
-                    copy.enabled = source.enabled;
+                copy.gameObject.layer = source.gameObject.layer;
+                copy.gameObject.SetActive(node.gameObject.activeSelf);
+                copy.enabled = source.enabled;
                 copy.forceRenderingOff = beam.SourceWasForcedOff;
                 if (!node.gameObject.activeInHierarchy || !source.enabled) continue;
                 if (copy.sharedMaterial != source.sharedMaterial) copy.sharedMaterial = source.sharedMaterial;

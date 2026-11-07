@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace Gallop.Live.Cutt
@@ -31,5 +31,20 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineColorCorrectionData : ILiveTimelineGroupDataWithName
     {
         public LiveTimelineKeyColorCorrectionDataList keys;
+    }
+
+    [Serializable]
+    public class LiveTimelineKeyMultiCameraColorCorrectionData : LiveTimelineKeyColorCorrectionData
+    {
+        public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.MultiCameraColorCorrection;
+    }
+    [Serializable]
+    public class LiveTimelineKeyMultiCameraColorCorrectionDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyMultiCameraColorCorrectionData> { }
+    [Serializable]
+    public class LiveTimelineMultiCameraColorCorrectionData : LiveTimelineMultiCameraPostEffect
+    {
+        public LiveTimelineKeyMultiCameraColorCorrectionDataList keys;
+        public LiveTimelineMultiCameraColorCorrectionData() : base("ColorCorrection") { }
+        public override ILiveTimelineKeyDataList GetKeyList() => keys;
     }
 }

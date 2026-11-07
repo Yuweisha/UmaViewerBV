@@ -4,9 +4,52 @@ namespace Gallop
 {
     public static class GraphicSettings
     {
-  
+        public static LiveDirtGlobalSettings DirtSettings { get; internal set; }
+        // GraphicSettings -> GraphicModule -> BlurPanelManager owner bridge.
+        // Empty until real UI panel owners are registered; never synthesize Live blur.
+        public static readonly RenderPipeline.BlurPanelManager BlurPanels = new RenderPipeline.BlurPanelManager();
+        // Original Graphics3DQuality values. Offline authoring uses the native
+        // Live4K branch, including its deliberately smaller blur work targets.
+        public enum Graphics3DQuality { None = 0, Light = 1, Normal = 2, Resolution4k = 3 }
+        public static Graphics3DQuality Current3DQuality
+        {
+            get
+            {
+#if UNITY_EDITOR
+                // Isolated all-song default-settings regression: normal image
+                // quality with the original default Live4K option disabled.
+                if(System.Environment.GetEnvironmentVariable("UMA_LIVE18_DEFAULT_OPTIONS")=="1")
+                    return Graphics3DQuality.Normal;
+                // Isolated comparison only; no game/user config is rewritten.
+                if (System.Environment.GetEnvironmentVariable("UMA_LIVE18_LEGACY_NON4K") == "1")
+                    return Graphics3DQuality.None;
+#endif
+                return Graphics3DQuality.Resolution4k;
+            }
+        }
+        public static bool IsLive4KQuality => Current3DQuality == Graphics3DQuality.Resolution4k;
+
+        // Original 2.32.0 IsUseImageEffect (0x4c33540): only Light (1)
+        // bypasses the main post chain; None (0) still permits it.
+        public static bool IsUseImageEffect() => UseImageEffectForQuality(Current3DQuality);
+        internal static bool UseImageEffectForQuality(Graphics3DQuality quality) => quality != Graphics3DQuality.Light;
+
+        // Native InitializeAfterShaderLoad 0x4af26c0 / SetEffectTimeScale
+        // 0x4af46c0. The original effect shaders multiply their UV animation
+        // clock by this global; leaving Unity's default zero freezes distortion.
+        public static void InitializeAfterShaderLoad()
+        {
+            SetEffectTimeScale(1f);
+            GraphicSettingsDirtRuntime.EnsureExists();
+        }
+
+        public static void SetEffectTimeScale(float timeScale)
+        {
+            Shader.SetGlobalFloat(ShaderManager.GetPropertyId(ShaderManager.PropertyId._GlobalTimeScale), timeScale);
+        }
+
         //* 图像效果能力开关
-        //* 当前项目固定使用最高画质,因此静态初始化时全部开启
+        //* Original static effect flags; user-setting selection is a separate owner.
         public static bool IsGlobalFog;
         public static bool IsSunShaft;
         public static bool IsTiltShift;
@@ -32,8 +75,14 @@ namespace Gallop
 
         static GraphicSettings()
         {
-            // 项目固定使用最高图像效果画质
-            SetGameQualityImageEffect(true);
+            // Native .cctor 0x4af5e50 writes all eighteen flags true.
+            // Do not replace it with SetGameQualityImageEffect(true): that
+            // method deliberately preserves ColorCorrection and RainSplash.
+            IsGlobalFog=IsSunShaft=IsTiltShift=IsIndirectLightShaft=true;
+            IsBloom=IsDOF=IsScreenOverlay=IsDiffution=IsRadialBlur=true;
+            IsFluctuation=IsLensDistortion=IsChromaticAberration=true;
+            IsColorCorrection=IsColorGrading=IsToneCurve=IsExposure=true;
+            IsTransmittedLight=IsRainSplash=true;
         }
 
         public static void SetGameQualityImageEffect(bool isNormal)
@@ -60,7 +109,7 @@ namespace Gallop
             IsExposure = isNormal;
             IsTransmittedLight = isNormal;
 
-            
+
         }
 
         public enum LayerIndex
@@ -81,7 +130,8 @@ namespace Gallop
             LayerBackground3D_NotReflect = 13,
             LayerCharacter3D_NotReflect = 14,
             LayerCharacter3D_0 = 15,
-            LayerCharacter3D_1 = 16
+            LayerCharacter3D_1 = 16,
+            LayerCharaMini = 20
         }
 
         public static int GetLayer(LayerIndex layerIndex)
@@ -106,6 +156,7 @@ namespace Gallop
                 case LayerIndex.LayerCharacter3D_NotReflect: layerName = "Character3D_NotReflect"; break;
                 case LayerIndex.LayerCharacter3D_0: layerName = "Character3D_0"; break;
                 case LayerIndex.LayerCharacter3D_1: layerName = "Character3D_1"; break;
+                case LayerIndex.LayerCharaMini: layerName = "CharaMini"; break;
                 default: return -1;
             }
             int layer = LayerMask.NameToLayer(layerName);

@@ -23,8 +23,9 @@ namespace Gallop.Live.Cutt
                 return LiveTimelineKeyDataType.BgColor1;
             }
         }
-        private const int ATTR_SILHOUETTE = 1 << 15;
-        private const int ATTR_SYNC_BLINKLIGHT = 1 << 16;
+        private const int ATTR_SILHOUETTE = 1 << 16;
+        private const int ATTR_SYNC_BLINKLIGHT = 1 << 17;
+        private const int ATTR_ENABLED_FAKE_LIGHT = 1 << 18;
 
         public Color color;
         public float power;
@@ -45,6 +46,10 @@ namespace Gallop.Live.Cutt
         public int BlinkLightContainerIndex;
         public float BlinkLightBrightnessPower;
         public bool IsAdjustedBlinkLightColor;
+        public float FakeLightRate = 1f;
+        public Color FakeLightReceiveColor = Color.white;
+        public int FakeLightBlendMode = 4;
+        public bool IsFakeLightOutline;
         public LiveTimelineKeyLoopType loopType;
         public int loopCount;
         public int loopExecutedCount;
@@ -58,8 +63,9 @@ namespace Gallop.Live.Cutt
         public int _loopIntervalFrame;
         public bool _isChangeLoopInterpolate;
 
-        public bool IsSilhouette => (flags & ATTR_SILHOUETTE) != 0;
-        public bool IsSyncBlinkLight => (flags & ATTR_SYNC_BLINKLIGHT) != 0;
+        public bool IsSilhouette => ((int)attribute & ATTR_SILHOUETTE) != 0;
+        public bool IsSyncBlinkLight => ((int)attribute & ATTR_SYNC_BLINKLIGHT) != 0;
+        public bool IsEnabledFakeLight => ((int)attribute & ATTR_ENABLED_FAKE_LIGHT) != 0;
     }
 
     [Serializable]

@@ -1,4 +1,4 @@
-﻿using BaseNcoding;
+using BaseNcoding;
 using System;
 using System.Security.Cryptography;
 using System.Text;
@@ -121,29 +121,16 @@ public struct ManifestEntry
     public class FullEntryLineReader : ILineParser<ManifestEntry> 
     {
 
-        // Every Default-manifest row ends with an extra 8-byte field (schema type 19) that
-        // the original parser never consumed. Each following row then started 8 bytes early,
-        // so its name picked up the previous row's tail — that is the U+FFFD/binary prefix on
-        // 89% of the rebuilt names, and because hname is SHA1(checksum, size, name) those rows
-        // ended up pointing at hashes the CDN does not have (404 on download).
-        // Verified against the game's own meta: skipping the 8 bytes makes 20/20 sampled rows
-        // produce exactly the hname the game stores.
-        private const int TrailingFieldSize = 8;
-
         public void Parse(byte[] buf, ref int offset, ref ManifestEntry dat) 
         {
             dat.name = GetArray(ReadText(buf, ref offset));
             dat.deps = GetArray(ReadText(buf, ref offset));
             dat.group = (uint)ReadVLQ(buf, ref offset, 4);
             dat.priority = (uint)ReadVLQ(buf, ref offset, 4);
-            dat.size = (uint)ReadVLQ(buf, ref offset, 8);
+            dat.size = ReadVLQ(buf, ref offset, 8);
             dat.checksum = ReadUNum(buf, ref offset, 8);
-
-            if (offset + TrailingFieldSize <= buf.Length)
-            {
-                offset += TrailingFieldSize;
-            }
-
+            // Default records contain an additional fixed-width field after checksum.
+            ReadUNum(buf, ref offset, 8);
             dat.hname = CalHNameString(dat.checksum, dat.size, dat.name);
             dat.tname = Encoding.UTF8.GetString(dat.name);
             dat.tdeps = (dat.deps == null ? null : Encoding.UTF8.GetString(dat.deps));

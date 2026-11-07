@@ -59,6 +59,9 @@ namespace Gallop.Live.Cutt
 
         // +0x58
         public bool UseWashLightBlendMode;
+        public bool IsEnabledFakeLightOverride;
+        public float FakeLightRadiusScale;
+        public float FakeLightIntensityScale;
     }
 
     // 官方 UpdateInfo 本身不带 data/rootName/currentLiveTime，

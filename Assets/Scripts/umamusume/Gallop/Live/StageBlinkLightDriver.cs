@@ -11,8 +11,10 @@ namespace Gallop.Live
     {
         public bool verboseLog = false;
 
-        public float emissionBoost = 1.1f;
-        public float blinkSimpleUseNormalCorrection = 0f;
+        // Serialized compatibility only. Native Blink.Update (current DLL RVA
+        // 0x4e64ff0) preserves authored power/normal-correction material values.
+        [HideInInspector] public float emissionBoost = 1f;
+        [HideInInspector] public float blinkSimpleUseNormalCorrection = 1f;
         public float localTimeScale = 1f;
         public float powerSmoothing = 0f;
         public float offEps = 0.0001f;
@@ -49,6 +51,9 @@ namespace Gallop.Live
         private StageController _stage;
         private MaterialPropertyBlock _mpb;
         private Func<float> _liveNowGetter;
+        // Director owns one generated 10x64 table shared by all Blink controllers.
+        // A missing binding must remain visible rather than use unrelated hash noise.
+        public RandomRatioTable RandomRatios { get; set; }
 
         private float LiveNow()
         {
@@ -84,14 +89,6 @@ namespace Gallop.Live
 
         private bool _allOffInited = false;
         private readonly List<string> _tmpKeys = new List<string>(256);
-
-        private struct GroundPick
-        {
-            public string root;
-            public int frame;
-        }
-
-        private readonly Dictionary<string, GroundPick> _groundChosen = new Dictionary<string, GroundPick>(16);
 
         private sealed class LightContainerState
         {
@@ -134,6 +131,7 @@ namespace Gallop.Live
             public readonly Color[] color1 = new Color[kMaxBlinkSlots];
             public readonly bool[] isReverseHue = new bool[kMaxBlinkSlots];
             public readonly Vector4[] currentColors = new Vector4[kMaxBlinkSlots];
+            public readonly Color[] shaderColors = new Color[kMaxBlinkSlots];
             public readonly LightContainerState[] slots = new LightContainerState[kMaxBlinkSlots];
 
             public BlinkRootRuntime(string runtimeKey)
@@ -165,13 +163,14 @@ namespace Gallop.Live
             new Dictionary<string, List<RootCache>>(StringComparer.Ordinal);
         private Gallop.RenderPipeline.RecoveredLensFlareController _registeredFlares;
         private int _registeredUpdateFrame = -1;
+        private int _stageUpdateFrame = -1;
+        private int _inputRevision;
+        private int _appliedInputRevision = -1;
 
         private enum IndexMode
         {
             Invalid = -1,
-            LightPrefixNumber,
-            SuffixNumber,
-            LastDigits
+            LightPrefixNumber
         }
 
         private struct IndexToken
@@ -205,6 +204,8 @@ namespace Gallop.Live
 
             // 官方 RendererData 层
             public Gallop.RenderPipeline.CustomLensFlare customLensFlare;
+            public FakeLightSource fakeLightSource;
+            public bool fakeLightSourceInitialized;
             public WashLightController washLightController;
             public UnityLensFlareController unityLensFlareController;
             public Material material;
@@ -226,9 +227,10 @@ namespace Gallop.Live
             public bool renderOnState;
         }
 
-        private static readonly Regex ReLightPrefix = new Regex(@"^light(\d+)(?:_|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex ReSuffixNumber = new Regex(@"_(\d+)$", RegexOptions.Compiled);
-        private static readonly Regex ReLastDigits = new Regex(@"(\d+)(?!.*\d)", RegexOptions.Compiled);
+        // Native BlinkLightController.Initialize 0x4fbc360 discovers containers with
+        // Regex "light(?<index>\d\d\d)_" on each descendant transform's OWN name.
+        // It is case-sensitive, exactly three digits, and not anchored.
+        private static readonly Regex ReNativeLightIndex = new Regex(@"light(?<index>\d\d\d)_", RegexOptions.Compiled);
         private readonly List<Material> _sharedMaterialScratch = new List<Material>(4);
         private readonly List<Material> _blendMaterialScratch = new List<Material>(4);
 
@@ -265,6 +267,16 @@ namespace Gallop.Live
             _stage = dir ? dir._stageController : null;
 
             if (_ctl == null || _stage == null) return;
+            // One native Stage owns one Blink controller dictionary. The old
+            // Director prefab also contains a driver; do not let both subscribe
+            // to and overwrite the same stage lights in arbitrary Unity order.
+            var stageDriver = _stage.GetComponent<StageBlinkLightDriver>();
+            if (stageDriver != null && stageDriver != this)
+            {
+                _ctl = null;
+                _stage = null;
+                return;
+            }
 
             _liveNowGetter = BuildLiveNowGetter(_ctl);
             _ctl.OnUpdateBlinkLight += OnBlinkLight;
@@ -289,33 +301,29 @@ namespace Gallop.Live
             _allOffInited = false;
 
             _tmpKeys.Clear();
-            _groundChosen.Clear();
+            _stageUpdateFrame = -1;
+            _inputRevision = 0;
+            _appliedInputRevision = -1;
+        }
+
+        // Main-stage lights do not go through RegisterRoot (which is for props).
+        // Bind independently so a Live without props still forwards Blink colors.
+        internal void BindFlareController(Gallop.RenderPipeline.RecoveredLensFlareController flares)
+        {
+            _registeredFlares = flares;
         }
 
         internal void RegisterRoot(GameObject root, string nameSuffixToken,
             Gallop.RenderPipeline.RecoveredLensFlareController flares)
         {
-            if (root == null) return;
-            RegisterRootAs(root, root.name.Replace("(Clone)", string.Empty) + nameSuffixToken, flares);
-        }
-
-        // Registro con el nombre de la pista explicito. Los objetos del escenario se llaman
-        // `light000_blinkbeamlight_...` mientras que el timeline usa
-        // `pfb_env_live<BackGroundId>_blinkbeamlight_...`, asi que el nombre de coincidencia no se
-        // puede derivar del nombre del objeto.
-        internal void RegisterRootAs(GameObject root, string matchName,
-            Gallop.RenderPipeline.RecoveredLensFlareController flares)
-        {
-            if (root == null || string.IsNullOrEmpty(matchName)) return;
-            _registeredFlares = flares;
-            if (!_registeredRoots.TryGetValue(matchName, out var roots))
+            string name = root.name.Replace("(Clone)", string.Empty) + nameSuffixToken;
+            BindFlareController(flares);
+            if (!_registeredRoots.TryGetValue(name, out var roots))
             {
                 roots = new List<RootCache>();
-                _registeredRoots.Add(matchName, roots);
+                _registeredRoots.Add(name, roots);
             }
-            for (int i = 0; i < roots.Count; i++)
-                if (roots[i].rootGo == root) return;
-            string runtimeKey = matchName + "__U" + root.GetInstanceID();
+            string runtimeKey = name + "__U" + root.GetInstanceID();
             var cache = GetOrBuildRootCache(runtimeKey, root);
             roots.Add(cache);
             ApplyRootOffCached(runtimeKey, root);
@@ -372,59 +380,20 @@ namespace Gallop.Live
                    name.IndexOf("_blinkbeamlight", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static bool IsProtectedLedName(string name)
+        // Native container index: own GameObject name must contain lightDDD_ (case-sensitive).
+        private static bool TryParseNativeLightIndex(string name, out int index)
         {
-            return !string.IsNullOrEmpty(name) &&
-                   name.IndexOf("ledlight", StringComparison.OrdinalIgnoreCase) >= 0;
+            index = -1;
+            if (string.IsNullOrEmpty(name)) return false;
+            Match m = ReNativeLightIndex.Match(name);
+            if (!m.Success) return false;
+            if (!int.TryParse(m.Groups["index"].Value, out index)) return false;
+            return index >= 0 && index < kMaxBlinkSlots;
         }
 
         private static IndexToken InvalidToken()
         {
             return new IndexToken { valid = false, mode = IndexMode.Invalid, n = 0 };
-        }
-
-        private static IndexToken ParseIndexToken(string childName)
-        {
-            if (string.IsNullOrEmpty(childName))
-                return InvalidToken();
-
-            var m = ReLightPrefix.Match(childName);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out int lightN))
-                return new IndexToken { valid = true, mode = IndexMode.LightPrefixNumber, n = lightN };
-
-            m = ReSuffixNumber.Match(childName);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out int suffixN))
-                return new IndexToken { valid = true, mode = IndexMode.SuffixNumber, n = suffixN };
-
-            m = ReLastDigits.Match(childName);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out int lastN))
-                return new IndexToken { valid = true, mode = IndexMode.LastDigits, n = lastN };
-
-            return InvalidToken();
-        }
-
-        private static bool TryParseLightOwnerIndex(string name, out int index)
-        {
-            index = -1;
-            if (string.IsNullOrEmpty(name)) return false;
-
-            var m = ReLightPrefix.Match(name);
-            if (!m.Success) return false;
-
-            return int.TryParse(m.Groups[1].Value, out index);
-        }
-
-        private string ResolveIndexedOwnerName(Transform t, Transform root)
-        {
-            while (t != null && t != root)
-            {
-                string n = t.name ?? "";
-                if (TryParseLightOwnerIndex(n, out _))
-                    return n;
-
-                t = t.parent;
-            }
-            return null;
         }
 
         private static bool TryReadBoolMember(object obj, out bool value, params string[] names)
@@ -533,6 +502,11 @@ namespace Gallop.Live
                     if (!probeTimelineOncePerFrame || _probeFrame != f)
                     {
                         _probeFrame = f;
+                        Debug.Log(
+                            $"[TL] frame={f} root={rootName} " +
+                            $"progressTime={info.progressTime:F6} keyIndex={info.keyIndex} " +
+                            $"blend={info.LightBlendMode} washBlend={info.UseWashLightBlendMode}"
+                        );
                     }
                 }
             }
@@ -545,9 +519,47 @@ namespace Gallop.Live
                 currentLiveTime = currentLiveTime,
                 updatedFrame = Time.frameCount
             };
+            ++_inputRevision;
+            if (_stage == null || _stage.StageObjectMap == null) return;
+            InitializeLightsOff();
+            // Native UpdateInfo immediately updates the raw LightContainer
+            // power. Later timeline consumers (including transmitted masks)
+            // can query it before Stage.AlterUpdate builds the color array.
+            if (_registeredRoots.TryGetValue(rootName, out var roots))
+            {
+                foreach (var root in roots)
+                    if (root.rootGo != null)
+                        PrepareRootRuntime(root.rootName, root.rootGo, ref info, currentLiveTime);
+            }
+            else if (_stage.StageObjectMap.TryGetValue(rootName, out var owner) && owner != null)
+                PrepareRootRuntime(rootName, owner, ref info, currentLiveTime);
         }
 
         private void LateUpdate()
+        {
+            if (_stageUpdateFrame == Time.frameCount && _appliedInputRevision == _inputRevision) return;
+            AlterUpdateStageLights();
+        }
+
+        private void InitializeLightsOff()
+        {
+            if (_allOffInited) return;
+            InitAllStageLightsOff();
+            _allOffInited = true;
+        }
+
+        private void PrepareRootRuntime(string key, GameObject owner, ref BlinkLightUpdateInfo info, float time)
+        {
+            var cache = GetOrBuildRootCache(key, owner);
+            if (cache.slotCount <= 0) return;
+            var prepared = info;
+            prepared.progressTime *= Mathf.Max(0.0001f, localTimeScale);
+            ApplyUpdateInfoToRuntime(GetOrCreateRuntime(key), cache.slotCount, prepared, time);
+        }
+
+        // Explicit Stage.AlterUpdate phase, after timeline dispatch and before
+        // mask rendering, late fake-light receivers and flare brightness.
+        internal void AlterUpdateStageLights()
         {
             if (_ctl == null || _stage == null)
                 BindIfPossible();
@@ -555,11 +567,7 @@ namespace Gallop.Live
             if (_ctl == null || _stage == null || _stage.StageObjectMap == null)
                 return;
 
-            if (!_allOffInited)
-            {
-                InitAllStageLightsOff();
-                _allOffInited = true;
-            }
+            InitializeLightsOff();
 
             if (_latest.Count == 0)
                 return;
@@ -634,9 +642,11 @@ namespace Gallop.Live
                     }
             }
 
-            // Exclusivity must be enforced AFTER the cached timeline update:
-            // otherwise ApplyToRootCached immediately turns the losing panel on again.
-            EnforceGroundPanelExclusive();
+            // Original Stage.AlterUpdate ticks every registered controller
+            // independently (Dictionary.ValueCollection loop 0x4ff8f2f..0x4ff8fbe).
+            // No cross-root visibility is derived from timeline update order.
+            _stageUpdateFrame = Time.frameCount;
+            _appliedInputRevision = _inputRevision;
         }
 
         private BlinkRootRuntime GetOrCreateRuntime(string runtimeKey)
@@ -686,9 +696,9 @@ namespace Gallop.Live
             rc.rootIsBeam = IsBeamRootName(rc.rootName);
 
             var pendingRenderers = new List<RendererEntry>(64);
-            int maxColorIndex = -1;
+            var colorIndices = new HashSet<int>();
 
-            var transforms = rc.rootGo.GetComponentsInChildren<Transform>(true);
+            var transforms = rc.rootGo.GetComponentsInChildren<Transform>();
             for (int i = 0; i < transforms.Length; i++)
             {
                 var t = transforms[i];
@@ -698,13 +708,7 @@ namespace Gallop.Live
                 if (go == null || go == rc.rootGo) continue;
 
                 string directName = go.name ?? "";
-                if (IsProtectedLedName(directName)) continue;
-
-                string childName = ResolveIndexedOwnerName(t, rc.rootGo.transform);
-                if (string.IsNullOrEmpty(childName)) continue;
-
-                if (!TryParseLightOwnerIndex(childName, out int colorIndex))
-                    continue;
+                if (!TryParseNativeLightIndex(directName, out int colorIndex)) continue;
 
                 var token = new IndexToken
                 {
@@ -713,27 +717,26 @@ namespace Gallop.Live
                     n = colorIndex
                 };
 
-                if (colorIndex < 0 || colorIndex >= kMaxBlinkSlots)
-                    continue;
-
-                maxColorIndex = Mathf.Max(maxColorIndex, colorIndex);
-
                 var r = t.GetComponent<Renderer>();
                 if (r != null)
                 {
+                    colorIndices.Add(colorIndex);
                     bool isBlinkSimple, isUvAlphaMask, isLightAdd1, hasColorPowerMultiply, isLightBlinkBlend;
                     DetectType(r, out isBlinkSimple, out isUvAlphaMask, out isLightAdd1, out hasColorPowerMultiply, out isLightBlinkBlend);
 
                     var wash = go.GetComponent<WashLightController>();
                     var flare = go.GetComponent<UnityLensFlareController>();
+                    // Native Blink.Initialize @ 4fbc7f0 transfers color ownership.
+                    if (flare != null) flare.IsEnabledShaderColor = false;
                     var customFlare = go.GetComponent<Gallop.RenderPipeline.CustomLensFlare>();
                     var runtimeMat = r.material;
                     var mats = r.sharedMaterials;
+                    if(mats!=null)foreach(var material in mats)LiveBlinkRenderQueue.Apply(material);
                     pendingRenderers.Add(new RendererEntry
                     {
                         r = r,
                         stableSlot = pendingRenderers.Count,
-                        cachedChildName = childName,
+                        cachedChildName = directName,
                         token = token,
                         rawIndex = colorIndex,
                         colorIndex = colorIndex,
@@ -766,7 +769,9 @@ namespace Gallop.Live
                 }
             }
 
-            rc.slotCount = Mathf.Clamp(maxColorIndex + 1, 0, kMaxBlinkSlots);
+            // Native Initialize 0x4fbc360 uses HashSet<int>.Count, capped at
+            // ten. It is a phase count, not the largest raw renderer index.
+            rc.slotCount = Mathf.Min(colorIndices.Count, kMaxBlinkSlots);
 
             for (int i = 0; i < pendingRenderers.Count; i++)
                 rc.renderers.Add(pendingRenderers[i]);
@@ -783,6 +788,7 @@ namespace Gallop.Live
                 {
                     var e = rc.renderers[i];
                     string n = (e.r != null) ? e.r.name : "<null>";
+                    Debug.Log($"[BlinkMap] root={rc.rootName} renderer={n} owner={e.cachedChildName} rawIndex={e.rawIndex} colorIndex={e.colorIndex}");
                 }
             }
         }
@@ -896,55 +902,6 @@ namespace Gallop.Live
             if (verboseLog) Debug.Log("[StageBlinkLightDriver] InitAllStageLightsOff done");
         }
 
-        private void EnforceGroundPanelExclusive()
-        {
-            _groundChosen.Clear();
-
-            foreach (var kv in _latest)
-            {
-                string rootName = kv.Key;
-                string g = GetGroundPanelGroupBase(rootName);
-                if (g == null) continue;
-
-                var item = kv.Value;
-                if (!_groundChosen.TryGetValue(g, out var cur) || item.updatedFrame > cur.frame)
-                    _groundChosen[g] = new GroundPick { root = rootName, frame = item.updatedFrame };
-            }
-
-            if (_groundChosen.Count == 0) return;
-
-            foreach (var kv in _stage.StageObjectMap)
-            {
-                string name = kv.Key;
-                var go = kv.Value;
-                if (go == null) continue;
-
-                string g = GetGroundPanelGroupBase(name);
-                if (g == null) continue;
-
-                if (_groundChosen.TryGetValue(g, out var pick) && name != pick.root)
-                {
-                    ApplyRootOffCached(name, go);
-                    // A black MPB is not an occlusion/depth disable (and the
-                    // non-MPB path explicitly resets forceRenderingOff=false).
-                    // Keep the non-selected coplanar panel out of the depth pass.
-                    var cache = GetOrBuildRootCache(name, go);
-                    for (int i = 0; i < cache.renderers.Count; i++)
-                    {
-                        var renderer = cache.renderers[i].r;
-                        if (renderer != null) renderer.forceRenderingOff = true;
-                    }
-                }
-            }
-        }
-
-        private static string GetGroundPanelGroupBase(string rootName)
-        {
-            int i = rootName.IndexOf("_blinklight_ground_panel", StringComparison.Ordinal);
-            if (i < 0) return null;
-            return rootName.Substring(0, i + "_blinklight_ground_panel".Length);
-        }
-
         private int GetRootBase(string rootName)
         {
             if (_rootBase.TryGetValue(rootName, out int b)) return b;
@@ -963,8 +920,6 @@ namespace Gallop.Live
             ApplyUpdateInfoToRuntime(rt, rc.slotCount, updateInfo, liveNow);
             BuildCurrentColors(rt, rc.slotCount);
             SetWashLightBlendMode(rc, updateInfo.UseWashLightBlendMode);
-            int baseOrder = GetRootBase(runtimeKey);
-            int stride = Mathf.Max(1, stableSortStride);
 
             for (int i = 0; i < rc.renderers.Count; i++)
             {
@@ -976,15 +931,13 @@ namespace Gallop.Live
                     continue;
                 }
 
-                // (RENDIMIENTO) El nombre del "owner" NO cambia en runtime: se resuelve una sola vez
-                // (BuildRootCache ya lo deja relleno). Antes se recorria la jerarquia y se comparaban
-                // strings por CADA renderer y frame, con cientos de renderers de blinklight.
-                if (string.IsNullOrEmpty(e.cachedChildName))
-                {
-                    string resolvedName = ResolveIndexedOwnerName(r.transform, rc.rootGo.transform) ?? "";
-                    e.cachedChildName = resolvedName;
+                string childName = r.gameObject.name ?? "";
 
-                    if (TryParseLightOwnerIndex(resolvedName, out int idx))
+                if (!ReferenceEquals(childName, e.cachedChildName) && childName != e.cachedChildName)
+                {
+                    e.cachedChildName = childName;
+
+                    if (TryParseNativeLightIndex(childName, out int idx))
                     {
                         e.token = new IndexToken
                         {
@@ -1006,7 +959,7 @@ namespace Gallop.Live
                 }
 
                 int slotIndex = e.colorIndex;
-                if (slotIndex < 0 || slotIndex >= rc.slotCount)
+                if (slotIndex < 0 || slotIndex >= kMaxBlinkSlots)
                 {
                     rc.renderers[i] = e;
                     continue;
@@ -1038,6 +991,7 @@ namespace Gallop.Live
 
                     e.cachedSharedMaterialsRef = _sharedMaterialScratch.ToArray();
                     e.cachedSharedMaterialsLen = matsLen;
+                    foreach(var material in e.cachedSharedMaterialsRef)LiveBlinkRenderQueue.Apply(material);
                 }
 
                 Vector4 slotColor = rt.currentColors[slotIndex];
@@ -1059,16 +1013,36 @@ namespace Gallop.Live
                     p = e.smoothedP;
                 }
 
-                Color currentColor = new Color(slotColor.x, slotColor.y, slotColor.z, 1f);
-                // Native Blink.Update writes its power-weighted current color directly
-                // to the flare, with shader-color reading disabled (Komoe 0x7192856).
+                Color currentColor = rt.shaderColors[slotIndex];
+                Color weightedColor = currentColor * p;
+                if (!e.fakeLightSourceInitialized)
+                {
+                    e.fakeLightSourceInitialized = true;
+                    if (FakeLightSource.TryGetLocators(r.transform, out var startLocator, out var endLocator))
+                    {
+                        e.fakeLightSource = r.GetComponent<FakeLightSource>() ?? r.gameObject.AddComponent<FakeLightSource>();
+                        e.fakeLightSource.Initialize(startLocator, endLocator);
+                    }
+                }
+                if (e.fakeLightSource != null)
+                {
+                    e.fakeLightSource.LightColor = weightedColor;
+                    var fakeInfo = new FakeLightUpdateInfo {
+                        IsEnabled = updateInfo.IsEnabledFakeLightOverride,
+                        RadiusScale = updateInfo.FakeLightRadiusScale,
+                        IntensityScale = updateInfo.FakeLightIntensityScale
+                    };
+                    e.fakeLightSource.SetUpdateInfo(ref fakeInfo);
+                }
+                // Current game Blink.Update writes the same power-weighted vector
+                // to Material.SetVector and UnityLensFlareController.Color.
                 if (e.customLensFlare != null)
-                    _registeredFlares?.SetBlinkColor(e.customLensFlare, currentColor * p);
+                    _registeredFlares?.SetBlinkColor(e.customLensFlare, weightedColor);
 
-                int uvBias = (rc.rootIsUv || e.isUvAlphaMask) ? uvSortingBias : 0;
-                int wantSortingOrder = baseOrder + uvBias + e.stableSlot * stride;
-                if (r.sortingOrder != wantSortingOrder)
-                    r.sortingOrder = wantSortingOrder;
+                // The original initializes material queues by shader leaf and
+                // preserves authored renderer sorting. Root/UV/slot biases here
+                // override Unity's transparent distance sorting and cause lights
+                // from separate roots to draw through receivers in the wrong order.
 
                 EnsureLightBlinkBlendState(r, ref e, rt.lightBlendMode);
 
@@ -1108,7 +1082,7 @@ namespace Gallop.Live
     BlinkLightUpdateInfo u,
     float liveNow)
         {
-            rt.localTime = Mathf.Max(0f, u.progressTime);
+            rt.localTime = u.progressTime;
             rt.liveTime = liveNow;
             rt.lightBlendMode = (int)u.LightBlendMode;
             rt.pattern = (int)u.pattern;
@@ -1122,7 +1096,10 @@ namespace Gallop.Live
             float rawWaitTime = u.waitTime;
             float rawIntervalTime = Mathf.Max(0f, u.intervalTime);
 
-            for (int i = 0; i < slotCount; i++)
+            // Native UpdateInfo updates all ten containers. LightContainerCount
+            // only determines Descend staggering; sparse renderer indices still
+            // address their original container rather than being truncated.
+            for (int i = 0; i < kMaxBlinkSlots; i++)
             {
                 var s = rt.slots[i];
                 s.index = i;
@@ -1130,14 +1107,14 @@ namespace Gallop.Live
                 s.progressTime = rt.localTime;
                 s.pattern = rt.pattern;
 
-                s.basePower = Mathf.Max(0f, PickFloat(u.powerArray, i, 1f));
-                s.powerMin = Mathf.Max(0f, u.powerMin);
-                s.powerMax = Mathf.Max(0f, u.powerMax);
+                s.basePower = PickFloat(u.powerArray, i, 1f);
+                s.powerMin = u.powerMin;
+                s.powerMax = u.powerMax;
                 s.powerDiff = Mathf.Max(0f, s.powerMax - s.powerMin);
 
-                s.loopCountMax = Mathf.Max(0, u.loopCount);
+                s.loopCountMax = u.loopCount;
 
-                s.waitTime = 0f;
+                s.waitTime = Mathf.Max(0f, rawWaitTime);
                 s.turnOnTime = Mathf.Max(0.05f, u.turnOnTime);
                 s.turnOffTime = Mathf.Max(0.05f, u.turnOffTime);
                 s.keepTime = Mathf.Max(0f, u.keepTime);
@@ -1163,35 +1140,12 @@ namespace Gallop.Live
                     s.waitTime = (slotCount - i - 1) * rawWaitTime;
                 }
 
-                s.loopTime = s.turnOnTime + s.keepTime + s.turnOffTime + s.intervalTime;
+                // Native SetUpdateInfo 0x4e826c9 adds off, on, keep, interval
+                // in this order. Reassociation changes loop indices at cuts.
+                s.loopTime = NativeFloat(NativeFloat(s.turnOffTime + s.turnOnTime) + s.keepTime) + s.intervalTime;
                 UpdateSlotState(s);
             }
 
-            for (int i = slotCount; i < kMaxBlinkSlots; i++)
-            {
-                var s = rt.slots[i];
-                s.index = i;
-                s.keyIndex = keyIndexProxy;
-                s.progressTime = 0f;
-                s.pattern = 0;
-                s.basePower = 0f;
-                s.powerMin = 0f;
-                s.powerMax = 0f;
-                s.powerDiff = 0f;
-                s.loopCountMax = 0;
-                s.waitTime = 0f;
-                s.turnOnTime = 0.05f;
-                s.turnOffTime = 0.05f;
-                s.keepTime = 0f;
-                s.intervalTime = 0f;
-                s.loopTime = 0f;
-                s.currentPower = 0f;
-                s.currentHRatio = 0f;
-                s.currentSRatio = 0f;
-                s.currentVRatio = 0f;
-                s.loopCount = 0;
-                rt.currentColors[i] = Vector4.zero;
-            }
         }
 
         private static int GetKeyIndexProxy(LiveTimelineKeyBlinkLightData k)
@@ -1223,7 +1177,15 @@ namespace Gallop.Live
             return k.frame;
         }
 
-        private static void UpdateSlotState(LightContainerState s)
+        // IL2CPP performs each scalar operation as float32. Mono can retain
+        // wider intermediates; force rounding before period/phase boundaries.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static float NativeFloat(float value)
+        {
+            return BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(value));
+        }
+
+        private void UpdateSlotState(LightContainerState s)
         {
             int pattern = s.pattern;
             if (pattern >= 1 && pattern <= 3)
@@ -1231,16 +1193,13 @@ namespace Gallop.Live
                 if (s.waitTime > 0f && s.waitTime > s.progressTime)
                 {
                     s.currentPower = 0f;
-                    s.currentHRatio = 0f;
-                    s.currentSRatio = 0f;
-                    s.currentVRatio = 0f;
                     s.loopCount = 0;
                     return;
                 }
 
-                float loopTime = Mathf.Max(0.0001f, s.loopTime);
-                float t = s.progressTime - s.waitTime;
-                int loopCount = Mathf.FloorToInt(t / loopTime);
+                float loopTime = s.loopTime;
+                float t = NativeFloat(s.progressTime - s.waitTime);
+                int loopCount = (int)NativeFloat(t / loopTime);
                 s.loopCount = loopCount;
 
                 bool forceOff = false;
@@ -1268,35 +1227,35 @@ namespace Gallop.Live
                     return;
                 }
 
-                float phase = (s.progressTime - s.waitTime) - (s.loopCount * loopTime);
+                float phase = NativeFloat(t - NativeFloat(s.loopCount * loopTime));
 
                 if (phase < s.turnOnTime)
                 {
-                    float u = phase / Mathf.Max(0.0001f, s.turnOnTime);
+                    float u = NativeFloat(phase / s.turnOnTime);
                     if (s.loopCount > 0)
-                        s.currentPower = (u * s.powerDiff) + s.powerMin;
+                        s.currentPower = NativeFloat(u * s.powerDiff) + s.powerMin;
                     else
                         s.currentPower = u * s.powerMax;
                     return;
                 }
 
-                if (phase < s.turnOnTime + s.keepTime)
+                if (phase < NativeFloat(s.turnOnTime + s.keepTime))
                 {
                     s.currentPower = s.powerMax;
                     return;
                 }
 
-                if (phase >= s.turnOnTime + s.keepTime + s.turnOffTime)
+                if (phase >= NativeFloat(NativeFloat(s.keepTime + s.turnOnTime) + s.turnOffTime))
                 {
                     s.currentPower = isLastLoop ? 0f : s.powerMin;
                     return;
                 }
 
-                float u2 = 1f - ((phase - (s.turnOnTime + s.keepTime)) / Mathf.Max(0.0001f, s.turnOffTime));
+                float u2 = NativeFloat(1f - NativeFloat(NativeFloat(phase - NativeFloat(s.keepTime + s.turnOnTime)) / s.turnOffTime));
                 if (isLastLoop)
                     s.currentPower = u2 * s.powerMax;
                 else
-                    s.currentPower = (u2 * s.powerDiff) + s.powerMin;
+                    s.currentPower = NativeFloat(u2 * s.powerDiff) + s.powerMin;
             }
             else
             {
@@ -1304,19 +1263,21 @@ namespace Gallop.Live
                 s.currentHRatio = 0f;
                 s.currentSRatio = 0f;
                 s.currentVRatio = 0f;
-                s.loopCount = 0;
             }
         }
 
         private static void BuildCurrentColors(BlinkRootRuntime rt, int slotCount)
         {
-            for (int i = 0; i < slotCount; i++)
+            for (int i = 0; i < kMaxBlinkSlots; i++)
             {
                 var s = rt.slots[i];
                 float p = Mathf.Max(0f, s.currentPower);
                 Color outColor;
 
-                switch (rt.colorType)
+                // Native pattern None always takes color0, before ColorType dispatch.
+                if (rt.pattern == 0)
+                    outColor = SafeColor(rt.color0, i, Color.black);
+                else switch (rt.colorType)
                 {
                     case 1:
                         {
@@ -1366,6 +1327,11 @@ namespace Gallop.Live
                 }
 
                 rt.currentColors[i] = new Vector4(outColor.r, outColor.g, outColor.b, p);
+                // Every non-HSV branch explicitly clears vector.w at 0x4e654f4.
+                // Only GetColor's branch retains returned alpha * power.
+                if (rt.pattern == 0 || (rt.colorType >= 1 && rt.colorType <= 3))
+                    outColor.a = 0f;
+                rt.shaderColors[i] = outColor;
             }
         }
 
@@ -1395,31 +1361,8 @@ namespace Gallop.Live
                     e.hasSmoothed = false;
                     e.smoothedP = 0f;
 
-                    r.GetPropertyBlock(_mpb);
-
-                    if (e.isUvAlphaMask)
-                    {
-                        _mpb.SetColor("_MulColor0", Color.black);
-                        _mpb.SetColor("_MulColor1", Color.black);
-                        _mpb.SetFloat("_ColorPower", 0f);
-                        _mpb.SetFloat("_ColorPowerMultiply", emissionBoost);
-                        _mpb.SetFloat("_AppTime", LiveNow());
-                    }
-                    else if (e.isLightAdd1)
-                    {
-                        _mpb.SetColor("_MulColor0", Color.black);
-                        _mpb.SetColor("_MulColor1", Color.black);
-                        _mpb.SetFloat("_ColorPower", 0f);
-                        if (e.hasColorPowerMultiply) _mpb.SetFloat("_ColorPowerMultiply", emissionBoost);
-                    }
-                    else if (e.isBlinkSimple)
-                    {
-                        _mpb.SetColor("_BlinkLightColor", Color.black);
-                        _mpb.SetFloat("_ColorPower", 0f);
-                        _mpb.SetFloat("_UseNormalCorrection", blinkSimpleUseNormalCorrection);
-                    }
-
-                    r.SetPropertyBlock(_mpb);
+                    ApplyMpbToRenderer(r, Color.clear, 0f, LiveNow(),
+                        e.isBlinkSimple, e.isUvAlphaMask, e.isLightAdd1, e.hasColorPowerMultiply);
                 }
                 else
                 {
@@ -1608,27 +1551,19 @@ namespace Gallop.Live
             bool hasColorPowerMultiply)
         {
             r.GetPropertyBlock(_mpb);
-
-            if (isUvAlphaMask)
+            // Blink.Update uses SetVector, not SetColor; power is already in RGB.
+            // Do not replace authored _MulColor1, _ColorPower,
+            // _ColorPowerMultiply or _UseNormalCorrection.
+            Vector4 weighted = currentColor * p;
+            if (isUvAlphaMask || isLightAdd1)
             {
-                _mpb.SetColor("_MulColor0", currentColor);
-                _mpb.SetColor("_MulColor1", currentColor);
-                _mpb.SetFloat("_ColorPower", p);
-                _mpb.SetFloat("_ColorPowerMultiply", emissionBoost);
+                _mpb.SetVector("_MulColor0", weighted);
+                if (isUvAlphaMask)
                 _mpb.SetFloat("_AppTime", liveNow);
-            }
-            else if (isLightAdd1)
-            {
-                _mpb.SetColor("_MulColor0", currentColor);
-                _mpb.SetColor("_MulColor1", currentColor);
-                _mpb.SetFloat("_ColorPower", p);
-                if (hasColorPowerMultiply) _mpb.SetFloat("_ColorPowerMultiply", emissionBoost);
             }
             else if (isBlinkSimple)
             {
-                _mpb.SetColor("_BlinkLightColor", currentColor);
-                _mpb.SetFloat("_ColorPower", p * emissionBoost);
-                _mpb.SetFloat("_UseNormalCorrection", blinkSimpleUseNormalCorrection);
+                _mpb.SetVector("_BlinkLightColor", weighted);
             }
 
             r.SetPropertyBlock(_mpb);
@@ -1712,28 +1647,16 @@ namespace Gallop.Live
             hasColorPowerMultiply = hasMultiply;
         }
 
-        private static float GetOfficialStyleRatio01(int index, int keyIndex)
+        private float GetOfficialStyleRatio01(int index, int keyIndex)
         {
-            return GetDeterministicRatio01(index, keyIndex);
-        }
-
-        private static float GetDeterministicRatio01(int a, int b)
-        {
-            unchecked
-            {
-                uint x = 2166136261u;
-                x = (x ^ (uint)(a + 1)) * 16777619u;
-                x = (x ^ (uint)(b + 1)) * 16777619u;
-                x ^= x >> 13;
-                x *= 1274126177u;
-                x ^= x >> 16;
-                return (x & 0x00FFFFFFu) / 16777215.0f;
-            }
+            if (RandomRatios == null)
+                throw new InvalidOperationException("Director Blink RandomRatioTable is not installed.");
+            return RandomRatios.Get(index, keyIndex);
         }
 
         private static Color GetBlinkColor(Color color0, Color color1, float hueRatio, float saturationRatio, float valueRatio, bool isReverseHue)
         {
-            // Native BlinkLightController.GetColor 0x1a40ac0 compares RGBA,
+            // Current installed BlinkLightController.GetColor 0x4e63e20 compares RGBA,
             // interpolates hue directly (reverse subtracts one from h1), and requests HDR output.
             const float colorCompareEpsilon = 1e-10f;
             Vector4 a = color0;
@@ -1859,7 +1782,7 @@ namespace Gallop.Live
                 bool matched = false;
                 if (!string.IsNullOrEmpty(rootName) && string.Equals(candidateName, rootName, StringComparison.Ordinal))
                     matched = true;
-                else if (rootNameHash != 0 && Animator.StringToHash(candidateName) == rootNameHash)
+                else if (rootNameHash != 0 && FNVHash.Generate(candidateName) == rootNameHash)
                     matched = true;
 
                 if (!matched)
@@ -1875,6 +1798,22 @@ namespace Gallop.Live
                 return true;
             }
 
+            return false;
+        }
+
+        // Mask tracks use the original timeline hash and the LightContainer's
+        // raw current power, independently of the shader's premultiplied color.
+        public bool TryGetCurrentBlinkColorPowerByTimelineHash(int nameHash,int index,out float power)
+        {
+            power=0;if(index<0)return false;
+            foreach(var pair in _runtime)
+            {
+                string name=NormalizeRuntimeRootName(pair.Key);
+                if(string.IsNullOrEmpty(name)||FNVHash.Generate(name)!=nameHash)continue;
+                if(!_rootCache.TryGetValue(pair.Key,out var owner)||owner==null||owner.slotCount<=0||index>=kMaxBlinkSlots)return false;
+                var runtime=pair.Value;if(runtime==null||runtime.slots==null)throw new NullReferenceException();
+                power=runtime.slots[index].currentPower;return true;
+            }
             return false;
         }
 

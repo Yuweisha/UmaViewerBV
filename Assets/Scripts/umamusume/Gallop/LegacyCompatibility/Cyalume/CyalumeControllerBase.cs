@@ -10,4 +10,3 @@ namespace Gallop.Cyalume
         public bool _useUVAudienceSpread;
     }
 }
-

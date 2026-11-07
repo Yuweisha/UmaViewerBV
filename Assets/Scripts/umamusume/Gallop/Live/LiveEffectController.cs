@@ -16,6 +16,7 @@ namespace Gallop.Live
         private readonly Func<int, Transform> characterTransform;
         private readonly Func<string, int, Transform> stageTransform;
         private readonly int normalLayer, excludedColorCorrectionLayer, transparentLayer;
+        public Func<Transform> CameraOwner { get; set; }
 
         public LiveEffectController(Transform defaultParent, Transform worldOwner,
             Func<int, Transform> characterTransform, Func<string, int, Transform> stageTransform,
@@ -117,9 +118,11 @@ namespace Gallop.Live
 
         public static int CharacterIndex(int owner)
         {
-            if (owner >= 1 && owner <= 17) return owner - 1;
-            if (owner >= 23 && owner <= 24) return owner - 2;
-            return -1;
+            // Native LiveCharaPositionHelper.GetCharacterIndex 0x506cdb0:
+            // character slots are zero based; World/Camera/Stage interrupt
+            // that sequence. Place19/20 are enum20/21 and slots18/19.
+            if (owner == 18 || owner == 19 || owner == 22) return -1;
+            return owner < 18 ? owner : owner - 2;
         }
 
         public static bool IsOwnerEnabled(int owner, Func<int, bool> characterEnabled)
@@ -132,7 +135,7 @@ namespace Gallop.Live
         private Transform ResolveOwner(LiveEffectTimeline.EffectUpdateInfo info)
         {
             if (info.owner == 18) return null;
-            if (info.owner == 19) return worldOwner;
+            if (info.owner == 19) return CameraOwner != null ? CameraOwner() : worldOwner;
             if (info.owner == 22) return stageTransform?.Invoke(info.ParentStageObjectName, info.ParentStageObjectNameHash);
             int index = CharacterIndex(info.owner);
             return index >= 0 ? characterTransform?.Invoke(index) : null;
@@ -284,8 +287,7 @@ namespace Gallop.Live
                 {
                     if (parameter == null || !namedParticles.TryGetValue(parameter.ObjectNameHash, out var particle)
                         || particle == null) continue;
-                    if (particle.gameObject.activeSelf != parameter.IsEnabled)
-                        particle.gameObject.SetActive(parameter.IsEnabled);
+                    particle.gameObject.SetActive(parameter.IsEnabled);
                     var main = particle.main;
                     if (!particle.isPlaying && !Mathf.Approximately(main.duration, parameter.MainDuration)) main.duration = parameter.MainDuration;
                     main.loop = parameter.MainLooping;

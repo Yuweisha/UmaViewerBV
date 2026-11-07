@@ -134,6 +134,8 @@ public class UmaViewerGlobalShader : MonoBehaviour
         setGlobal();
     }
 
+    public void ApplyDefaultsForLive() => setGlobal();
+
     private void FixedUpdate()
     {
         //Used to calculate the correct outline

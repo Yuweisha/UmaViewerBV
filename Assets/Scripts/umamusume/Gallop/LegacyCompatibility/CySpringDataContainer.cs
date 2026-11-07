@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -117,24 +117,24 @@ namespace Gallop
         public void InitializePhysics(Dictionary<string, Transform> bones, Dictionary<string, Transform> colliders)
         {
             DynamicBones.Clear();
-        
+
             // 获取对象名称并判断类型
             string nameLower = gameObject.name.ToLower();
             bool isTailObject = nameLower.Contains("tail"); // 判断是否为尾巴
             bool isClothObject = !isTailObject && nameLower.Contains("chr"); // 判断是否为头发，排除尾巴避免重复匹配
-        
+
             foreach (CySpringParamDataElement spring in springParam)
             {
                 if (!bones.TryGetValue(spring._boneName, out Transform bone)) continue;
-        
+
                 var dynamic = bone.gameObject.AddComponent<DynamicBone>();
                 dynamic.m_Root = bone;
-        
+
                 // 设置重力
                 dynamic.m_Gravity = new Vector3(0, Mathf.Clamp01(-30f / spring._gravity), 0);
                 dynamic.m_LimitAngel_Min = spring._limitAngleMin;
                 dynamic.m_LimitAngel_Max = spring._limitAngleMax;
-        
+
                 // 主参数设置
                 if (isTailObject)
                 {
@@ -163,10 +163,10 @@ namespace Gallop
                     dynamic.m_Radius = spring._collisionRadius * 0.8f;
                     dynamic.m_Inert = spring.MoveSpringApplyRate / 3f;
                 }
-        
+
                 dynamic.SetupParticles();
                 DynamicBones.Add(dynamic);
-        
+
                 // 主碰撞器添加
                 foreach (string collisionName in spring._collisionNameList)
                 {
@@ -175,13 +175,13 @@ namespace Gallop
                         dynamic.Particles[0].m_Colliders.Add(tmp.GetComponent<DynamicBoneColliderBase>());
                     }
                 }
-        
+
                 // 子参数设置
                 foreach (var child in spring._childElements)
                 {
                     var tempParticle = dynamic.Particles.Find(p => p.m_Transform.gameObject.name == child._boneName);
                     if (tempParticle == null) continue;
-        
+
                     if (isTailObject)
                     {
                         // 尾巴子粒子
@@ -209,10 +209,10 @@ namespace Gallop
                         tempParticle.m_Radius = child._collisionRadius * 0.8f;
                         tempParticle.m_Inert = child.MoveSpringApplyRate / 2f;
                     }
-        
+
                     tempParticle.m_LimitAngel_Min = child._limitAngleMin;
                     tempParticle.m_LimitAngel_Max = child._limitAngleMax;
-        
+
                     // 子碰撞器添加
                     foreach (string collisionName in child._collisionNameList)
                     {

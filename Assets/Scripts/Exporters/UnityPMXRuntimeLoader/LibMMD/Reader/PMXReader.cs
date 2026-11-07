@@ -12,7 +12,6 @@ namespace LibMMD.Reader
     {
         const float JointSplingAmp = 0.08f;
         const float JointDampAmp = 0.08f;
-
         public override RawMMDModel Read(BinaryReader reader, ModelConfig config)
         {
             PmxMeta pmxHeader;
@@ -25,7 +24,7 @@ namespace LibMMD.Reader
                 throw new MMDFileParseException("Could not read pmx meta data.");
             }
 
-            if (!"PMX ".Equals(pmxHeader.Magic) || Math.Abs(pmxHeader.Version - 2.0f) > 0.0001f || pmxHeader.FileFlagSize !=8)
+            if (!"PMX ".Equals(pmxHeader.Magic) || Math.Abs(pmxHeader.Version - 2.0f) > 0.0001f || pmxHeader.FileFlagSize != 8)
             {
                 throw new MMDFileParseException("File is not a PMX 2.0 file");
             }
@@ -61,14 +60,11 @@ namespace LibMMD.Reader
                 var dofType = reader.ReadByte();
                 if (dofType == 0)
                 {
-                    joint.AssociatedRigidBodyIndex[0] =
-                        MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.RigidBodyIndexSize);
-                    joint.AssociatedRigidBodyIndex[1] =
-                        MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.RigidBodyIndexSize);
+                    joint.AssociatedRigidBodyIndex[0] = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.RigidBodyIndexSize);
+                    joint.AssociatedRigidBodyIndex[1] = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.RigidBodyIndexSize);
                     joint.Position = MMDReaderWriteUtil.ReadVector3(reader);
                     joint.Rotation = MMDReaderWriteUtil.ReadEulerRotation(reader);
-                    MMDReaderWriteUtil.ReadPositionLimitPair(
-                        reader, out Vector3 positionLowLimit, out Vector3 positionHiLimit);
+                    MMDReaderWriteUtil.ReadPositionLimitPair(reader, out Vector3 positionLowLimit, out Vector3 positionHiLimit);
                     joint.PositionLowLimit = positionLowLimit;
                     joint.PositionHiLimit = positionHiLimit;
                     // PMX Joint 角限制和旋转弹簧按文件中的弧度分量原样读取。
@@ -98,7 +94,6 @@ namespace LibMMD.Reader
             pmxConfig.BoneIndexSize = reader.ReadSByte();
             pmxConfig.MorphIndexSize = reader.ReadSByte();
             pmxConfig.RigidBodyIndexSize = reader.ReadSByte();
-
             model.ExtraUvNumber = pmxConfig.ExtraUvNumber;
             pmxConfig.Encoding = pmxConfig.Utf8Encoding ? Encoding.UTF8 : Encoding.Unicode;
             return pmxConfig;
@@ -117,7 +112,7 @@ namespace LibMMD.Reader
                     AssociatedBoneIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.BoneIndexSize),
                     CollisionGroup = reader.ReadByte(),
                     CollisionMask = reader.ReadUInt16(),
-                    Shape = (MMDRigidBody.RigidBodyShape) reader.ReadByte(),
+                    Shape = (MMDRigidBody.RigidBodyShape)reader.ReadByte(),
                     Dimemsions = MMDReaderWriteUtil.ReadRawCoordinateVector3(reader),
                     Position = MMDReaderWriteUtil.ReadVector3(reader),
                     Rotation = MMDReaderWriteUtil.ReadEulerRotation(reader),
@@ -126,7 +121,7 @@ namespace LibMMD.Reader
                     RotateDamp = reader.ReadSingle(),
                     Restitution = reader.ReadSingle(),
                     Friction = reader.ReadSingle(),
-                    Type = (MMDRigidBody.RigidBodyType) reader.ReadByte()
+                    Type = (MMDRigidBody.RigidBodyType)reader.ReadByte()
                 };
                 model.Rigidbodies[i] = rigidBody;
             }
@@ -168,13 +163,14 @@ namespace LibMMD.Reader
                 {
                     Name = MMDReaderWriteUtil.ReadSizedString(reader, pmxConfig.Encoding),
                     NameEn = MMDReaderWriteUtil.ReadSizedString(reader, pmxConfig.Encoding),
-                    Category = (Morph.MorphCategory) reader.ReadByte()
+                    Category = (Morph.MorphCategory)reader.ReadByte()
                 };
                 if (morph.Category == Morph.MorphCategory.MorphCatSystem)
                 {
                     baseMorphIndex = i;
                 }
-                morph.Type = (Morph.MorphType) reader.ReadByte();
+
+                morph.Type = (Morph.MorphType)reader.ReadByte();
                 var morphDataNum = reader.ReadInt32();
                 morph.MorphDatas = new Morph.MorphData[morphDataNum];
                 switch (morph.Type)
@@ -182,37 +178,36 @@ namespace LibMMD.Reader
                     case Morph.MorphType.MorphTypeGroup:
                         for (var j = 0; j < morphDataNum; ++j)
                         {
-                            var morphData =
-                                new Morph.GroupMorphData
-                                {
-                                    MorphIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.MorphIndexSize),
-                                    MorphRate = reader.ReadSingle()
-                                };
+                            var morphData = new Morph.GroupMorphData
+                            {
+                                MorphIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.MorphIndexSize),
+                                MorphRate = reader.ReadSingle()
+                            };
                             morph.MorphDatas[j] = morphData;
                         }
+
                         break;
                     case Morph.MorphType.MorphTypeVertex:
                         for (var j = 0; j < morphDataNum; ++j)
                         {
-                            var morphData =
-                                new Morph.VertexMorphData
-                                {
-                                    VertexIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.VertexIndexSize),
-                                    Offset = MMDReaderWriteUtil.ReadVector3(reader)
-                                };
+                            var morphData = new Morph.VertexMorphData
+                            {
+                                VertexIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.VertexIndexSize),
+                                Offset = MMDReaderWriteUtil.ReadVector3(reader)
+                            };
                             morph.MorphDatas[j] = morphData;
                         }
+
                         break;
                     case Morph.MorphType.MorphTypeBone:
                         for (var j = 0; j < morphDataNum; ++j)
                         {
-                            var morphData =
-                                new Morph.BoneMorphData
-                                {
-                                    BoneIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.BoneIndexSize),
-                                    Translation = MMDReaderWriteUtil.ReadVector3(reader),
-                                    Rotation = MMDReaderWriteUtil.ReadQuaternion(reader)
-                                };
+                            var morphData = new Morph.BoneMorphData
+                            {
+                                BoneIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.BoneIndexSize),
+                                Translation = MMDReaderWriteUtil.ReadVector3(reader),
+                                Rotation = MMDReaderWriteUtil.ReadQuaternion(reader)
+                            };
                             morph.MorphDatas[j] = morphData;
                         }
 
@@ -224,12 +219,11 @@ namespace LibMMD.Reader
                     case Morph.MorphType.MorphTypeExtUv4:
                         for (var j = 0; j < morphDataNum; ++j)
                         {
-                            var morphData =
-                                new Morph.UvMorphData
-                                {
-                                    VertexIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.VertexIndexSize),
-                                    Offset = MMDReaderWriteUtil.ReadVector4(reader)
-                                };
+                            var morphData = new Morph.UvMorphData
+                            {
+                                VertexIndex = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.VertexIndexSize),
+                                Offset = MMDReaderWriteUtil.ReadVector4(reader)
+                            };
                             morph.MorphDatas[j] = morphData;
                         }
 
@@ -249,7 +243,8 @@ namespace LibMMD.Reader
                                 morphData.MaterialIndex = 0;
                                 morphData.Global = true;
                             }
-                            morphData.Method = (Morph.MaterialMorphData.MaterialMorphMethod) reader.ReadByte();
+
+                            morphData.Method = (Morph.MaterialMorphData.MaterialMorphMethod)reader.ReadByte();
                             morphData.Diffuse = MMDReaderWriteUtil.ReadColor(reader, true);
                             morphData.Specular = MMDReaderWriteUtil.ReadColor(reader, false);
                             morphData.Shiness = reader.ReadSingle();
@@ -261,13 +256,10 @@ namespace LibMMD.Reader
                             morphData.ToonTexture = MMDReaderWriteUtil.ReadVector4(reader);
                             morph.MorphDatas[j] = morphData;
                         }
+
                         break;
                     default:
                         throw new MMDFileParseException("invalid morph type " + morph.Type);
-                }
-                if (baseMorphIndex != null)
-                {
-                    //TODO rectify system-reserved category
                 }
 
                 model.Morphs[i] = morph;
@@ -295,6 +287,7 @@ namespace LibMMD.Reader
                 {
                     bone.ParentIndex = -1;
                 }
+
                 bone.TransformLevel = reader.ReadInt32();
                 var flag = reader.ReadUInt16();
                 bone.ChildBoneVal.ChildUseId = (flag & PmxBoneFlags.PmxBoneChildUseId) != 0;
@@ -317,15 +310,18 @@ namespace LibMMD.Reader
                 {
                     bone.ChildBoneVal.Offset = MMDReaderWriteUtil.ReadVector3(reader);
                 }
+
                 if (bone.RotAxisFixed)
                 {
                     bone.RotAxis = MMDReaderWriteUtil.ReadVector3(reader);
                 }
+
                 if (bone.AppendRotate || bone.AppendTranslate)
                 {
                     bone.AppendBoneVal.Index = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.BoneIndexSize);
                     bone.AppendBoneVal.Ratio = reader.ReadSingle();
                 }
+
                 if (bone.UseLocalAxis)
                 {
                     var localX = MMDReaderWriteUtil.ReadVector3(reader);
@@ -339,10 +335,12 @@ namespace LibMMD.Reader
                     bone.LocalAxisVal.AxisY = localY;
                     bone.LocalAxisVal.AxisZ = localZ;
                 }
+
                 if (bone.ReceiveTransform)
                 {
                     bone.ExportKey = reader.ReadInt32();
                 }
+
                 if (bone.HasIk)
                 {
                     ReadBoneIk(reader, bone, pmxConfig.BoneIndexSize);
@@ -374,6 +372,7 @@ namespace LibMMD.Reader
                     link.LoLimit = Vector3.Min(first, second);
                     link.HiLimit = Vector3.Max(first, second);
                 }
+
                 bone.IkInfoVal.IkLinks[j] = link;
             }
         }
@@ -391,9 +390,9 @@ namespace LibMMD.Reader
                 var partTriangleIndexNum = reader.ReadInt32();
                 if (partTriangleIndexNum % 3 != 0)
                 {
-                    throw new MMDFileParseException("part" + i + " triangle index count " + partTriangleIndexNum +
-                                                    " is not multiple of 3");
+                    throw new MMDFileParseException("part" + i + " triangle index count " + partTriangleIndexNum + " is not multiple of 3");
                 }
+
                 part.BaseShift = partBaseShift;
                 part.TriangleIndexNum = partTriangleIndexNum;
                 partBaseShift += partTriangleIndexNum;
@@ -411,6 +410,7 @@ namespace LibMMD.Reader
                 var texturePath = MMDReaderWriteUtil.ReadSizedString(reader, texturePathEncoding);
                 textureList[i] = new MMDTexture(texturePath);
             }
+
             return textureList;
         }
 
@@ -422,6 +422,7 @@ namespace LibMMD.Reader
             {
                 throw new MMDFileParseException("triangle index count " + triangleIndexCount + " is not multiple of 3");
             }
+
             for (var i = 0; i < triangleIndexCount; ++i)
             {
                 model.TriangleIndexes[i] = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.VertexIndexSize);
@@ -456,7 +457,6 @@ namespace LibMMD.Reader
                 Normal = pv.Normal,
                 UvCoordinate = pv.UvCoordinate
             };
-
             if (pmxConfig.ExtraUvNumber > 0)
             {
                 var extraUv = new Vector4[pmxConfig.ExtraUvNumber];
@@ -464,13 +464,13 @@ namespace LibMMD.Reader
                 {
                     extraUv[ei] = MMDReaderWriteUtil.ReadVector4(reader);
                 }
+
                 vertex.ExtraUvCoordinate = extraUv;
             }
 
             var op = new SkinningOperator();
-            var skinningType = (SkinningOperator.SkinningType) reader.ReadByte();
+            var skinningType = (SkinningOperator.SkinningType)reader.ReadByte();
             op.Type = skinningType;
-
             switch (skinningType)
             {
                 case SkinningOperator.SkinningType.SkinningBdef1:
@@ -491,10 +491,12 @@ namespace LibMMD.Reader
                     {
                         bdef4.BoneId[j] = MMDReaderWriteUtil.ReadIndex(reader, pmxConfig.BoneIndexSize);
                     }
+
                     for (var j = 0; j < 4; ++j)
                     {
                         bdef4.BoneWeight[j] = reader.ReadSingle();
                     }
+
                     op.Param = bdef4;
                     break;
                 case SkinningOperator.SkinningType.SkinningSdef:
@@ -510,13 +512,13 @@ namespace LibMMD.Reader
                 default:
                     throw new MMDFileParseException("invalid skinning type: " + skinningType);
             }
+
             vertex.SkinningOperator = op;
             vertex.EdgeScale = reader.ReadSingle();
             return vertex;
         }
 
-        private static MMDMaterial ReadMaterial(BinaryReader reader, ModelConfig config, Encoding encoding,
-            int textureIndexSize, MMDTexture[] textureList)
+        private static MMDMaterial ReadMaterial(BinaryReader reader, ModelConfig config, Encoding encoding, int textureIndexSize, MMDTexture[] textureList)
         {
             var material = new MMDMaterial();
             material.Name = MMDReaderWriteUtil.ReadSizedString(reader, encoding);
@@ -538,12 +540,14 @@ namespace LibMMD.Reader
             {
                 material.Texture = textureList[textureIndex];
             }
+
             var subTextureIndex = MMDReaderWriteUtil.ReadIndex(reader, textureIndexSize);
             if (subTextureIndex < textureList.Length && subTextureIndex >= 0)
             {
                 material.SubTexture = textureList[subTextureIndex];
             }
-            material.SubTextureType = (MMDMaterial.SubTextureTypeEnum) reader.ReadByte();
+
+            material.SubTextureType = (MMDMaterial.SubTextureTypeEnum)reader.ReadByte();
             var useGlobalToon = reader.ReadByte() != 0;
             if (useGlobalToon)
             {
@@ -558,6 +562,7 @@ namespace LibMMD.Reader
                     material.Toon = textureList[toonIndex];
                 }
             }
+
             material.MetaInfo = MMDReaderWriteUtil.ReadSizedString(reader, encoding);
             return material;
         }
@@ -580,7 +585,6 @@ namespace LibMMD.Reader
             return ret;
         }
 
-
         public struct PmxMeta
         {
             public string Magic;
@@ -602,9 +606,9 @@ namespace LibMMD.Reader
             public int ExtraUvNumber { get; set; }
             public int VertexIndexSize { get; set; }
             public int TextureIndexSize { get; set; }
-            public int MaterialIndexSize{ get; set; }
+            public int MaterialIndexSize { get; set; }
             public int BoneIndexSize { get; set; }
-            public int MorphIndexSize  { get; set; }
+            public int MorphIndexSize { get; set; }
             public int RigidBodyIndexSize { get; set; }
         }
 

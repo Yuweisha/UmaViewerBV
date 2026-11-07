@@ -5,25 +5,37 @@ using UnityEngine;
 
 namespace Gallop.RenderPipeline
 {
-    // Native StageController.AddLensFlareControllerArray 0x1a7f8b0 / UpdateLensFlare 0x1a91360.
+    // Stage adapter. Registration/gates and same-input camera/color arithmetic
+    // were rechecked against game 2.32 AddLensFlareControllerArray @ 4ff76f0
+    // and UnityLensFlareController.AlterUpdate @ 50798e0. This does not establish
+    // equivalence of full-Live inputs or rendered output.
+    // Historical AddLensFlareControllerArray 0x1a7f8b0 / UpdateLensFlare 0x1a91360.
     // This adapter consumes authored CustomLensFlare sources, never creates substitute light effects.
     public sealed class RecoveredLensFlareController
     {
+#if UNITY_EDITOR
+        public static Action<string> SamplingObserver;
+#endif
         private sealed class Target
         {
             public CustomLensFlare Flare;
+            public Gallop.Live.UnityLensFlareController AngleOwner;
             public Transform Transform;
             public Vector3 InitialPosition;
             public int NameHash;
             public Material Material;
             public MeshRenderer Renderer;
-            public bool HasColorPower, HasMulColor0, HasBlinkLightColor;
+            public bool HasColorPower, HasMulColor0;
             public Color ColorFactor = Color.white;
             public float BrightnessFactor = 1f;
             public bool AutoBrightness = true;
             public bool ScreenFit;
             public bool HasBlinkColor;
             public Color BlinkColor;
+#if UNITY_EDITOR
+            public Vector3 ObservedUp, ObservedCameraForward;
+            public int ObservedUnityFrame;
+#endif
         }
 
         private readonly Dictionary<int, List<Target>> _groups = new Dictionary<int, List<Target>>();
@@ -35,7 +47,6 @@ namespace Gallop.RenderPipeline
         private readonly float _under;
         private readonly int _colorPowerId;
         private readonly int _mulColor0Id;
-        private readonly int _blinkLightColorId;
 
         public RecoveredLensFlareController(Transform root, float standard, float under,
             string nameSuffixToken = "")
@@ -44,30 +55,34 @@ namespace Gallop.RenderPipeline
             _under = under;
             _colorPowerId = ShaderManager.GetPropertyId(ShaderManager.PropertyId._ColorPower);
             _mulColor0Id = ShaderManager.GetPropertyId(ShaderManager.PropertyId._MulColor0);
-            _blinkLightColorId = ShaderManager.GetPropertyId(ShaderManager.PropertyId._BlinkLightColor);
             AddSources(root, nameSuffixToken);
         }
 
         public void AddSources(Transform root, string nameSuffixToken)
         {
             if (root == null) return;
-            foreach (var flare in root.GetComponentsInChildren<CustomLensFlare>(true))
+            // Stage.AddLensFlareControllerArray registers active controller hosts.
+            // A standalone CustomLensFlare stays under its authored owner.
+            foreach (var angleOwner in root.GetComponentsInChildren<Gallop.Live.UnityLensFlareController>())
             {
+                var flare = angleOwner.GetComponent<CustomLensFlare>();
                 if (flare == null) continue;
                 var sourceTransform = flare.transform;
+                angleOwner.CalcEnableAngleCos();
+                angleOwner.UseLensFlare(Gallop.Live.LiveQualitySettings.IsLensflare);
                 var renderer = flare.GetComponent<MeshRenderer>();
                 Material material = RenderUtils.GetMaterial(renderer);
                 var target = new Target
                 {
                     Flare = flare,
+                    AngleOwner = angleOwner,
                     Transform = sourceTransform,
                     InitialPosition = sourceTransform.localPosition,
                     NameHash = FNVHash.Generate(flare.name + nameSuffixToken),
                     Material = material,
                     Renderer = renderer,
                     HasColorPower = material != null && material.HasProperty(_colorPowerId),
-                    HasMulColor0 = material != null && material.HasProperty(_mulColor0Id),
-                    HasBlinkLightColor = material != null && material.HasProperty(_blinkLightColorId)
+                    HasMulColor0 = material != null && material.HasProperty(_mulColor0Id)
                 };
                 _targets.Add(target);
                 _bySource.Add(flare, target);
@@ -109,6 +124,7 @@ namespace Gallop.RenderPipeline
             if (flare == null || !_bySource.TryGetValue(flare, out var target)) return;
             target.HasBlinkColor = true;
             target.BlinkColor = color;
+            target.AngleOwner.Color = color;
         }
 
         public void Apply(ref LensFlareUpdateInfo info)
@@ -140,6 +156,7 @@ namespace Gallop.RenderPipeline
                 target.ScreenFit = info.IsScreenFit;
             }
             target.AutoBrightness = info.IsAutoBrightness;
+            target.AngleOwner.IsAutoBrightness = info.IsAutoBrightness;
             if (target.Flare.gameObject.activeSelf != info.enable)
                 target.Flare.gameObject.SetActive(info.enable);
         }
@@ -147,6 +164,9 @@ namespace Gallop.RenderPipeline
         // Native AlterUpdate 0x1aaa410. Call after timeline/material/light updates, once per Live frame.
         public void AlterUpdate(Camera camera)
         {
+#if UNITY_EDITOR
+            SamplingObserver?.Invoke("flare.before");
+#endif
             foreach (var target in _targets)
             {
                 if (target.Flare == null || !target.Flare.gameObject.activeInHierarchy) continue;
@@ -162,7 +182,12 @@ namespace Gallop.RenderPipeline
                         if (_lightProperties.isEmpty)
                             target.Renderer.GetPropertyBlock(_lightProperties);
                     }
-                    Color materialColor = ResolveMaterialColor(target);
+                    // Native reads _MulColor0 only when shader-color control is
+                    // enabled; otherwise it retains Color (e.g. Blink output).
+                    if (target.AngleOwner.IsEnabledShaderColor && target.HasMulColor0)
+                        target.AngleOwner.Color = _lightProperties.HasColor(_mulColor0Id)
+                            ? _lightProperties.GetColor(_mulColor0Id) : target.Material.GetColor(_mulColor0Id);
+                    Color materialColor = target.AngleOwner.Color;
                     float colorPower = target.HasColorPower
                         ? _lightProperties.HasFloat(_colorPowerId)
                             ? _lightProperties.GetFloat(_colorPowerId) : target.Material.GetFloat(_colorPowerId)
@@ -170,17 +195,28 @@ namespace Gallop.RenderPipeline
                     color *= materialColor * (colorPower * 2f);
                 }
                 bool visibleColor = color.r > 0.000001f || color.g > 0.000001f || color.b > 0.000001f;
-                float brightness = 0f;
-                if (visibleColor && camera != null)
+                // Original disable-only branches preserve the preceding numeric
+                // Brightness; disabling the component owns visibility history.
+                float brightness = target.Flare.Brightness;
+                bool enabled = visibleColor && target.AngleOwner.IsUseLensFlare && camera != null;
+                if (enabled)
                 {
+#if UNITY_EDITOR
+                    target.ObservedUp=target.Transform.up;
+                    target.ObservedCameraForward=camera.transform.forward;
+                    target.ObservedUnityFrame=Time.frameCount;
+#endif
                     brightness = target.BrightnessFactor;
-                    if (target.AutoBrightness)
+                    if (target.AngleOwner.IsAutoBrightness)
                     {
-                        float anglePower = Mathf.Clamp01(-Vector3.Dot(camera.transform.forward, target.Transform.up));
+                        float dot = -Vector3.Dot(camera.transform.forward, target.Transform.up);
+                        float anglePower = Mathf.Clamp01(dot);
                         if (_standard > brightness && _standard > _under)
                             brightness = Mathf.LerpUnclamped(0f, _standard,
                                 Mathf.Clamp01((brightness - _under) / (_standard - _under)));
                         brightness *= anglePower;
+                        if (target.AngleOwner != null)
+                            brightness = target.AngleOwner.ApplyEnableAngle(dot, brightness);
                     }
                     else if (target.ScreenFit)
                     {
@@ -188,28 +224,12 @@ namespace Gallop.RenderPipeline
                     }
                 }
                 // Source positioning is on the authored host above, not on an arbitrary child offset.
-                target.Flare.ApplyTimeline(brightness > 0f, false, Vector3.zero,
+                target.Flare.ApplyTimeline(enabled && brightness > 0f, false, Vector3.zero,
                     color, brightness, target.Flare.FadeSpeed);
             }
-        }
-
-        // The stage's lamp renderers carry their colour and power in the per-renderer property block
-        // (the blink driver writes them there: _BlinkLightColor / _ColorPower). The native
-        // UnityLensFlareController reads the same values out of the renderer's material, so read
-        // the block first and fall back to the material.
-        private Color ResolveMaterialColor(Target target)
-        {
-            if (target.HasBlinkColor) return target.BlinkColor;
-            if (target.HasBlinkLightColor) return ReadLampColor(target, _blinkLightColorId);
-            if (target.HasMulColor0) return ReadLampColor(target, _mulColor0Id);
-            return Color.white;
-        }
-
-        private Color ReadLampColor(Target target, int propertyId)
-        {
-            return _lightProperties.HasColor(propertyId)
-                ? _lightProperties.GetColor(propertyId)
-                : target.Material.GetColor(propertyId);
+#if UNITY_EDITOR
+            SamplingObserver?.Invoke("flare.after");
+#endif
         }
 
         // FitOnScreen 0x1aaa870 uses localPosition directly against world frustum planes.

@@ -422,6 +422,11 @@ namespace Gallop
         "Assets/_Gallop/Resources/Shader/3D/Character/CharacterScreenMappingToonHairTSER", // 374 CharacterScreenMappingToonHairTSER
         "Assets/_Gallop/Resources/Shader/3D/Character/EyeHighlightOnly", // 375 EyeHiglightOnly
         "Assets/_Gallop/Resources/Shader/Utils/FixColor", // 376 DefaultShader
+        // 2.32.0 additions, appended to preserve the existing host numeric IDs.
+        "Assets/_Gallop/Resources/Shader/3D/Character/CharacterNolineToonTSERBCf",
+        "Assets/_Gallop/Resources/Shader/3D/Character/CharacterNolineToonTSERABCf",
+        "Assets/_Gallop/Resources/Shader/UI/UI-Default-AddColorCanvasSoftMask",
+        "Assets/_Gallop/Resources/Shader/UI/UI-Default-AdditiveCanvasSoftMask",
         };
         
         private static readonly string[] _computeShaderFileNames =
@@ -557,10 +562,7 @@ namespace Gallop
 
             _shaderVariantCollection.WarmUp();
 
-            // Official build calls:
-            // GraphicSettings.InitializeAfterShaderLoad();
-            // It is omitted because this project does not currently provide
-            // the official GraphicSettings implementation.
+            GraphicSettings.InitializeAfterShaderLoad();
             _isWarmUpShader = true;
         }
         public static void WarmupDofBloomShader()
@@ -813,6 +815,7 @@ namespace Gallop
                 return;
 
             _loggedBundleReady = true;
+            Debug.Log("[ShaderManager] shader bundle is available to recovered post effects.");
         }
 
         public static string GetShaderFileName(ShaderKinds kinds)
@@ -1478,8 +1481,12 @@ namespace Gallop
             CharacterScreenMappingToonHairTSER,
             EyeHiglightOnly,
             DefaultShader,
+            CharacterNolineToonTSERBCf,
+            CharacterNolineToonTSERABCf,
+            UIDefaultAddColorCanvasSoftMask,
+            UIDefaultAdditiveCanvasSoftMask,
             ApplicationMax,
-            Max = 377,
+            Max = 381,
             Invalid = -1
         }
 
@@ -2025,6 +2032,42 @@ namespace Gallop
             _TopColor,
             _BottomColor,
             _BillboardScale,
+            // 2.32.0 property names. Existing host IDs stay stable.
+            _ProjectorBacksideOff,
+            _ProjectorPosWS,
+            _MirrorBallBacksideFeather,
+            _SoftMaskTex,
+            _SoftMaskRect,
+            _SoftMaskAlpha,
+            _SoftMaskWorldToLocal,
+            _GradientOffset,
+            _GradientBlendMode,
+            _GradientBlendAlpha,
+            _IsGradientOutline,
+            _GradientStartPos,
+            _GradientEndPos,
+            _IsGradientScreenMode,
+            _FakeLightStartPos0,
+            _FakeLightStartPos1,
+            _FakeLightEndPos0,
+            _FakeLightEndPos1,
+            _FakeLightStartRadius0,
+            _FakeLightStartRadius1,
+            _FakeLightEndRadius0,
+            _FakeLightEndRadius1,
+            _FakeLightStartIntensity0,
+            _FakeLightStartIntensity1,
+            _FakeLightEndIntensity0,
+            _FakeLightEndIntensity1,
+            _FakeLightColor0,
+            _FakeLightColor1,
+            _FakeLightRate0,
+            _FakeLightRate1,
+            _FakeLightReceiveColor0,
+            _FakeLightReceiveColor1,
+            _FakeLightBlendMode0,
+            _FakeLightBlendMode1,
+            _IsFakeLightOutline,
             Max
         }
 

@@ -1,4 +1,5 @@
 using UnityEngine;
+using Gallop.RenderPipeline;
 
 namespace Gallop.Live
 {
@@ -12,70 +13,100 @@ namespace Gallop.Live
         private static readonly int ColorId = Shader.PropertyToID("_MulColor0");
         private static readonly int PowerId = Shader.PropertyToID("_ColorPower");
         private Renderer[] _renderers;
-        private MaterialPropertyBlock _block;
-        private Vector3 _authoredScale;
+        private Material[][] _materials;
+        private Material[][] _additionTemplates,_multiplyTemplates;
         private bool _illuminated;
-        private float _power;
-        private Cutt.LiveTimelineDefine.LightBlendMode _blendMode = Cutt.LiveTimelineDefine.LightBlendMode.Addition;
-        // La sombra solo se dibuja cuando el foco esta encendido (no en el arranque de la rampa):
-        // en los fogonazos el exceso de luz la tapa y el juego no la muestra. Con 0,5 las claves de
-        // intensidad 0,5 (FollowSpotCenter/Left) siguen mostrando sombra y la rampa 0->1 de f1175 no.
-        private const float ShadowPowerThreshold = 0.5f;
+        private Color _liveColor;
+        private float _livePower;
+        private LiveDefine.LightBlendMode _liveBlendMode;
 
         public void Bind(Transform root, Transform location)
         {
             _rootTransform = root;
             _locationTransform = location;
             _renderers = GetComponentsInChildren<Renderer>(true);
-            _block = new MaterialPropertyBlock();
-            _authoredScale = transform.localScale;
+            _materials = new Material[_renderers.Length][];
+            _additionTemplates = new Material[_renderers.Length][];
+            _multiplyTemplates = new Material[_renderers.Length][];
+            // Native Initialize 0x4e7fff0; cctor 0x58831b0 stores (1.7, 1, 1.7).
+            // This is the renderer child, independently of the animated controller scale.
+            for (int index=0;index<_renderers.Length;index++)
+            {
+                var renderer=_renderers[index];
+                renderer.transform.localScale = new Vector3(1.7f, 1f, 1.7f);
+                renderer.sortingOrder = 110;
+                renderer.SetPropertyBlock(null);
+                // Director.LoadCharacter 0x4e7015a replaces the prefab shader with
+                // StageLightBlend, then prepares Addition/Multiply material templates.
+                _materials[index]=renderer.materials;
+                _additionTemplates[index]=new Material[_materials[index].Length];
+                _multiplyTemplates[index]=new Material[_materials[index].Length];
+                for(int m=0;m<_materials[index].Length;m++)
+                {
+                    var material=_materials[index][m];
+                    material.shader=ShaderManager.GetShader(ShaderManager.ShaderKinds.StageLightBlend);
+                    material.renderQueue=3004; // UpdateSpotLightSettingData 0x4e3feb0.
+                    _additionTemplates[index][m]=new Material(material);
+                    _multiplyTemplates[index][m]=new Material(material);
+                    LiveDefine.TrySetLightBlendModeMaterialProperty(LiveDefine.LightBlendMode.Addition,_additionTemplates[index][m]);
+                    LiveDefine.TrySetLightBlendModeMaterialProperty(LiveDefine.LightBlendMode.Multiply,_multiplyTemplates[index][m]);
+                    material.SetColor(ColorId,Color.white);
+                    material.SetFloat(PowerId,0f);
+                }
+            }
             ApplyLight(Color.white, 0f, 1f);
         }
 
-        // La pista BgColor1 marca con LightBlendMode.Multiply las ventanas en las que el juego no
-        // dibuja el charco de luz sino la sombra del personaje (sistema nativo aparte).
-        // Mientras esa sombra no esté portada, el quad no se pinta en ese modo: si se pintara
-        // saldría el charco blanco, que no existe en el original.
-        // Ver PENDIENTE_SOMBRA_PERSONAJE.md.
-        public void SetBlendMode(Cutt.LiveTimelineDefine.LightBlendMode mode)
+        public void ApplyLight(Color color, float power, float scale, LiveDefine.LightBlendMode mode=LiveDefine.LightBlendMode.Addition)
         {
-            _blendMode = mode;
-        }
-
-        private bool DrawsLight =>
-            _illuminated && _blendMode != Cutt.LiveTimelineDefine.LightBlendMode.Multiply;
-
-        // Verdadero cuando el foco esta encendido de verdad (no en la rampa de subida) y la pista
-        // pide LightBlendMode.Multiply: es cuando el juego muestra la sombra del personaje.
-        public bool IsShadowMode =>
-            _power >= ShadowPowerThreshold && _blendMode == Cutt.LiveTimelineDefine.LightBlendMode.Multiply;
-
-        public void ApplyLight(Color color, float power, float scale)
-        {
-            _illuminated = power != 0f;
-            _power = power;
-            transform.localScale = _authoredScale * scale;
-            foreach (var target in _renderers)
-            {
-                target.enabled = DrawsLight;
-                target.GetPropertyBlock(_block);
-                _block.SetColor(ColorId, color);
-                _block.SetFloat(PowerId, power);
-                target.SetPropertyBlock(_block);
-            }
+            _illuminated = power > 0f;
+            _liveColor=color;
+            _livePower=power;
+            _liveBlendMode=mode;
+            // Native SetScale 0x4e802d0 preserves Y and assigns X/Z directly.
+            var localScale = transform.localScale;
+            localScale.x = localScale.z = scale;
+            transform.localScale = localScale;
         }
 
         public void SetCharacterVisible(bool visible)
         {
-            foreach (var target in _renderers)
-                target.enabled = visible && DrawsLight;
+            foreach (var renderer in _renderers)
+                renderer.enabled = visible && _illuminated;
         }
 
         public void AlterLateUpdate(Vector3 groundPosition)
         {
-            // The caller supplies the evaluated formation position, not an animated hip/foot.
-            // Keep the authored child mesh offset, rotation and scale intact.
+            // Original 0x4e7fc90 selects the blend template every late pass,
+            // but only moves and uploads color/power while power is positive.
+            var templates=_liveBlendMode==LiveDefine.LightBlendMode.Multiply?_multiplyTemplates:_additionTemplates;
+            for(int r=0;r<_materials.Length;r++)
+                for(int m=0;m<_materials[r].Length;m++)
+                    _materials[r][m].CopyPropertiesFromMaterial(templates[r][m]);
+            foreach(var renderer in _renderers)renderer.enabled=_illuminated;
+            if(!_illuminated)return;
+            // Native BindCharaEffect 0x4e770aa resolves the authored Position_light
+            // for X/Z; LocationTransform supplies the model root's Y.
+            if(_rootTransform != null)
+            {
+                groundPosition.x=_rootTransform.position.x;
+                groundPosition.z=_rootTransform.position.z;
+            }
+            if(_locationTransform != null)groundPosition.y=_locationTransform.position.y;
             transform.position = groundPosition;
+            foreach(var array in _materials)
+                foreach(var material in array)
+                {
+                    material.SetColor(ColorId,_liveColor);
+                    material.SetFloat(PowerId,_livePower);
+                }
+        }
+        private void OnDestroy()
+        {
+            if(_materials==null)return;
+            foreach(var array in _materials)foreach(var material in array)if(material!=null)Destroy(material);
+            foreach(var array in _additionTemplates)foreach(var material in array)if(material!=null)Destroy(material);
+            foreach(var array in _multiplyTemplates)foreach(var material in array)if(material!=null)Destroy(material);
         }
     }
 }

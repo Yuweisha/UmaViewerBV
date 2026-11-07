@@ -9,6 +9,8 @@ namespace Gallop.Live.Cutt
         public int characterFlag;
         public bool isActive;
         public bool IsEnabledBillboard;
+        public bool EnableLookAt;
+        public LiveTimelineKeySpotlight3dData.PositionType PositionType;
         public Color color;
         public float colorPower;
         public float localHeight;
@@ -16,6 +18,7 @@ namespace Gallop.Live.Cutt
         public Vector3 rotation;
         public Vector3 scale;
         public Transform TargetCameraTransform;
+        public string TargetNodeName;
     }
 
     public delegate void Spotlight3dUpdateInfoDelegate(ref Spotlight3dUpdateInfo updateInfo);

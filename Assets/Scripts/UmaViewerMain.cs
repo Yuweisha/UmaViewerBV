@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
@@ -10,12 +10,10 @@ using Newtonsoft.Json.Linq;
 public class UmaViewerMain : MonoBehaviour
 {
     private const string EnglishNamesCacheFileName = "english_names.cache";
-    private const string ChineseNamesCacheFileName = "chinese_names.cache";
     private const string EnglishNamesCacheMagic = "UmaViewerEnglishNames";
     private const int EnglishNamesCacheVersion = 1;
 
     public static UmaViewerMain Instance;
-    public static bool WasEscapeConsumedThisFrame { get; private set; }
     private UmaViewerUI UI => UmaViewerUI.Instance;
     private UmaViewerBuilder Builder => UmaViewerBuilder.Instance;
 
@@ -24,20 +22,6 @@ public class UmaViewerMain : MonoBehaviour
     public List<CharaEntry> MobCharacters = new List<CharaEntry>();
     public List<LiveEntry> Lives = new List<LiveEntry>();
     public List<CostumeEntry> Costumes = new List<CostumeEntry>();
-    // (Color) Colores de cada traje COMUN, por "<body_type>_<body_type_sub>" (p.ej. "0015_00").
-    // Es la lista BASE: se construye UNA vez al arrancar (paso "Loading Costumes Data") a partir de
-    // dress_data.color_num y de los iconos dress_<dressId>_0_<color>, y ya no cambia. El listado de
-    // trajes la consulta en vez de resolver el icono cada vez: así la variante de color está siempre,
-    // sin depender de si el traje tiene fila asignada, del estado de la UI ni de volver a listar.
-    public class CostumeColor
-    {
-        public int Index;           // 0 = el de siempre
-        public Sprite Icon;         // icono de ese color (dress_<id>_0_<color>)
-        public string DressName;    // nombre del traje (no hay nombres por color en el master)
-    }
-
-    public Dictionary<string, List<CostumeColor>> CostumeColorsByBody = new Dictionary<string, List<CostumeColor>>();
-
     public Dictionary<string,UmaDatabaseEntry> AbList = new Dictionary<string, UmaDatabaseEntry>();
     public List<UmaDatabaseEntry> AbMotions = new List<UmaDatabaseEntry>();
     public List<UmaDatabaseEntry> AbSounds = new List<UmaDatabaseEntry>();
@@ -45,38 +29,18 @@ public class UmaViewerMain : MonoBehaviour
     public List<UmaDatabaseEntry> AbEffect = new List<UmaDatabaseEntry>();
     public List<UmaDatabaseEntry> CostumeList = new List<UmaDatabaseEntry>();
 
-    /// <summary>
-    /// Set when Standalone mode has no database at all. Awake must not touch
-    /// UmaDatabaseController.Instance in that case: the constructor throws and only shows
-    /// "Only `Default` mode is supported", long before the rebuild in Start() would run.
-    /// </summary>
-    private bool _needsDatabaseRebuild;
-
     private void Awake()
     {
         Instance = this;
         new Config();
+        if (UnifiedExportPanel.FeatureEnabled && GetComponent<UnifiedExportPanel>() == null)
+            gameObject.AddComponent<UnifiedExportPanel>();
         ApplyFrameRateLimit();
 
-        if (Config.Instance != null && Config.Instance.WorkMode == WorkMode.Standalone)
-        {
-            string nativeMeta = Path.Combine(Config.Instance.MainPath, "meta");
-            string rebuiltMeta = Path.Combine(Config.Instance.MainPath, "meta_umaviewer");
-
-            if (!File.Exists(nativeMeta) && !File.Exists(rebuiltMeta))
-            {
-                _needsDatabaseRebuild = true;
-                StandaloneLogger.Info(
-                    "Awake: no database yet, deferring asset list build until the rebuild finishes");
-                return;
-            }
-        }
-
-        LoadDatabaseLists();
+        if (Config.Instance.WorkMode != WorkMode.Standalone || !UmaStandalone.IsSupportedPlatform) LoadResourceLists();
     }
 
-    /// <summary>Fills AbList/AbChara/... from the meta database. Safe to call after a rebuild.</summary>
-    private void LoadDatabaseLists()
+    private void LoadResourceLists()
     {
         AbList = UmaDatabaseController.Instance.MetaEntries;
         if (AbList == null) return;
@@ -89,15 +53,7 @@ public class UmaViewerMain : MonoBehaviour
         CostumeList = outgame.FindAll(e => e.Name.StartsWith(UmaDatabaseController.CostumePath));
     }
 
-    // Version2 (UI): aplica el frame rate PROPIO del viewer.
     public static void ApplyFrameRateLimit()
-    {
-        QualitySettings.vSyncCount = 0;
-        Application.targetFrameRate = Config.Instance.GetUIFrameRate();
-    }
-
-    // Live: aplica el frame rate PROPIO del live.
-    public static void ApplyFrameRateLimitLive()
     {
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = Config.Instance.GetTargetFrameRate();
@@ -105,131 +61,71 @@ public class UmaViewerMain : MonoBehaviour
 
     private void Update()
     {
-        WasEscapeConsumedThisFrame = false;
-        TryConsumeEscapeForFullScreen();
+        if (Input.GetKeyDown(KeyCode.F11))
+            ToggleFullscreen();
     }
 
-    public static bool TryConsumeEscapeForFullScreen()
+    static int windowedWidth, windowedHeight;
+
+    static void ToggleFullscreen()
     {
-        if (!Input.GetKeyDown(KeyCode.Escape) || !Screen.fullScreen)
-            return false;
-
-        Screen.fullScreenMode = FullScreenMode.Windowed;
-        Screen.fullScreen = false;
-        WasEscapeConsumedThisFrame = true;
-        return true;
-    }
-
-    /// <summary>
-    /// Builds meta_umaviewer from the CDN manifests and then fills in the per-entry keys, so a
-    /// fresh Standalone install can start without the user touching `Other` settings first.
-    /// </summary>
-    private IEnumerator RebuildStandaloneDatabase()
-    {
-        StandaloneLogger.Begin("Standalone auto-rebuild");
-        StandaloneLogger.Info(
-            "No meta/meta_umaviewer under " + Config.Instance.MainPath +
-            "; rebuilding from CDN manifests");
-
-        if (UmaSceneController.instance != null)
+        if (!Screen.fullScreen)
         {
-            UmaSceneController.instance.LoadingProgressChange(0, 10, "Building Database");
+            windowedWidth = Screen.width;
+            windowedHeight = Screen.height;
+            // FullScreenWindow on the current window size can letterbox a 16:10
+            // display. Ask for the display's native mode and then force screen
+            // cameras back to a full viewport.
+            Screen.SetResolution(Display.main.systemWidth, Display.main.systemHeight,
+                FullScreenMode.FullScreenWindow);
         }
-
-        ManifestDB db = new ManifestDB();
-
-        yield return db.UpdateResourceVersion(delegate (string msg, UIMessageType type)
+        else
         {
-            if (UmaViewerUI.Instance != null)
+            RestoreWindowedResolution();
+        }
+        if (Instance != null) Instance.StartCoroutine(Instance.NormalizeFullscreenViewports());
+    }
+
+    static void RestoreWindowedResolution()
+    {
+        int width = windowedWidth > 0 ? windowedWidth : 1600;
+        int height = windowedHeight > 0 ? windowedHeight : 900;
+        Screen.SetResolution(width, height, FullScreenMode.Windowed);
+    }
+
+    System.Collections.IEnumerator NormalizeFullscreenViewports()
+    {
+        // Resolution/fullscreen changes are applied by the player after the
+        // current frame; normalize over the next two frames and once settled.
+        for (int i = 0; i < 3; i++)
+        {
+            yield return new WaitForEndOfFrame();
+            foreach (var camera in FindObjectsOfType<Camera>(true))
             {
-                UmaViewerUI.Instance.ShowMessage(msg, type);
+                if (camera == null || camera.targetTexture != null) continue;
+                camera.rect = new Rect(0f, 0f, 1f, 1f);
+                camera.ResetAspect();
             }
-        });
-
-        // UpdateResourceVersion already syncs the keys as part of the same pass.
-        StandaloneLogger.Info(
-            "Rebuild finished; meta_umaviewer now carries the decryption keys");
-
-        StandaloneLogger.End("Standalone auto-rebuild");
+            if (i == 2)
+                Debug.LogWarning($"[Fullscreen] mode={Screen.fullScreenMode} system={Display.main.systemWidth}x{Display.main.systemHeight} screen={Screen.width}x{Screen.height} camera={Gallop.Live.Director.instance?.MainRenderCamera?.pixelRect}");
+        }
     }
 
     private IEnumerator Start()
     {
-        // Swap the scene's English labels for the Chinese table when that language is selected.
-        UiLocalization.Apply(Config.Instance != null ? Config.Instance.Language : Language.En);
-
-        // Awake deferred the asset-list build because there was no database at all; build it
-        // now, fill in the keys, then re-read the lists before anything else touches them.
-        if (_needsDatabaseRebuild)
+        if (Config.Instance.WorkMode == WorkMode.Standalone && UmaStandalone.IsSupportedPlatform)
         {
-            yield return RebuildStandaloneDatabase();
-
-            _needsDatabaseRebuild = false;
-
-            if (UmaDatabaseController.Instance != null)
+            bool ready = false;
+            yield return UmaStandalone.Initialize((message, type) =>
             {
-                UmaDatabaseController.Instance.CloseAllConnection();
-
-                // The controller memoised its failure path; reload from the fresh database.
-                UmaDatabaseController.ResetInstance();
-            }
-
-            LoadDatabaseLists();
+                Debug.Log($"[Standalone] {message}");
+                UmaSceneController.instance.LoadingProgressChange(0, 1, message);
+                if (type == UIMessageType.Error) UI.ShowMessage(message, type);
+            }, result => ready = result);
+            if (!ready) yield break;
+            LoadResourceLists();
         }
-
-        // Android root 模式：Config 里已经探测过 su，失败时 MainPath 为空，没有继续的意义。
-        if (Config.Instance != null && !Config.Instance.RootAvailable)
-        {
-            StandaloneLogger.Error(
-                "Root mode selected but root is unavailable: " + AndroidRootSource.LastError);
-
-            UmaViewerUI.Instance?.ShowMessage(
-                "没有 root 权限。Root 模式需要 /data/data/" + AndroidRootSource.GamePackage +
-                "/files 的读取权限；请授予本应用 su 权限，或改用 Standalone 模式。",
-                UIMessageType.Error);
-
-            yield break;
-        }
-
         if (AbList == null) yield break;
-
-        // Rebuilt databases come from the CDN manifests, which carry no per-entry key. If the
-        // one we are about to use has no `e` column (or a completely empty one), pull the key
-        // list from the API and fill it in before anything tries to decrypt a bundle.
-        // Use the path that is actually going to be loaded: native meta already ships keys,
-        // only a CDN-rebuilt meta_umaviewer needs the sync.
-        string keySyncPath = UmaDatabaseController.Instance != null
-            ? UmaDatabaseController.Instance.MetaDatabasePath
-            : ManifestDB.DBPath;
-
-        if (UmaKeySync.NeedsSync(keySyncPath))
-        {
-            if (UmaSceneController.instance != null)
-            {
-                UmaSceneController.instance.LoadingProgressChange(0, 10, "Syncing Keys");
-            }
-
-            yield return UmaKeySync.Ensure(keySyncPath);
-
-            // The meta was already read into memory before the keys were written, so every
-            // entry still carries Key = 0 and decryption silently falls back to "plaintext".
-            // Drop the cached controller and re-read so the freshly written e column is used.
-            if (UmaDatabaseController.Instance != null)
-            {
-                UmaDatabaseController.Instance.CloseAllConnection();
-                UmaDatabaseController.ResetInstance();
-            }
-
-            LoadDatabaseLists();
-
-            StandaloneLogger.Info(
-                "Reloaded meta after key sync; entries = " + (AbList == null ? 0 : AbList.Count));
-        }
-
-        // Traduce nombres JP->EN con la instalacion GLOBAL (solo nombres; si no esta,
-        // no pasa nada y se conservan los japoneses).
-        GlobalNames.EnsureLoaded(Config.Instance.GlobalNamesPath);
-
         int loadingStep = 0;
         int loadingStepsTotal = 10;
         var UmaCharaData = UmaDatabaseController.Instance.CharaData;
@@ -242,124 +138,40 @@ public class UmaViewerMain : MonoBehaviour
 
 
 
-        // Reuse the downloaded names; only fetch when no usable cache exists.
-        bool isChinese = Config.Instance.Language == Language.Cn;
-        bool useNames = Config.Instance.Language == Language.En || isChinese;
-
-        string cachePath = Path.Combine(
-            Application.persistentDataPath,
-            isChinese ? ChineseNamesCacheFileName : EnglishNamesCacheFileName);
-
-        bool downloadTranslations = useNames && !TryLoadEnglishNamesCache(cachePath);
+        // Reuse downloaded English names; only fetch when no usable cache exists.
+        bool downloadTranslations = false;
+        string cachePath = Path.Combine(Application.persistentDataPath, EnglishNamesCacheFileName);
+        if (Config.Instance.Language == Language.En)
+            downloadTranslations = !TryLoadEnglishNamesCache(cachePath);
 
         loadingUI.LoadingProgressChange(
             loadingStep++,
             loadingStepsTotal,
             downloadTranslations ? "Downloading Translations" : "Loading Translations");
-
         if (downloadTranslations)
         {
-            if (isChinese)
+
+            yield return UmaViewerDownload.DownloadText(LocalizeEn.TranslationUrl, json =>
             {
-                // A zh-CN.json dropped in {exe}/translations wins over the network copy so the
-                // viewer keeps working offline (same hachimi text_data_dict.json layout).
-                string localTranslation = LocalizeEn.FindLocalTranslationFile();
+                if (string.IsNullOrEmpty(json)) return;
 
-                // Bundled table first: on Android there is no translations/ folder next to the
-                // player and downloading 5.8 MB with 3-second timeouts kept failing.
-                TextAsset bundledNames = Resources.Load<TextAsset>("Localize/zh-CN-names");
-
-                if (bundledNames != null &&
-                    TryParseEnglishNames(bundledNames.text, out Dictionary<int, string> bundledChara, out Dictionary<int, string> bundledMob))
+                try
                 {
-                    ApplyEnglishNames(bundledChara, bundledMob);
-                    TrySaveEnglishNamesCache(cachePath, bundledChara, bundledMob);
-                    Debug.Log("[Localize] Chinese names loaded from Resources/Localize/zh-CN-names.json");
+                    if (!TryParseEnglishNames(json, out Dictionary<int, string> charaNames, out Dictionary<int, string> mobNames))
+                    {
+                        Debug.LogWarning("Online English translations did not contain the required name tables. Using LocalizeEn fallback.");
+                        return;
+                    }
+
+                    ApplyEnglishNames(charaNames, mobNames);
+                    TrySaveEnglishNamesCache(cachePath, charaNames, mobNames);
+                    Debug.Log($"Loaded online English names: {charaNames.Count} characters, {mobNames.Count} mobs.");
                 }
-                else if (!string.IsNullOrEmpty(localTranslation))
+                catch (Exception ex)
                 {
-                    try
-                    {
-                        string localJson = File.ReadAllText(localTranslation);
-
-                        if (TryParseEnglishNames(localJson, out Dictionary<int, string> localChara, out Dictionary<int, string> localMob))
-                        {
-                            ApplyEnglishNames(localChara, localMob);
-                            TrySaveEnglishNamesCache(cachePath, localChara, localMob);
-                            Debug.Log($"[Localize] Chinese names loaded from {localTranslation}");
-                        }
-                        else
-                        {
-                            Debug.LogWarning($"[Localize] {localTranslation} does not contain the required name tables.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"[Localize] Could not read {localTranslation}: {ex.Message}");
-                    }
+                    Debug.LogWarning($"Could not parse online English translations. Using LocalizeEn fallback: {ex.Message}");
                 }
-                else if (LocalizeEn.TranslationUrlCnMirrors != null && LocalizeEn.TranslationUrlCnMirrors.Length > 0)
-                {
-                    // Try each mirror until one yields the name tables (the hosts are copies of
-                    // the same hachimi payload; some are blocked from certain networks).
-                    foreach (string mirror in LocalizeEn.TranslationUrlCnMirrors)
-                    {
-                        bool applied = false;
-
-                        yield return UmaViewerDownload.DownloadText(mirror, json =>
-                        {
-                            if (string.IsNullOrEmpty(json)) return;
-
-                            try
-                            {
-                                if (!TryParseEnglishNames(json, out Dictionary<int, string> charaNames, out Dictionary<int, string> mobNames))
-                                {
-                                    Debug.LogWarning("[Localize] " + mirror + " did not contain the required name tables.");
-                                    return;
-                                }
-
-                                ApplyEnglishNames(charaNames, mobNames);
-                                TrySaveEnglishNamesCache(cachePath, charaNames, mobNames);
-                                applied = true;
-                                Debug.Log("[Localize] Chinese names loaded from " + mirror);
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.LogWarning($"[Localize] Could not parse {mirror}: {ex.Message}");
-                            }
-                        });
-
-                        if (applied) break;
-                    }
-                }
-                else
-                {
-                    Debug.LogWarning("[Localize] Chinese selected but no translation file or URL is available.");
-                }
-            }
-            else
-            {
-                yield return UmaViewerDownload.DownloadText(LocalizeEn.TranslationUrl, json =>
-                {
-                    if (string.IsNullOrEmpty(json)) return;
-
-                    try
-                    {
-                        if (!TryParseEnglishNames(json, out Dictionary<int, string> charaNames, out Dictionary<int, string> mobNames))
-                        {
-                            Debug.LogWarning("Online English translations did not contain the required name tables. Using LocalizeEn fallback.");
-                            return;
-                        }
-
-                        ApplyEnglishNames(charaNames, mobNames);
-                        TrySaveEnglishNamesCache(cachePath, charaNames, mobNames);
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"Could not parse online English translations. Using LocalizeEn fallback: {ex.Message}");
-                    }
-                });
-            }
+            });
         }
 
         if (Config.Instance.WorkMode == WorkMode.Standalone)
@@ -382,7 +194,7 @@ public class UmaViewerMain : MonoBehaviour
                 Characters.Add(new CharaEntry()
                 {
                     Name = item["charaname"].ToString(),
-                    EnName = GlobalNames.Get(GlobalNames.CategoryChara, id, LocalizeEn.GetCharaName(id)),
+                    EnName = LocalizeEn.GetCharaName(id),
                     Icon = UmaViewerBuilder.Instance.LoadCharaIcon(id.ToString()),
                     Id = id,
                     ThemeColor = "#" + item["ui_nameplate_color_1"].ToString()
@@ -403,7 +215,7 @@ public class UmaViewerMain : MonoBehaviour
             MobCharacters.Add(new CharaEntry()
             {
                 Name = item["charaname"].ToString(),
-                EnName = GlobalNames.Get(GlobalNames.CategoryMob, id, LocalizeEn.GetMobName(id)),
+                EnName = LocalizeEn.GetMobName(id),
                 Icon = UmaViewerBuilder.Instance.LoadMobCharaIcon(id.ToString()),
                 Id = id,
                 IsMob = true
@@ -424,26 +236,17 @@ public class UmaViewerMain : MonoBehaviour
         var DressData = UmaDatabaseController.Instance.DressData;
         foreach (var data in DressData)
         {
-            var costume = Costumes.FirstOrDefault(a => a.Id.Split('_')[0].Contains(data["id"].ToString()) );
+            int masterDressId = Convert.ToInt32(data["id"]);
+            var costume = Costumes.FirstOrDefault(a => int.TryParse(a.Id.Split('_')[0], out int iconDressId) && iconDressId == masterDressId);
             if (costume != null)
             {
+                costume.MasterDressId = Convert.ToInt32(data["id"]);
                 costume.CharaId = Convert.ToInt32(data["chara_id"]);
                 costume.DressName = data["dressname"].ToString();
-                // (AÑADIDO) Traduccion de nombres de traje con el global (solo si hay idioma EN).
-                if (Config.Instance.Language == Language.En &&
-                    int.TryParse(data["id"].ToString(), out int dressTextId))
-                {
-                    costume.DressName = GlobalNames.Get(GlobalNames.CategoryDress, dressTextId, costume.DressName);
-                }
                 costume.BodyType = Convert.ToInt32(data["body_type"]);
                 costume.BodyTypeSub = Convert.ToInt32(data["body_type_sub"]);
             }
         }
-
-        // (Color) Lista BASE de colores de los trajes comunes. Se calcula aquí, con el master y los
-        // iconos ya cargados, y es lo que consulta el panel de trajes: así el color extra (p.ej. la
-        // camisa negra del 3.5周年) está siempre, en cualquier listado y en cualquier orden.
-        BuildCostumeColors();
 
         loadingUI.LoadingProgressChange(loadingStep++, loadingStepsTotal, "Loading Live Data");
         yield return null;
@@ -458,13 +261,12 @@ public class UmaViewerMain : MonoBehaviour
                 {
                     var musicId = Convert.ToInt32(item["music_id"]);
                     var songName = item["songname"].ToString();
-                    // (AÑADIDO) Traduccion de nombres de cancion con el global (solo si idioma EN).
-                    if (Config.Instance.Language == Language.En)
-                    {
-                        songName = GlobalNames.Get(GlobalNames.CategorySong, musicId, songName);
-                    }
                     var membercount = Convert.ToInt32(item["live_member_number"]);
                     var defaultdress = Convert.ToInt32(item["default_main_dress"]);
+                    int backdancerOrder = item["backdancer_order"] == DBNull.Value
+                        ? 0 : Convert.ToInt32(item["backdancer_order"]);
+                    int backdancerDress = item["backdancer_dress"] == DBNull.Value
+                        ? 0 : Convert.ToInt32(item["backdancer_dress"]);
 
                     if (!Lives.Where(c => c.MusicId == musicId).Any())
                     {
@@ -476,8 +278,11 @@ public class UmaViewerMain : MonoBehaviour
                             {
                                 MusicId = musicId,
                                 SongName = songName,
+                                MusicType = Convert.ToInt32(item["music_type"]),
                                 MemberCount = membercount,
                                 DefaultDress = defaultdress,
+                                BackdancerOrder = backdancerOrder,
+                                BackdancerDress = backdancerDress,
                                 Icon = UmaViewerBuilder.Instance.LoadLiveIcon(musicId)
                             }); 
                         }
@@ -508,78 +313,6 @@ public class UmaViewerMain : MonoBehaviour
         Builder.ShaderList = new List<Shader>(shaders.LoadAllAssets<Shader>()); 
         Gallop.ShaderManager.InitManager();
         Gallop.ShaderManager.WarmupDofBloomShader();
-    }
-
-    //==========================================================================
-    // (Color) Colores de los trajes COMUNES: lista base que se construye al arrancar.
-    // Fuente de verdad: los iconos que el juego trae por color (outgame/dress/dress_<dressId>_0_<color>)
-    // más la fila de dress_data que identifica la malla. El color no forma parte del id del traje
-    // ("0015_00_00"), así que se guarda por "<body_type>_<body_type_sub>" ("0015_00"), que es lo que
-    // identifica el cuerpo y lo que usan los trajes comunes al cambiar de color.
-    //==========================================================================
-    void BuildCostumeColors()
-    {
-        CostumeColorsByBody.Clear();
-
-        var dressRows = UmaDatabaseController.Instance.DressData;
-        if (dressRows == null || Costumes == null) return;
-
-        // Iconos ya cargados (uno por traje de datos): "000050_0_00", "000050_0_01"...
-        var iconsById = new Dictionary<string, CostumeEntry>(StringComparer.Ordinal);
-        foreach (var costume in Costumes)
-        {
-            if (costume == null || string.IsNullOrEmpty(costume.Id)) continue;
-            if (!iconsById.ContainsKey(costume.Id)) iconsById[costume.Id] = costume;
-        }
-
-        foreach (var row in dressRows)
-        {
-            int bodyType, bodySub;
-            if (!int.TryParse(row["body_type"].ToString(), out bodyType)) continue;
-            if (!int.TryParse(row["body_type_sub"].ToString(), out bodySub)) continue;
-
-            // Solo hay un traje por (body_type, body_type_sub): se queda el primero, igual que el
-            // resto del programa al buscar su fila.
-            string key = bodyType.ToString("D4") + "_" + bodySub.ToString("D2");
-            if (CostumeColorsByBody.ContainsKey(key)) continue;
-
-            // El master no guarda nombres por color: todos los colores se llaman como el traje.
-            string dressName = row["dressname"].ToString();
-            int dressTextId;
-            if (Config.Instance.Language == Language.En && int.TryParse(row["id"].ToString(), out dressTextId))
-            {
-                dressName = GlobalNames.Get(GlobalNames.CategoryDress, dressTextId, dressName);
-            }
-
-            // Los colores que existen SON los iconos que trae el juego para ese traje, en orden
-            // (dress_<dressId>_0_00, _0_01...). dress_data.color_num cuadra con ellos, pero lo que
-            // manda aquí es que el icono exista: sin icono no hay item que enseñar.
-            string prefix = row["id"].ToString().PadLeft(6, '0') + "_0_";
-            var colors = new List<CostumeColor>();
-            for (int color = 0; color < 16; color++)
-            {
-                CostumeEntry icon;
-                if (!iconsById.TryGetValue(prefix + color.ToString("D2"), out icon) || icon.Icon == null) break;
-                colors.Add(new CostumeColor { Index = color, Icon = icon.Icon, DressName = dressName });
-            }
-
-            if (colors.Count <= 1) continue;   // sin colores extra no hace falta tabla
-            CostumeColorsByBody[key] = colors;
-        }
-    }
-
-    /// <summary>
-    /// (Color) Colores de un traje COMUN a partir de su id de listado ("0015_00_00"). Devuelve la
-    /// lista base con el color 0 (el de siempre) incluido, o null si ese traje no tiene más colores.
-    /// </summary>
-    public List<CostumeColor> GetCostumeColors(string costumeId)
-    {
-        if (string.IsNullOrEmpty(costumeId)) return null;
-        string[] parts = costumeId.Split('_');
-        if (parts.Length < 2) return null;
-
-        List<CostumeColor> colors;
-        return CostumeColorsByBody.TryGetValue(parts[0] + "_" + parts[1], out colors) ? colors : null;
     }
 
     private static bool TryParseEnglishNames(
@@ -634,6 +367,7 @@ public class UmaViewerMain : MonoBehaviour
                 if (charaNames.Count == 0 || mobNames.Count == 0)
                     throw new InvalidDataException("English name cache is missing required name tables.");
                 ApplyEnglishNames(charaNames, mobNames);
+                Debug.Log($"Loaded cached English names: {charaNames.Count} characters, {mobNames.Count} mobs.");
             }
             return true;
         }

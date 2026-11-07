@@ -15,6 +15,8 @@ namespace Gallop.Live
         private float _localHeight;
         private float _colorPower;
         private bool _isInitialized;
+        private Vector3 _characterPosition;
+        private bool _enableLookAt;
         public int TimelineIndex { get; private set; } = -1;
 
         // Native 0x1a7f1a0: first child renderer, per-instance materials, optional billboard.
@@ -37,17 +39,24 @@ namespace Gallop.Live
 
         // Native 0x1a7f480. Visibility is committed only by AlterLateUpdate.
         public void SetUpdateInfo(ref Spotlight3dUpdateInfo info)
+            => SetUpdateInfo(ref info, transform.parent != null ? transform.parent.position : Vector3.zero);
+
+        public void SetUpdateInfo(ref Spotlight3dUpdateInfo info, Vector3 characterPosition)
         {
             if (!_isInitialized) return;
             _colorPower = info.isActive && info.colorPower > 0f ? info.colorPower : 0f;
             _position = info.position;
+            if (info.PositionType == LiveTimelineKeySpotlight3dData.PositionType.Character)
+                _position += characterPosition;
+            _characterPosition = characterPosition;
+            _enableLookAt = info.EnableLookAt;
             _localHeight = info.localHeight;
             _rotation = Quaternion.Euler(info.rotation);
             _scale = info.scale;
             SetMaterialValues(info.color, _colorPower);
             if (_billboard != null)
             {
-                _billboard.enabled = info.IsEnabledBillboard;
+                _billboard.enabled = info.IsEnabledBillboard && !_enableLookAt;
                 _billboard.TargetCameraTransform = info.TargetCameraTransform;
             }
         }
@@ -63,13 +72,20 @@ namespace Gallop.Live
             }
             _renderer.enabled = true;
             transform.position = _position + _rotation * new Vector3(0f, _localHeight, 0f);
-            if (_billboard != null)
+            if (!_enableLookAt && _billboard != null)
             {
                 transform.localRotation = Quaternion.identity;
                 _billboard.AlterLateUpdate();
             }
             transform.localRotation = transform.localRotation * _rotation;
             transform.localScale = _scale;
+            if (_enableLookAt)
+            {
+                Vector3 direction = _characterPosition - transform.position;
+                if (direction.sqrMagnitude > 0.0001f)
+                    transform.rotation = Quaternion.FromToRotation(transform.TransformDirection(Vector3.down),
+                        direction.normalized) * transform.rotation;
+            }
         }
 
         private void SetMaterialValues(Color color, float power)

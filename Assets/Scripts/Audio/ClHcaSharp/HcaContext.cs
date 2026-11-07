@@ -1,4 +1,4 @@
-﻿namespace ClHcaSharp
+namespace ClHcaSharp
 {
     internal class HcaContext
     {

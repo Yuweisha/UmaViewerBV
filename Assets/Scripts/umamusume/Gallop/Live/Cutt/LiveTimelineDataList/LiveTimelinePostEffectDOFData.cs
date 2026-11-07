@@ -12,17 +12,20 @@ namespace Gallop.Live.Cutt
         public int dofBlurType;
         public int dofQuality;
         public float dofForegroundSize;
-        // Present in the original key (LiveTimelineKeyPostEffectDOFData, +0x48, between
-        // dofForegroundSize at +0x44 and dofFocalPoint at +0x4C). The native consumer is not
-        // identified yet -- most likely the old-DOF foreground blur extrude -- so it is declared
-        // for schema parity and not read by any handler.
-        public float dofFgBlurSpread;
         public float dofFocalPoint;
         public float dofSmoothness;
         public float BallBlurPowerFactor;
         public float BallBlurBrightnessThreshhold;
         public float BallBlurBrightnessIntensity;
         public float BallBlurSpread;
+
+        // Native shared main/multi key constructor 0x4f20c90.
+        public LiveTimelineKeyPostEffectDOFData()
+        {
+            forcalSize=30f;blurSpread=1.75f;charactor=1;dofBlurType=1;dofQuality=1;
+            dofForegroundSize=.1f;dofFocalPoint=1f;dofSmoothness=.5f;
+            BallBlurBrightnessThreshhold=.5f;BallBlurBrightnessIntensity=1f;BallBlurSpread=.1f;
+        }
 
         /// <summary>
         /// `charactor` is a <see cref="LiveCharaPositionFlag"/>, not an index.
@@ -39,7 +42,7 @@ namespace Gallop.Live.Cutt
         /// </summary>
         public LiveCharaPositionFlag FocusCharacters => (LiveCharaPositionFlag)charactor;
 
-        // Actual game metadata and SetupDOFUpdateInfo RVA 0x726a610 confirm:
+        // Pinned game metadata and SetupDOFUpdateInfo RVA 0x4ef46f0 confirm:
         // bit16 ATTR_USE_LOOKAT; bit17 ATTR_USE_FOCAL_POINT;
         // bit18 ATTR_ENABLE_DOF; bit19 ATTR_IS_POINT_BALL_BLUR.
         // Current-key flags select the mode; both endpoints resolve world focus

@@ -41,6 +41,9 @@ namespace Gallop.Live.Cutt
         public float turnOffTime;
         public float keepTime;
         public float intervalTime;
+        public bool IsEnabledFakeLightOverride;
+        public float FakeLightRadiusScale = 1f;
+        public float FakeLightIntensityScale = 1f;
     }
 
     [Serializable]
@@ -52,5 +55,8 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineBlinkLightData : ILiveTimelineGroupDataWithName
     {
         public LiveTimelineKeyBlinkLightDataList keys;
+        [SerializeField, Newtonsoft.Json.JsonProperty("_useWashLightBlendMode")]
+        private bool _useWashLightBlendMode;
+        public bool UseWashLightBlendMode => _useWashLightBlendMode;
     }
 }

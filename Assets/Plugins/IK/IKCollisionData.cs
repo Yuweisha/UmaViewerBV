@@ -14,7 +14,17 @@ namespace IK
             public bool IsBodyScale;
             public float Param1;
 
-            public float Radius { get; }
+            public float Radius => Param1;
+
+            // Original 0x1fef460 copies the flag supplied by the asset owner;
+            // the caller, not this struct, applies the selected scale.
+            public static void InitializeFromParameter(ref RuntimeParameter runtimeParam, Parameter param, bool isBodyScale)
+            {
+                runtimeParam.Type = param.Type;
+                runtimeParam.Offset = param.Offset;
+                runtimeParam.IsBodyScale = isBodyScale;
+                runtimeParam.Param1 = param.Param1;
+            }
         }
 
         [Serializable]

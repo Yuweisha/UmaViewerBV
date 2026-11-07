@@ -356,7 +356,8 @@ namespace Gallop.Live.Cutt
             double p = d * 0.3;
             double s = p * 0.25;
 
-            return c *System.Math.Pow(2.0, t2 * -10.0) * System.Math.Sin((t2 * d - s) * 6.28318531 / p) + c + b;
+            // Native constant at RVA 0x625efb8 is the full double 2*PI.
+            return c *System.Math.Pow(2.0, t2 * -10.0) * System.Math.Sin((t2 * d - s) * (System.Math.PI * 2.0) / p) + c + b;
         }
 
         public static double ElasticEaseIn(double t, double b, double c, double d)
@@ -371,7 +372,7 @@ namespace Gallop.Live.Cutt
 
             t2 = t2 - 1.0;
 
-            return c * System.Math.Pow(2.0, t2 * 10.0) * System.Math.Sin((t2 * d - s) * -6.28318531 / p) + b;
+            return c * System.Math.Pow(2.0, t2 * 10.0) * System.Math.Sin((t2 * d - s) * -(System.Math.PI * 2.0) / p) + b;
         }
 
         public static double ElasticEaseInOut(double t, double b, double c, double d)
@@ -388,10 +389,10 @@ namespace Gallop.Live.Cutt
 
             if (t2 < 1.0)
             {
-                return (c * 0.5) * System.Math.Pow(2.0, t3 * 10.0) * System.Math.Sin((t3 * d - s) * -6.28318531 / p) + b;
+                return (c * 0.5) * System.Math.Pow(2.0, t3 * 10.0) * System.Math.Sin((t3 * d - s) * -(System.Math.PI * 2.0) / p) + b;
             }
 
-            return (c * 0.5) * System.Math.Pow(2.0, t3 * -10.0) * System.Math.Sin((t3 * d - s) * 6.28318531 / p)+ c + b;
+            return (c * 0.5) * System.Math.Pow(2.0, t3 * -10.0) * System.Math.Sin((t3 * d - s) * (System.Math.PI * 2.0) / p)+ c + b;
         }
 
         public static double ElasticEaseOutIn(double t, double b, double c, double d)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -29,6 +29,7 @@ namespace Gallop.Live.Cutt
             HeadHeght = (Bones["Position"].InverseTransformPoint(Bones["Head"].position).y + 0.1f) * UmaContainer.BodyScale;
             WaistHeght = Bones["Position"].InverseTransformPoint(Bones["Waist"].position).y * UmaContainer.BodyScale;
             ChestHeght = Bones["Position"].InverseTransformPoint(Bones["Chest"].position).y * UmaContainer.BodyScale;
+            Debug.Log($"InfoChara {UmaContainer.CharaEntry.Name}: {HeadHeght}, {WaistHeght}, {ChestHeght}");
         }
 
         float HeadHeght;
@@ -53,7 +54,7 @@ namespace Gallop.Live.Cutt
 
         public Vector3 liveCharaLeftHandWristPosition => Bones["Wrist_L"].position;
 
-        public Vector3 liveCharaLeftHandAttachPosition => Bones["Hand_Attach_L"].position; 
+        public Vector3 liveCharaLeftHandAttachPosition => Bones["Hand_Attach_L"].position;
 
         public Vector3 liveCharaRightHandAttachPosition => Bones["Hand_Attach_R"].position;
 

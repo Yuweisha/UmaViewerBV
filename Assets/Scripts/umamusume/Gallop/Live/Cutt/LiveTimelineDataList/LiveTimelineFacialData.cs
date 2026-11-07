@@ -128,6 +128,9 @@ namespace Gallop.Live.Cutt
 		public int facialEarIdL;
 		public int facialEarIdR;
 		public DrivenKeyComponent.InterpolateType interpolateType;
+		public bool useEarRandomMotion;
+		public Gallop.EarType randomMotionEarType;
+		public int randomMotionIndex;
 	}
 
 	[System.Serializable]
@@ -160,6 +163,7 @@ namespace Gallop.Live.Cutt
 		public int tearfulType;
 		public TeardropConfig[] teardropConfigs;
 		public int mangameIndex;
+		public Gallop.Model.Component.EyeHighlightController.TimeComparisonType TwinkleTimeComparisonType;
 
 		public const int kAttrCheek = 65536;
 		public const int kAttrTeary = 131072;
@@ -186,5 +190,17 @@ namespace Gallop.Live.Cutt
 		public LiveTimelineKeyFacialEyeTrackDataList eyeTrackKeys; // 0x30
 		public LiveTimelineKeyFacialEarDataList earKeys; // 0x38
 		public LiveTimelineKeyFacialEffectDataList effectKeys; // 0x40
+		public LiveTimelineKeyTailMotionDataList tailMotionKeys; // original +0x48
+		public LiveTimelineFacialData()
+		{
+			faceKeys = new LiveTimelineKeyFacialFaceDataList();
+			mouthKeys = new LiveTimelineKeyFacialMouthDataList();
+			eyeKeys = new LiveTimelineKeyFacialEyeDataList();
+			eyebrowKeys = new LiveTimelineKeyFacialEyebrowDataList();
+			eyeTrackKeys = new LiveTimelineKeyFacialEyeTrackDataList();
+			earKeys = new LiveTimelineKeyFacialEarDataList();
+			effectKeys = new LiveTimelineKeyFacialEffectDataList();
+			tailMotionKeys = new LiveTimelineKeyTailMotionDataList();
+		}
 	}
 }

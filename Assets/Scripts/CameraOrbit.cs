@@ -1,4 +1,4 @@
-﻿using TMPro;
+using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -6,41 +6,33 @@ public class CameraOrbit : MonoBehaviour
 {
     public static CameraOrbit instance;
     public int CameraMode = 0;
-
     [Header("Light")]
     public GameObject Light;
-
     public TMP_Dropdown CameraModeDropdown;
-
     public GameObject CameraTargetHelper;
     public Vector3 TargetCenter;
-
     public EventSystem eventSystem;
     bool controlOn;
-
     [Header("Orbit Camera")]
     float camDistMin = 1, camDistMax = 15;
-
     [Header("Free Camera")]
     bool FreeCamLeft = false;
     bool FreeCamRight = false;
     private Quaternion lookRotation;
-
     private UISettingsCamera CameraSettings => UmaViewerUI.Instance.CameraSettings;
 
     void Start()
     {
         CameraSettings.CameraDistance.minValue = camDistMin;
         CameraSettings.CameraDistance.maxValue = camDistMax;
-
         lookRotation = transform.localRotation;
         instance = this;
     }
 
     void Update()
     {
-        if (HandleManager.InteractionInProgress) return;
-
+        if (HandleManager.InteractionInProgress)
+            return;
         bool cameraModeChanged = CameraMode != CameraSettings.CameraMode;
         if (cameraModeChanged)
         {
@@ -58,12 +50,13 @@ public class CameraOrbit : MonoBehaviour
                 {
                     lookRotation.y = transform.eulerAngles.y;
                 }
+
                 FreeCamera();
                 break;
         }
     }
 
-    #region PC controls
+#region PC controls
     /// <summary>
     /// Rotate Light Source
     /// </summary>
@@ -82,14 +75,13 @@ public class CameraOrbit : MonoBehaviour
     void OrbitAround(bool aroundCharacter = false)
     {
         TargetCenter = Vector3.zero;
-
         Camera.main.fieldOfView = CameraSettings.FOV;
         Vector3 position = transform.position;
-
         if (Input.GetMouseButtonDown(0) && !eventSystem.IsPointerOverGameObject())
         {
             controlOn = true;
         }
+
         if (Input.GetMouseButton(0) && controlOn)
         {
             position -= Input.GetAxis("Mouse X") * transform.right * CameraSettings.MovementSpeed;
@@ -109,11 +101,13 @@ public class CameraOrbit : MonoBehaviour
         {
             CameraTargetHelper.SetActive(true);
         }
+
         if ((Input.GetMouseButton(2) || Input.GetKey(KeyCode.LeftControl)) && CameraTargetHelper.activeSelf)
         {
             CameraSettings.TargetHeight -= Input.GetAxis("Mouse Y");
             CameraTargetHelper.transform.position = CameraSettings.TargetHeight * Vector3.up;
         }
+
         if (Input.GetMouseButtonUp(2) || Input.GetKeyUp(KeyCode.LeftControl))
         {
             CameraTargetHelper.SetActive(false);
@@ -122,13 +116,11 @@ public class CameraOrbit : MonoBehaviour
         float camDist = CameraSettings.CameraDistance.value;
         CameraSettings.CameraHeightSlider.maxValue = camDist + 1 - camDist * 0.2f;
         CameraSettings.CameraHeightSlider.minValue = -camDist + 1 + camDist * 0.2f;
-
         Vector3 target = TargetCenter + CameraSettings.TargetHeight * Vector3.up; //set target offsets
-
         position.y = TargetCenter.y + CameraSettings.CameraHeight; //set camera height
-        transform.position = position;  //set final position of camera at target
+        transform.position = position; //set final position of camera at target
         transform.LookAt(target); //look at target position
-        transform.Rotate(0,0, CameraSettings.CameraRotation);
+        transform.Rotate(0, 0, CameraSettings.CameraRotation);
         transform.position = target - transform.forward * camDist; //move away from target
     }
 
@@ -138,46 +130,41 @@ public class CameraOrbit : MonoBehaviour
     void FreeCamera()
     {
         Camera.main.fieldOfView = CameraSettings.FOV;
-        float moveSpeed = CameraSettings.MovementSpeed;;
+        float moveSpeed = CameraSettings.MovementSpeed;
         float rotateSpeed = CameraSettings.RotationSpeed;
-
         if (Input.GetMouseButtonDown(0) && !eventSystem.IsPointerOverGameObject())
         {
             FreeCamLeft = true;
         }
+
         if (Input.GetMouseButton(0) && FreeCamLeft)
         {
-            // (VIDEO SPEED) Tiempo SIN escalar: la camara se mueve igual de rapido aunque el live vaya
-            // a camara lenta (Time.timeScale < 1).
-            transform.position += Input.GetAxis("Vertical") * transform.forward * Time.unscaledDeltaTime * moveSpeed;
-            transform.position += Input.GetAxis("Horizontal") * transform.right * Time.unscaledDeltaTime * moveSpeed;
-
+            transform.position += Input.GetAxis("Vertical") * transform.forward * Time.deltaTime * moveSpeed;
+            transform.position += Input.GetAxis("Horizontal") * transform.right * Time.deltaTime * moveSpeed;
             lookRotation.x -= Input.GetAxis("Mouse Y") * rotateSpeed;
             lookRotation.y += Input.GetAxis("Mouse X") * rotateSpeed;
-
             lookRotation.x = Mathf.Clamp(lookRotation.x, -90, 90);
         }
         else
         {
             FreeCamLeft = false;
         }
-        transform.localRotation = Quaternion.Euler(lookRotation.x, lookRotation.y, CameraSettings.CameraRotation);
 
+        transform.localRotation = Quaternion.Euler(lookRotation.x, lookRotation.y, CameraSettings.CameraRotation);
         if (Input.GetMouseButtonDown(1) && !eventSystem.IsPointerOverGameObject())
         {
             FreeCamRight = true;
         }
+
         if (Input.GetMouseButton(1) && FreeCamRight)
         {
-            // (VIDEO SPEED) Tiempo SIN escalar para que la camara no vaya a camara lenta.
-            transform.position += Input.GetAxis("Mouse X") * transform.right  * Time.unscaledDeltaTime * moveSpeed;
-            transform.position += Input.GetAxis("Mouse Y") * transform.up * Time.unscaledDeltaTime * moveSpeed;
+            transform.position += Input.GetAxis("Mouse X") * transform.right * Time.deltaTime * moveSpeed;
+            transform.position += Input.GetAxis("Mouse Y") * transform.up * Time.deltaTime * moveSpeed;
         }
         else
         {
             FreeCamRight = false;
         }
-
     }
-    #endregion
+#endregion
 }

@@ -19,12 +19,12 @@ namespace Gallop.Live
             public int characterIndex;
             public Transform character;
             public FollowSpotLightController spotlight;
-            public Renderer[] shadowCasters;
             public FakeShadowController leftShadow;
             public FakeShadowController rightShadow;
         }
 
         private readonly List<Binding> _bindings = new List<Binding>();
+        private readonly Dictionary<Transform, bool> _visibilityOverride = new Dictionary<Transform, bool>();
         private Func<int, Vector3> _groundPositionResolver;
 
         // Optional path resolvers allow an explicitly known per-character resource selection.
@@ -50,9 +50,6 @@ namespace Gallop.Live
                     Transform character = characterRoots[i];
                     if (character == null) continue;
                     var binding = new Binding { characterIndex = i, character = character };
-                    // Renderers del personaje: su sombra (shadow map) se enciende/apaga con las
-                    // ventanas BgColor1 en LightBlendMode.Multiply (ver AlterLateUpdate).
-                    binding.shadowCasters = character.GetComponentsInChildren<Renderer>(true);
                     _bindings.Add(binding);
                     GameObject spotlight = InstantiateResource(spotlightPathResolver?.Invoke(i),
                         DefaultSpotlightPath, stageRoot, prefabResolver, prefabs);
@@ -64,15 +61,22 @@ namespace Gallop.Live
                             DestroyInstance(spotlight);
                             Debug.LogError("[FootLight] Authored spotlight prefab has no FollowSpotLightController.");
                         }
-                        else binding.spotlight.Bind(character, character);
+                        else
+                        {
+                            Transform positionLight=null;
+                            string nodeName=Director.instance?._liveTimelineControl?.data?.spotLightParentName;
+                            if(!string.IsNullOrEmpty(nodeName))
+                                foreach(var node in character.GetComponentsInChildren<Transform>(true))
+                                    if(node.name==nodeName){positionLight=node;break;}
+                            var container=character.GetComponent<UmaContainerCharacter>();
+                            binding.spotlight.Bind(positionLight!=null?positionLight:character,
+                                container!=null && container.Position!=null ? container.Position : character);
+                        }
                     }
-                    // Sombras de pie (FakeShadowController) desactivadas: en este visor no se usa la
-                    // sombra falsa del prefab (su malla es una cruz). La sombra del personaje la da
-                    // el shadow map real. Ver PENDIENTE_SOMBRA_PERSONAJE.md.
-                    // binding.leftShadow = CreateFootShadow(i, true, footResolver(i, true), character,
-                    //     shadowPathResolver?.Invoke(i), stageRoot, prefabResolver, prefabs);
-                    // binding.rightShadow = CreateFootShadow(i, false, footResolver(i, false), character,
-                    //     shadowPathResolver?.Invoke(i), stageRoot, prefabResolver, prefabs);
+                    binding.leftShadow = CreateFootShadow(i, true, footResolver(i, true), character,
+                        shadowPathResolver?.Invoke(i), stageRoot, prefabResolver, prefabs);
+                    binding.rightShadow = CreateFootShadow(i, false, footResolver(i, false), character,
+                        shadowPathResolver?.Invoke(i), stageRoot, prefabResolver, prefabs);
                 }
                 AlterLateUpdate();
             }
@@ -102,7 +106,8 @@ namespace Gallop.Live
                 return null;
             }
             instance.name += left ? "_LeftFoot" : "_RightFoot";
-            controller.Bind(character, foot);
+            var container = character.GetComponent<UmaContainerCharacter>();
+            controller.Bind(foot, container != null && container.Position != null ? container.Position : character);
             return controller;
         }
 
@@ -122,27 +127,73 @@ namespace Gallop.Live
             return instance;
         }
 
+        public void SetCharacterVisible(Transform character, bool visible)
+        {
+            if (character == null) return;
+            _visibilityOverride[character] = visible;
+            ApplyBindingActive(character, visible);
+        }
+
+        private void ApplyBindingActive(Transform character, bool visible)
+        {
+            foreach (var binding in _bindings)
+            {
+                if (binding.character != character) continue;
+                if (binding.spotlight != null) binding.spotlight.gameObject.SetActive(visible);
+                if (binding.leftShadow != null) binding.leftShadow.gameObject.SetActive(visible);
+                if (binding.rightShadow != null) binding.rightShadow.gameObject.SetActive(visible);
+            }
+        }
+
         public void ApplySpotlight(ref BgColor1UpdateInfo info)
         {
-            LiveCharaPositionFlag group;
+            if(!Director.instance)return; // Original Director.HasInstance gate.
+            int mask;
             switch (info.TimelineName)
             {
-                case "FollowSpotCenter": group = LiveCharaPositionFlag.Center; break;
-                case "FollowSpotLeft": group = LiveCharaPositionFlag.Left; break;
-                case "FollowSpotRight": group = LiveCharaPositionFlag.Right; break;
-                case "FollowSpotBack": group = LiveCharaPositionFlag.Back; break;
+                // Original Stage.UpdateCharaFollowSpotColor1 0x4eb8710.
+                // Named groups have fixed masks; only FollowSpotColor reads flags.
+                case "FollowSpotCenter": mask = 1; break;
+                case "FollowSpotLeft": mask = 2; break;
+                case "FollowSpotRight": mask = 4; break;
+                case "FollowSpotBack": mask = 0xffff8; break;
+                case "FollowSpotOther": mask = 0xffffe; break;
+                case "FollowSpotColor":
+                    mask = info.flags == 0 ? 0xfffff : info.flags;
+                    if (mask < 1) return;
+                    break;
                 default: return;
             }
             foreach (var binding in _bindings)
             {
-                int mask = info.flags != 0 ? info.flags : (int)group;
                 bool selected = (mask & (1 << binding.characterIndex)) != 0;
-                if (!selected || binding.spotlight == null) continue;
-                // The authored key selects which face of the spot is drawn: an additive pool or
-                // the multiply fake shadow. Native applies it every frame, independently of power.
-                binding.spotlight.SetBlendMode(info.LightBlendMode);
-                binding.spotlight.ApplyLight(info.color, info.colorPower, info.scale);
+                if (selected && binding.spotlight != null)
+                    binding.spotlight.ApplyLight(info.color, info.colorPower, info.scale, (LiveDefine.LightBlendMode)info.LightBlendMode);
             }
+        }
+
+        public void ApplyShadow(ref BgColor1UpdateInfo info)
+        {
+            // StageController.UpdateShadowColor1 0x4ebe330, including the special
+            // ShadowColor=all fallback and the flags-only Shadow selector.
+            int mask;
+            switch (info.TimelineName)
+            {
+                case "ShadowCenter": mask = 1; break;
+                case "ShadowLeft": mask = 2; break;
+                case "ShadowRight": mask = 4; break;
+                case "ShadowBack": mask = 0xffff8; break;
+                case "ShadowOther": mask = 0xffffe; break;
+                case "ShadowColor": mask = info.flags != 0 ? info.flags : 0xfffff; break;
+                case "Shadow": mask = info.flags; break;
+                default: return;
+            }
+            foreach (var binding in _bindings)
+                if ((mask & (1 << binding.characterIndex)) != 0)
+                {
+                    binding.leftShadow?.ApplyShadow(info.color, info.colorPower, info.IsProjector);
+                    binding.rightShadow?.ApplyShadow(info.color, info.colorPower, info.IsProjector);
+                }
         }
 
         // Call after timeline formation placement, before rendering any presentation,
@@ -152,7 +203,17 @@ namespace Gallop.Live
             for (int i = 0; i < _bindings.Count; i++)
             {
                 Binding binding = _bindings[i];
-                bool active = binding.character != null && binding.character.gameObject.activeInHierarchy;
+                var container = binding.character != null
+                    ? binding.character.GetComponent<UmaContainerCharacter>() : null;
+                // Formation visibility hides renderers; the authored foot
+                // shadows and follow-spots live under the stage root and must
+                // follow that same character visibility state.
+                bool overridden = false;
+                bool forced = false;
+                if (binding.character != null)
+                    overridden = _visibilityOverride.TryGetValue(binding.character, out forced);
+                bool active = binding.character != null && binding.character.gameObject.activeInHierarchy &&
+                    (overridden ? forced : (container == null || container.LiveVisible));
                 if (binding.spotlight != null && binding.spotlight.gameObject.activeSelf != active)
                     binding.spotlight.gameObject.SetActive(active);
                 if (binding.leftShadow != null && binding.leftShadow.gameObject.activeSelf != active)
@@ -163,23 +224,8 @@ namespace Gallop.Live
                 Vector3 position = _groundPositionResolver(binding.characterIndex);
                 if (binding.spotlight != null) binding.spotlight.AlterLateUpdate(position);
                 if (binding.spotlight != null) binding.spotlight.SetCharacterVisible(active);
-                // La sombra del personaje (shadow map real) solo se dibuja en las ventanas
-                // BgColor1 con LightBlendMode.Multiply: es cuando el juego la muestra. Durante el
-                // fogonazo (los haces barren y el spot se apaga) la sombra desaparece.
-                UnityEngine.Rendering.ShadowCastingMode castMode =
-                    binding.spotlight != null && binding.spotlight.IsShadowMode
-                        ? UnityEngine.Rendering.ShadowCastingMode.On
-                        : UnityEngine.Rendering.ShadowCastingMode.Off;
-                Renderer[] casters = binding.shadowCasters;
-                if (casters != null)
-                {
-                    for (int c = 0; c < casters.Length; c++)
-                    {
-                        Renderer caster = casters[c];
-                        if (caster != null && caster.shadowCastingMode != castMode)
-                            caster.shadowCastingMode = castMode;
-                    }
-                }
+                if (binding.leftShadow != null) binding.leftShadow.AlterLateUpdate(position);
+                if (binding.rightShadow != null) binding.rightShadow.AlterLateUpdate(position);
             }
         }
 

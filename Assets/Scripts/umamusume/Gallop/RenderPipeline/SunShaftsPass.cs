@@ -21,11 +21,21 @@ namespace Gallop.RenderPipeline
             public float BlurRadius, SunPower, CenterBrightness, CenterMultiplex, KomorebiRate;
             public float ColorLerpRate, ScreenColorPower, EffectColorPower, Intensity, BlackLevel;
             public bool IsValid => IsEnable;
+
             public static Parameter Default() => new Parameter
             {
-                Resolution = 1, ScreenBlendMode = 0, BlurRadius = 2.5f, SunColor = Color.white, SunPower = -1f,
-                CenterBrightness = 1.5f, CenterMultiplex = 1f, ScreenColorPower = 1f, EffectColorPower = 1f,
-                Intensity = 1.15f, BlackLevel = 0.1f, BlurIterations = 2
+                Resolution = 1,
+                ScreenBlendMode = 0,
+                BlurRadius = 2.5f,
+                SunColor = Color.white,
+                SunPower = -1f,
+                CenterBrightness = 1.5f,
+                CenterMultiplex = 1f,
+                ScreenColorPower = 1f,
+                EffectColorPower = 1f,
+                Intensity = 1.15f,
+                BlackLevel = 0.1f,
+                BlurIterations = 2
             };
         }
 
@@ -40,31 +50,44 @@ namespace Gallop.RenderPipeline
         private static readonly int Output = Shader.PropertyToID("_RecoveredSunShaftOutput");
         private static readonly int ColorBuffer = Shader.PropertyToID("_ColorBuffer");
         private static readonly int BlurRadius = Shader.PropertyToID("_BlurRadius4");
+        public SunShaftsPass(RenderPassEvent evt)
+        {
+            renderPassEvent = evt;
+            // The original mask PS samples _CameraDepthTexture, independently of DOF.
+            ConfigureInput(ScriptableRenderPassInput.Depth);
+        }
 
-        public SunShaftsPass(RenderPassEvent evt) { renderPassEvent = evt; }
         public bool Setup(Parameter parameter, PostImageEffectFeature feature)
         {
             _parameter = parameter;
             _feature = feature;
-            if (!parameter.IsValid) return false;
+            if (!parameter.IsValid)
+                return false;
             Shader shader = ShaderManager.GetShader(ShaderManager.ShaderKinds.SunShaftsComposite);
             Shader clear = ShaderManager.GetShader(ShaderManager.ShaderKinds.SimpleClear);
-            if (shader == null || !shader.isSupported || (parameter.IsEnabledBorderClear &&
-                (clear == null || !clear.isSupported))) return false;
-            if (_material == null) _material = CoreUtils.CreateEngineMaterial(shader);
-            else _material.shader = shader;
+            if (shader == null || !shader.isSupported || (parameter.IsEnabledBorderClear && (clear == null || !clear.isSupported)))
+                return false;
+            if (_material == null)
+                _material = CoreUtils.CreateEngineMaterial(shader);
+            else
+                _material.shader = shader;
             if (clear != null)
             {
-                if (_borderMaterial == null) _borderMaterial = CoreUtils.CreateEngineMaterial(clear);
-                else _borderMaterial.shader = clear;
+                if (_borderMaterial == null)
+                    _borderMaterial = CoreUtils.CreateEngineMaterial(clear);
+                else
+                    _borderMaterial.shader = clear;
             }
+
             return _material.passCount >= 5;
         }
 
         private void UpdateBorder(int width, int height)
         {
-            if (_border != null && width == _borderWidth && height == _borderHeight) return;
-            _borderWidth = width; _borderHeight = height;
+            if (_border != null && width == _borderWidth && height == _borderHeight)
+                return;
+            _borderWidth = width;
+            _borderHeight = height;
             float x = 1f / width, y = 1f / height;
             // Native CreateMesh 0x1a4f4e0 has four quads at z=0.1. Its DrawBorder
             // vertex keyword is stripped from the Windows shader bundle. Expand the
@@ -75,12 +98,44 @@ namespace Gallop.RenderPipeline
             SetQuad(12, 0f, 1f - y, 1f, 1f);
             if (_border == null)
             {
-                _border = new Mesh { name = "RecoveredSunShaftBorder", hideFlags = HideFlags.HideAndDontSave };
+                _border = new Mesh
+                {
+                    name = "RecoveredSunShaftBorder",
+                    hideFlags = HideFlags.HideAndDontSave
+                };
                 _border.vertices = _borderVertices;
-                _border.triangles = new[] { 0,1,2,0,2,3,4,5,6,4,6,7,8,9,10,8,10,11,12,13,14,12,14,15 };
+                _border.triangles = new[]
+                {
+                    0,
+                    1,
+                    2,
+                    0,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    4,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    8,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    12,
+                    14,
+                    15
+                };
             }
-            else _border.vertices = _borderVertices;
+            else
+                _border.vertices = _borderVertices;
         }
+
         private void SetQuad(int start, float x0, float y0, float x1, float y1)
         {
             _borderVertices[start] = new Vector3(x0, y0, 0.1f);
@@ -92,13 +147,11 @@ namespace Gallop.RenderPipeline
         private void DrawBorder(CommandBuffer cmd, UnityEngine.Rendering.Universal.CameraData cameraData, int width, int height)
         {
             UpdateBorder(width, height);
-            Matrix4x4 projection = GL.GetGPUProjectionMatrix(Matrix4x4.Ortho(0f, 1f, 0f, 1f, -1f, 1f),
-                cameraData.IsCameraProjectionMatrixFlipped());
+            Matrix4x4 projection = GL.GetGPUProjectionMatrix(Matrix4x4.Ortho(0f, 1f, 0f, 1f, -1f, 1f), cameraData.IsCameraProjectionMatrixFlipped());
             RenderingUtils.SetViewAndProjectionMatrices(cmd, Matrix4x4.identity, projection, false);
             for (int i = 0; i < _borderMaterial.passCount; i++)
                 cmd.DrawMesh(_border, Matrix4x4.identity, _borderMaterial, 0, i);
-            RenderingUtils.SetViewAndProjectionMatrices(cmd, cameraData.GetViewMatrix(),
-                cameraData.GetGPUProjectionMatrix(), false);
+            RenderingUtils.SetViewAndProjectionMatrices(cmd, cameraData.GetViewMatrix(), cameraData.GetGPUProjectionMatrix(), false);
         }
 
         public static Vector3 ResolveViewport(Parameter parameter, Camera camera)
@@ -110,7 +163,8 @@ namespace Gallop.RenderPipeline
 
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            if (_feature == null || _material == null || !_parameter.IsValid) return;
+            if (_feature == null || _material == null || !_parameter.IsValid)
+                return;
             var cmd = CommandBufferPool.Get("Recovered.SunShafts");
             try
             {
@@ -118,7 +172,9 @@ namespace Gallop.RenderPipeline
                     _feature.ResetSourceRT(cmd, ref renderingData);
                 var input = _feature.SourceRT;
                 var full = renderingData.cameraData.cameraTargetDescriptor;
-                full.depthBufferBits = 0; full.msaaSamples = 1; full.bindMS = false;
+                full.depthBufferBits = 0;
+                full.msaaSamples = 1;
+                full.bindMS = false;
                 full.useMipMap = full.autoGenerateMips = false;
                 var low = full;
                 int divisor = _parameter.Resolution == 2 ? 1 : _parameter.Resolution == 1 ? 2 : 4;
@@ -129,9 +185,11 @@ namespace Gallop.RenderPipeline
                 int iterations = Mathf.Clamp(_parameter.BlurIterations, 1, 4);
                 if (_parameter.IsEnabledBorderClear && (Mathf.Abs(viewport.x - 0.5f) > 1f || Mathf.Abs(viewport.y - 0.5f) > 1f))
                 {
-                    if (iterations == 1) return;
+                    if (iterations == 1)
+                        return;
                     iterations /= 2;
                 }
+
                 cmd.GetTemporaryRT(Low0, low, FilterMode.Bilinear);
                 cmd.GetTemporaryRT(Low1, low, FilterMode.Bilinear);
                 cmd.GetTemporaryRT(Output, full, FilterMode.Bilinear);
@@ -144,13 +202,17 @@ namespace Gallop.RenderPipeline
                 cmd.SetGlobalFloat("_ColorLerpRate", _parameter.ColorLerpRate);
                 cmd.SetGlobalFloat("_ScreenColorPower", _parameter.ScreenColorPower);
                 cmd.SetGlobalFloat("_EffectColorPower", _parameter.EffectColorPower);
+                // Pass 0 also reads this uniform. Do not consume the previous camera/frame's color.
+                cmd.SetGlobalVector("_SunColor", (Vector4)(_parameter.SunColor * _parameter.Intensity));
                 cmd.SetGlobalVector(BlurRadius, new Vector4(_parameter.BlurRadius, _parameter.BlurRadius, 0f, 0f));
+
                 cmd.Blit(input.RtId, Low0, _material, 0);
                 if (_parameter.IsEnabledBorderClear && _borderMaterial != null)
                 {
                     cmd.SetRenderTarget(Low0);
                     DrawBorder(cmd, renderingData.cameraData, low.width, low.height);
                 }
+
                 int blurPass = _parameter.IsEnabledBlurAlpha ? 4 : 1;
                 float radius = _parameter.BlurRadius / 768f;
                 cmd.SetGlobalVector(BlurRadius, new Vector4(radius, radius, 0f, 0f));
@@ -163,23 +225,31 @@ namespace Gallop.RenderPipeline
                     radius = _parameter.BlurRadius * (i * 2f + 2f) * 6f / 768f;
                     cmd.SetGlobalVector(BlurRadius, new Vector4(radius, radius, 0f, 0f));
                 }
+
                 cmd.SetGlobalVector("_SunColor", (Vector4)(_parameter.SunColor * _parameter.Intensity));
                 cmd.SetGlobalTexture(ColorBuffer, Low0);
                 cmd.Blit(input.RtId, Output, _material, _parameter.ScreenBlendMode == 0 ? 2 : 3);
+
                 cmd.SetGlobalTexture(ColorBuffer, Texture2D.blackTexture);
-                cmd.ReleaseTemporaryRT(Low0); cmd.ReleaseTemporaryRT(Low1);
+                cmd.ReleaseTemporaryRT(Low0);
+                cmd.ReleaseTemporaryRT(Low1);
                 _feature.SetSourceRT(RenderTextureHandle.Make(Output, full.width, full.height), cmd, ref renderingData);
                 context.ExecuteCommandBuffer(cmd);
-                LiveRuntimeDiagnostics.RecordRenderExecution(renderingData.cameraData.camera,
-                    "SunShafts", renderPassEvent, input, _feature.SourceRT);
             }
-            finally { CommandBufferPool.Release(cmd); }
+            finally
+            {
+                CommandBufferPool.Release(cmd);
+            }
         }
 
         public void Dispose()
         {
-            CoreUtils.Destroy(_material); CoreUtils.Destroy(_borderMaterial); CoreUtils.Destroy(_border);
-            _material = null; _borderMaterial = null; _border = null;
+            CoreUtils.Destroy(_material);
+            CoreUtils.Destroy(_borderMaterial);
+            CoreUtils.Destroy(_border);
+            _material = null;
+            _borderMaterial = null;
+            _border = null;
         }
     }
 }

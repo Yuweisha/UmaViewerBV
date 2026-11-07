@@ -1,4 +1,4 @@
-﻿/*从 https://github.com/npedotnet/DDSReader 译成C#代码*/
+/*从 https://github.com/npedotnet/DDSReader 译成C#代码*/
 
 namespace LibMMD.Unity3D.ImageLoader
 {

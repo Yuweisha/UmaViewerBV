@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -36,7 +36,9 @@ namespace Gallop.RenderPipeline
             blend = float.IsNaN(blend) ? 0f : Mathf.Clamp01(blend);
             for (int x = 0; x < Width; ++x)
             {
-                float time = x / 255f;
+                // Installed ColorCorrectionPass.UpdateTextureParameter 0x52063d0:
+                // cvtdq2ps(index) * 0.00390625; last sample is 255/256.
+                float time = x / 256f;
                 float r = Evaluate(red, time), g = Evaluate(green, time), b = Evaluate(blue, time);
                 if (blend > 0f)
                 {

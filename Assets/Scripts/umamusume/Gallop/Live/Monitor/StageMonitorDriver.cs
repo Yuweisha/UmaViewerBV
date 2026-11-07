@@ -117,6 +117,8 @@ namespace Gallop.Live
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<MonitorMaterialBinding> _resolveBuffer = new List<MonitorMaterialBinding>(8);
         private readonly List<Renderer> _cameraScreenRenderers = new List<Renderer>(32);
+        private bool _useRenderTextureForMonitor;
+        public bool IsUseRenderTextureForMonitor(int index) => _ctl != null && _ctl.IsUseRenderTextureForMonitor(index);
         private static readonly List<MonitorMaterialBinding> EmptyBindingList = new List<MonitorMaterialBinding>(0);
 
         private void Awake()
@@ -135,6 +137,7 @@ namespace Gallop.Live
 
         private void OnDisable()
         {
+            Director.instance?.UnbindMonitorResources(this);
             Unbind();
             if (_cameraDriver != null)
                 _cameraDriver.ReleaseCapture();
@@ -146,6 +149,8 @@ namespace Gallop.Live
             BindIfPossible();
             if (_ctl == null || _stage == null || !_hasMonitorTimelineData)
             {
+                _useRenderTextureForMonitor = false;
+                Director.instance?.UnbindMonitorResources(this);
                 if (_cameraDriver != null)
                     _cameraDriver.UpdateCapture(null, 0f, null);
                 RestoreCameraBindings(true);
@@ -157,10 +162,13 @@ namespace Gallop.Live
             if (!_hasBuiltCache)
                 RebuildCache();
 
-            _cameraDriver.UpdateCapture(_ctl, _ctl.currentLiveTime * LiveTimelineControl.kTargetFpsF, _ctl.data);
+            Director.instance?.EnsureMonitorResources(this, _cameraDriver, _ctl.data.MonitorCameraSettings);
+            _cameraDriver.BindTimelineIfNeeded(_ctl);
+            _ctl.BeginMonitorControlFrame();
             for (int i = 0; i < _bindings.Count; i++)
                 _bindings[i].cameraAppliedThisFrame = false;
             ApplyMonitorTimeline();
+            _ctl.UpdateMonitorCameraCapture(_cameraDriver);
             RestoreCameraBindings();
         }
 
@@ -263,6 +271,8 @@ namespace Gallop.Live
 
         private void Unbind()
         {
+            Director.instance?.UnbindMonitorResources(this);
+            _useRenderTextureForMonitor = false;
             _ctl = null;
             RestoreCameraBindings(true);
             _stage = null;
@@ -490,6 +500,9 @@ namespace Gallop.Live
             List<LiveTimelineWorkSheet> worksheets = data.worksheetList;
             for (int wsIndex = 0; wsIndex < worksheets.Count; wsIndex++)
             {
+                // Native AlterUpdate_MonitorControl clears the camera-sized
+                // copy flag array on each worksheet dispatch, not per material.
+                _useRenderTextureForMonitor = false;
                 LiveTimelineWorkSheet workSheet = worksheets[wsIndex];
                 if (workSheet == null || workSheet.monitorControlList == null)
                     continue;
@@ -580,6 +593,15 @@ namespace Gallop.Live
 
                     for (int j = 0; j < targets.Count; j++)
                         ApplyShaderState(targets[j], state);
+                    // Native flags preserve both the actual camera index and
+                    // the controlling material group index.
+                    Texture cameraTexture = state.main.texture;
+                    if (state.useMonitorCamera && targets.Exists(b =>
+                        b.material != null && b.material.mainTexture == cameraTexture))
+                    {
+                        _ctl.MarkMonitorCameraUsed(curKey.dispID, i);
+                        if (i == 0) _useRenderTextureForMonitor = true;
+                    }
                 }
             }
         }
@@ -639,15 +661,16 @@ namespace Gallop.Live
             if (state.useMonitorCamera)
             {
                 // Never replace an authored camera with an unrelated movie or placeholder.
-                if (_cameraDriver == null || !_cameraDriver.IsActive || _cameraDriver.Texture == null)
+                if (_cameraDriver == null || _cameraDriver.GetTexture(curKey.dispID) == null)
                     return false;
-                state.main.texture = _cameraDriver.Texture;
+                state.main.texture = _cameraDriver.GetTexture(curKey.dispID);
                 Vector2 captureSize = size;
                 Vector2 capturePosition = position;
-                // Native MonitorController.UpdateParam (0x1aa4660).
+                // Fixed DLL MonitorController.UpdateParam (0x4e986e0): the
+                // multi path rounds to even; the other path preserves signed UVs.
                 if (curKey.IsMultiFlag())
                 {
-                    captureSize = new Vector2(Mathf.Abs(captureSize.x), Mathf.Abs(captureSize.y));
+                    captureSize = new Vector2(Mathf.Round(captureSize.x), Mathf.Round(captureSize.y));
                     if (captureSize.x == 0f) captureSize.x = 1f;
                     if (captureSize.y == 0f) captureSize.y = 1f;
                     capturePosition.x = Mathf.Clamp(capturePosition.x, -1f, 1f);
@@ -655,15 +678,17 @@ namespace Gallop.Live
                 }
                 else
                 {
-                    captureSize.x = Mathf.Clamp01(captureSize.x);
-                    captureSize.y = Mathf.Clamp01(captureSize.y);
-                    float extentX = captureSize.x == 0f ? 0f : 1f - captureSize.x;
-                    float extentY = captureSize.y == 0f ? 0f : 1f - captureSize.y;
+                    captureSize.x = Mathf.Clamp(captureSize.x, -1f, 1f);
+                    captureSize.y = Mathf.Clamp(captureSize.y, -1f, 1f);
+                    float remainderX = captureSize.x % 1f;
+                    float remainderY = captureSize.y % 1f;
+                    float extentX = remainderX == 0f ? 0f : 1f - remainderX;
+                    float extentY = remainderY == 0f ? 0f : 1f - remainderY;
                     capturePosition.x = Mathf.Clamp(capturePosition.x, -extentX, extentX);
                     capturePosition.y = Mathf.Clamp(capturePosition.y, -extentY, extentY);
                 }
                 state.main.scale = captureSize;
-                state.main.offset = (Vector2.one + capturePosition - captureSize) * 0.5f;
+                state.main.offset = capturePosition * 0.5f + Vector2.one * 0.5f - captureSize * 0.5f;
                 state.hasMainTexture = true;
             }
             else
@@ -692,8 +717,8 @@ namespace Gallop.Live
             // ColorFade=(0,0,0,0) must still turn the authored white screen black.
             state.alpha = crossFadeRate;
             state.colorFade = colorFade;
-            state.useBaseColor = !IsColorEffectivelyClear(baseColor);
-            state.baseColor = state.useBaseColor ? baseColor : Color.white;
+            state.useBaseColor = state.useMonitorCamera || !IsColorEffectivelyClear(baseColor);
+            state.baseColor = state.useMonitorCamera ? Color.white : state.useBaseColor ? baseColor : Color.white;
             state.blendFactor = blendFactor;
             state.filterTexScale = filterTexScale;
             state.srcBlendMode = curKey.SrcBlendMode;

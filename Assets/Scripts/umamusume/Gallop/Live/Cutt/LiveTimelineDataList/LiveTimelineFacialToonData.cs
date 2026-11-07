@@ -3,20 +3,10 @@ using UnityEngine;
 
 namespace Gallop.Live.Cutt
 {
-    /// <summary>
-    /// Pista "FacialToon" del timeline del live. Controla, por posicion de personaje, los
-    /// umbrales del sombreado de la cara (incluida la sombra falsa de la nariz) y los blends
-    /// de la iluminacion facial. Los nombres de los campos coinciden con el TypeTree del
-    /// bundle del juego (son case-sensitive).
-    /// </summary>
     [Serializable]
     public class LiveTimelineKeyFacialToonData : LiveTimelineKeyWithInterpolate
     {
-        public override LiveTimelineKeyDataType dataType
-        {
-            get { return LiveTimelineKeyDataType.FacialToon; }
-        }
-
+        public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.FacialToon;
         public float CheekPretenseThreshold;
         public float NosePretenseThreshold;
         public float CylinderBlend;
@@ -25,93 +15,83 @@ namespace Gallop.Live.Cutt
         public Vector3 OriginalDirectionalLightDir;
         public float EyeToonStep;
         public float EyeToonFeather;
+        public float EyeSaturation;
     }
-
     [Serializable]
-    public class LiveTimelineKeyFacialToonDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyFacialToonData>
-    {
-    }
-
-    /// <summary>
-    /// Conjunto de listas de la pista FacialToon: una por posicion de personaje
-    /// (center, left1, right1, left2, right2 y motion5..motion19).
-    /// </summary>
+    public class LiveTimelineKeyFacialToonDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyFacialToonData> { }
     [Serializable]
     public class LiveTimelineFacialToonData
     {
-        public const int DATA_LIST_SIZE = 20;
-
-        public LiveTimelineKeyFacialToonDataList centerKeys;
-        public LiveTimelineKeyFacialToonDataList left1Keys;
-        public LiveTimelineKeyFacialToonDataList right1Keys;
-        public LiveTimelineKeyFacialToonDataList left2Keys;
-        public LiveTimelineKeyFacialToonDataList right2Keys;
-        public LiveTimelineKeyFacialToonDataList motion5Keys;
-        public LiveTimelineKeyFacialToonDataList motion6Keys;
-        public LiveTimelineKeyFacialToonDataList motion7Keys;
-        public LiveTimelineKeyFacialToonDataList motion8Keys;
-        public LiveTimelineKeyFacialToonDataList motion9Keys;
-        public LiveTimelineKeyFacialToonDataList motion10Keys;
-        public LiveTimelineKeyFacialToonDataList motion11Keys;
-        public LiveTimelineKeyFacialToonDataList motion12Keys;
-        public LiveTimelineKeyFacialToonDataList motion13Keys;
-        public LiveTimelineKeyFacialToonDataList motion14Keys;
-        public LiveTimelineKeyFacialToonDataList motion15Keys;
-        public LiveTimelineKeyFacialToonDataList motion16Keys;
-        public LiveTimelineKeyFacialToonDataList motion17Keys;
-        public LiveTimelineKeyFacialToonDataList motion18Keys;
-        public LiveTimelineKeyFacialToonDataList motion19Keys;
-
-        private ILiveTimelineKeyDataList[] _cacheDataList;
-
-        /// <summary>
-        /// Devuelve la lista de claves de la posicion <paramref name="index"/> (0..19),
-        /// en el mismo orden que el cliente original.
-        /// </summary>
-        public ILiveTimelineKeyDataList GetKeyList(int index)
-        {
-            if (_cacheDataList == null)
-            {
-                _cacheDataList = new ILiveTimelineKeyDataList[DATA_LIST_SIZE];
-                _cacheDataList[0] = centerKeys;
-                _cacheDataList[1] = left1Keys;
-                _cacheDataList[2] = right1Keys;
-                _cacheDataList[3] = left2Keys;
-                _cacheDataList[4] = right2Keys;
-                _cacheDataList[5] = motion5Keys;
-                _cacheDataList[6] = motion6Keys;
-                _cacheDataList[7] = motion7Keys;
-                _cacheDataList[8] = motion8Keys;
-                _cacheDataList[9] = motion9Keys;
-                _cacheDataList[10] = motion10Keys;
-                _cacheDataList[11] = motion11Keys;
-                _cacheDataList[12] = motion12Keys;
-                _cacheDataList[13] = motion13Keys;
-                _cacheDataList[14] = motion14Keys;
-                _cacheDataList[15] = motion15Keys;
-                _cacheDataList[16] = motion16Keys;
-                _cacheDataList[17] = motion17Keys;
-                _cacheDataList[18] = motion18Keys;
-                _cacheDataList[19] = motion19Keys;
-            }
-
-            if (index < 0 || index >= DATA_LIST_SIZE)
-            {
-                return null;
-            }
-
-            return _cacheDataList[index];
-        }
-
+        public LiveTimelineKeyFacialToonDataList centerKeys, left1Keys, right1Keys, left2Keys, right2Keys;
+        public LiveTimelineKeyFacialToonDataList motion5Keys, motion6Keys, motion7Keys, motion8Keys, motion9Keys;
+        public LiveTimelineKeyFacialToonDataList motion10Keys, motion11Keys, motion12Keys, motion13Keys, motion14Keys;
+        public LiveTimelineKeyFacialToonDataList motion15Keys, motion16Keys, motion17Keys, motion18Keys, motion19Keys;
+        [NonSerialized] ILiveTimelineKeyDataList[] _cacheDataList;
         public ILiveTimelineKeyDataList[] GetKeyListArray()
         {
-            if (_cacheDataList == null)
-            {
-                // Fuerza la construccion del array cache.
-                GetKeyList(0);
-            }
-
+            if(_cacheDataList == null) _cacheDataList = new ILiveTimelineKeyDataList[] {
+                centerKeys,left1Keys,right1Keys,left2Keys,right2Keys,
+                motion5Keys,motion6Keys,motion7Keys,motion8Keys,motion9Keys,
+                motion10Keys,motion11Keys,motion12Keys,motion13Keys,motion14Keys,
+                motion15Keys,motion16Keys,motion17Keys,motion18Keys,motion19Keys };
             return _cacheDataList;
+        }
+    }
+    public struct FacialToonUpdateInfo
+    {
+        public LiveCharaPositionFlag CharacterPos;
+        public float CheekPretenseThreshold, NosePretenseThreshold, CylinderBlend, HairNormalBlend;
+        public LiveTimelineDefine.FacialToonLightType UseOriginalDirectionalLight;
+        public Vector3 OriginalDirectionalLightDir;
+        public float EyeToonStep, EyeToonFeather, EyeSaturation;
+    }
+    public delegate void FacialToonUpdateInfoDelegate(ref FacialToonUpdateInfo updateInfo);
+    public partial class LiveTimelineWorkSheet
+    {
+        [SerializeField] public LiveTimelineFacialToonData facialToonSet;
+    }
+    public partial class LiveTimelineControl
+    {
+        public event FacialToonUpdateInfoDelegate OnUpdateFacialToon;
+        static float FacialToonLerp(float a,float b,float t) => MonitorFloat32(MonitorFloat32(MonitorFloat32(b-a)*t)+a);
+        // Original parent 4ecf8f0; original order CameraMotion -> FacialToon -> AdditionalLight in 4ee8610.
+        private void AlterUpdate_FacialToon(LiveTimelineWorkSheet sheet,int frame)
+        {
+            if(sheet==null || sheet.facialToonSet==null || OnUpdateFacialToon==null)return;
+            var lists=sheet.facialToonSet.GetKeyListArray();
+            var indices=data.characterSettings.motionSequenceIndices;
+            for(int motionSlot=0;motionSlot<lists.Length;motionSlot++)
+            {
+                var keys=lists[motionSlot];
+                if(keys==null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode) || keys.Count<=0)continue;
+                FindTimelineKey(out var currentBase,out var nextBase,keys,frame);
+                if(!(currentBase is LiveTimelineKeyFacialToonData current))continue;
+                var next=nextBase as LiveTimelineKeyFacialToonData;
+                uint mask=0;
+                for(int physicalSlot=0;physicalSlot<indices.Length;physicalSlot++)if(indices[physicalSlot]==motionSlot)mask|=1u<<(physicalSlot&31);
+                FacialToonUpdateInfo info=new FacialToonUpdateInfo {
+                    CharacterPos=(LiveCharaPositionFlag)mask,
+                    CheekPretenseThreshold=current.CheekPretenseThreshold,NosePretenseThreshold=current.NosePretenseThreshold,
+                    CylinderBlend=current.CylinderBlend,HairNormalBlend=current.HairNormalBlend,
+                    UseOriginalDirectionalLight=current.UseOriginalDirectionalLight,OriginalDirectionalLightDir=current.OriginalDirectionalLightDir,
+                    EyeToonStep=current.EyeToonStep,EyeToonFeather=current.EyeToonFeather,EyeSaturation=current.EyeSaturation };
+                if(next!=null && next.IsInterpolateKey())
+                {
+                    float t=CalculateInterpolationValue(current,next,frame);
+                    info.CheekPretenseThreshold=FacialToonLerp(current.CheekPretenseThreshold,next.CheekPretenseThreshold,t);
+                    info.NosePretenseThreshold=FacialToonLerp(current.NosePretenseThreshold,next.NosePretenseThreshold,t);
+                    info.CylinderBlend=FacialToonLerp(current.CylinderBlend,next.CylinderBlend,t);
+                    info.HairNormalBlend=FacialToonLerp(current.HairNormalBlend,next.HairNormalBlend,t);
+                    info.OriginalDirectionalLightDir=new Vector3(
+                        FacialToonLerp(current.OriginalDirectionalLightDir.x,next.OriginalDirectionalLightDir.x,t),
+                        FacialToonLerp(current.OriginalDirectionalLightDir.y,next.OriginalDirectionalLightDir.y,t),
+                        FacialToonLerp(current.OriginalDirectionalLightDir.z,next.OriginalDirectionalLightDir.z,t));
+                    info.EyeToonStep=FacialToonLerp(current.EyeToonStep,next.EyeToonStep,t);
+                    info.EyeToonFeather=FacialToonLerp(current.EyeToonFeather,next.EyeToonFeather,t);
+                    info.EyeSaturation=FacialToonLerp(current.EyeSaturation,next.EyeSaturation,t);
+                }
+                OnUpdateFacialToon(ref info);
+            }
         }
     }
 }

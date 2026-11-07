@@ -12,8 +12,14 @@ namespace Gallop.Live.Cutt
             // Multiple groups/masks have not been recovered. Do not silently choose one.
             if (groups == null || groups.Count != 1 || float.IsNaN(frame) || float.IsInfinity(frame)) return default;
             var keys = groups[0]?.keys;
+            return EvaluateKeys(keys,frame,playMode);
+        }
+
+        public static SimpleColorCorrectionPass.Parameter EvaluateKeys(ILiveTimelineKeyDataList keys,
+            float frame, TimelinePlayerMode playMode)
+        {
             if (keys == null || keys.Count == 0 || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) ||
-                !keys.EnablePlayModeTimeline(playMode) || frame < keys.thisList[0].frame) return default;
+                !keys.EnablePlayModeTimeline(playMode) || frame < keys.At(0).frame) return default;
             LiveTimelineControl.FindTimelineKey(out var current, out var next, keys, frame);
             var key = current as LiveTimelineKeyColorCorrectionData;
             // Actual Live1176 keys have attribute0, mode0, selective0 and no interpolation fields.

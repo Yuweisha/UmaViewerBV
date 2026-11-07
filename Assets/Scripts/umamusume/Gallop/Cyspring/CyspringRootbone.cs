@@ -39,6 +39,11 @@ namespace Gallop
         public List<CySpringBoneBase> ChildBoneList => _childBoneList;
         public Transform Parent => _parent;
 
+        public void RefreshParentAfterHierarchyMerge()
+        {
+            _parent = _transform != null ? _transform.parent : null;
+        }
+
         public bool IsSuppression
         {
             get => _isSuppression;
@@ -414,10 +419,14 @@ namespace Gallop
 
         private void UpdateNativeOldTransform(NativeRootParentWork[] parentWork, float bodyScale)
         {
+            UpdateNativeOldTransformInPlace(parentWork, bodyScale);
+        }
+        private void UpdateNativeOldTransformInPlace(NativeRootParentWork[] parentWork, float bodyScale)
+        {
             if (NativeArray == null || (uint)Index >= (uint)NativeArray.Length || parentWork == null)
                 return;
 
-            NativeClothWorking native = NativeArray[Index];
+            ref NativeClothWorking native = ref NativeArray[Index];
             int parentWorkIndex = native.ParentWorkIndex;
 
             if ((uint)parentWorkIndex >= (uint)parentWork.Length)
@@ -437,7 +446,6 @@ namespace Gallop
             }
 
             native.SelfPosition = worldPosition;
-            NativeArray[Index] = native;
         }
 
         private void UpdateSuppression(ref Vector3 worldPosition)
@@ -535,15 +543,16 @@ namespace Gallop
                 return;
             }
 
-            // (INTENTO 14 - BUG DEL PELO) NO recortar la cadena.
-            // El motor recorre los huesos 0..nCond-1 y, para cada uno, hereda
-            // SelfPosition = TargetPosition del ANTERIOR. Antes se pasaba Length-1 (por el
-            // NeedSimulateEndBone=false del ultimo hueso), asi que el ULTIMO hueso no se
-            // recorria: su SelfPosition quedaba congelada mientras su padre avanzaba y la
-            // cadena se "desenganchaba" por la punta.
-            // MEDIDO ([DiagPelo] enlace_max, siempre en el hueso _03): 1,7-4,8 cm al principio
-            // y hasta 9,6 cm a los 300 frames, CRECIENDO -> la punta del pelo se iba hacia
-            // fuera ("hace una circunferencia"). Con la cadena completa el enlace se mantiene.
+            if (_childBoneList != null && _childBoneList.Count > 0)
+            {
+                CySpringBoneBase last = _childBoneList[_childBoneList.Count - 1];
+                if (last != null && !last.NeedSimulateEndBone)
+                {
+                    TrueNativesCount = NativeArray.Length - 1;
+                    return;
+                }
+            }
+
             TrueNativesCount = NativeArray.Length;
         }
 

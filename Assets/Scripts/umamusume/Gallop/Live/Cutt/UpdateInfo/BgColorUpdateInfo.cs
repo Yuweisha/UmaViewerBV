@@ -37,6 +37,11 @@ namespace Gallop.Live.Cutt
         public int BlinkLightNameHash;
         public int BlinkLightContainerIndex;
         public float BlinkLightBrightnessPower;
+        public bool IsEnabledFakeLight;
+        public bool IsFakeLightOutline;
+        public float FakeLightRate;
+        public Color FakeLightReceiveColor;
+        public int FakeLightBlendMode;
     }
 
     public delegate void BgColor1UpdateInfoDelegate(ref BgColor1UpdateInfo updateInfo);

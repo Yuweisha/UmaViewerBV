@@ -2,6 +2,7 @@ namespace Gallop.Live.Cutt
 {
     public enum LiveTimelineKeyDataType
     {
+        // IDs are the installed native119-track ABI; dataType is computed, not a saved key field.
         Timescale = 0,
         CameraPos = 1,
         CameraLookAt = 2,
@@ -102,22 +103,25 @@ namespace Gallop.Live.Cutt
         CharaWind = 97,
         CharaParts = 98,
         CameraCutNo = 99,
-        ToneCurve = 100,
-        Exposure = 101,
-        Vortex = 102,
-        CharaCollision = 103,
-        TransmittedLight = 104,
-        TransmittedLightMask = 105,
-        Voice = 106,
-        LipSyncPatternRange = 107,
-        LipSyncPattern = 108,
-        LensDistortion = 109,
-        CharaNodeOffset = 110,
-        TransparentCamera = 111,
-        MiniCharaCamera = 112,
-        MiniCharaTransform = 113,
-        MiniCharaMotion = 114,
-        MiniCharaColor = 115,
-        Max = 116
-    }
+        Comment = 100,
+        ToneCurve = 101,
+        Exposure = 102,
+        Vortex = 103,
+        CharaCollision = 104,
+        TransmittedLight = 105,
+        TransmittedLightMask = 106,
+        Voice = 107,
+        LipSyncPatternRange = 108,
+        LipSyncPattern = 109,
+        LensDistortion = 110,
+        CharaNodeOffset = 111,
+        TransparentCamera = 112,
+        MiniCharaCamera = 113,
+        MiniCharaTransform = 114,
+        MiniCharaMotion = 115,
+        MiniCharaColor = 116,
+        ScreenCapture = 117,
+        TailMotion = 118,
+        Max = 119,
+}
 }

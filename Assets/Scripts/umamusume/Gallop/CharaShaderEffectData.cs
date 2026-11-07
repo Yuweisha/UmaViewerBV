@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 namespace Gallop
@@ -28,6 +28,7 @@ namespace Gallop
 
         [SerializeField] 
         private SettingData[] _settingDataArray; 
+        public SettingData[] Settings=>_settingDataArray;
 
         [Serializable]
         public class SettingData 
@@ -88,6 +89,7 @@ namespace Gallop
                     return value * magicClock * 0.001f;
                 case 2:
                     float result = (value * magicClock * 0.001f) % 2.0f;
+                    Debug.Log(result);
                     return result;
                 case 5:
                     float ratio = value * magicClock * 0.001f;

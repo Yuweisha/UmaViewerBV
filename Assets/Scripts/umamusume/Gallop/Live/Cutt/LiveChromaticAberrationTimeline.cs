@@ -1,59 +1,98 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using Gallop.RenderPipeline;
 using UnityEngine;
 
 namespace Gallop.Live.Cutt
 {
-    /// <summary>
-    /// Timeline adapter for the recovered ChromaticAberration effect.
-    ///
-    /// Native reference: LiveTimelineControl.AlterUpdate_ChromaticAberration (0x7ffffc84c980).
-    /// It walks the authored group list, gates on the key-list Disable attribute and on the
-    /// player mode, then lerps every scalar of the current/next key with the shared
-    /// CalculateInterpolationValue ratio. The effect type is taken from the current key, never
-    /// interpolated, because it selects the shader pass.
-    /// </summary>
+    [Serializable]
+    public class LiveTimelineKeyChromaticAberrationData : LiveTimelineKeyWithInterpolate
+    {
+        public enum ChromaticAberrationType { Normal=0, Circle=1, CircleClipDirect=2, UVClamp=3 }
+        public bool isEnable=true;
+        public Vector2 redOffset,greenOffset,blueOffset;
+        public float power=1f,clip;
+        public ChromaticAberrationType effectType;
+        public override LiveTimelineKeyDataType dataType=>LiveTimelineKeyDataType.ChromaticAberration;
+    }
+    [Serializable]
+    public class LiveTimelineKeyChromaticAberrationDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyChromaticAberrationData> { }
+    [Serializable]
+    public class LiveTimelineChromaticAberrationData : ILiveTimelineGroupDataWithName
+    {
+        public LiveTimelineKeyChromaticAberrationDataList keys=new LiveTimelineKeyChromaticAberrationDataList();
+        public LiveTimelineChromaticAberrationData():base("Chromatic Aberration") { }
+        public override ILiveTimelineKeyDataList GetKeyList()=>keys;
+    }
+    public struct ChromaticAberrationUpdateInfo
+    {
+        public bool isEnable;
+        public Vector2 redOffset,greenOffset,blueOffset;
+        public float power,clip;
+        public LiveTimelineKeyChromaticAberrationData.ChromaticAberrationType type;
+    }
+    public delegate void ChromaticAberrationUpdateInfoDelegate(ref ChromaticAberrationUpdateInfo updateInfo);
+    public partial class LiveTimelineWorkSheet
+    {
+        [SerializeField] public List<LiveTimelineChromaticAberrationData> chromaticAberrationList;
+    }
     public static class LiveChromaticAberrationTimeline
     {
-        public static ChromaticAberrationUpdateInfo Evaluate(
-            System.Collections.Generic.List<LiveTimelineChromaticAberrationData> groups,
-            float frame, TimelinePlayerMode playMode)
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static float F(float value)=>BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(value));
+        static float L(float a,float b,float t)=>F(F(F(b-a)*t)+a);
+        static Vector2 L(Vector2 a,Vector2 b,float t)=>new Vector2(L(a.x,b.x,t),L(a.y,b.y,t));
+        // Original parent4ecbfc0 interpolates only the eight numeric fields;
+        // enable/type remain current even when the next key requests a blend.
+        public static ChromaticAberrationUpdateInfo SampleAt(LiveTimelineKeyChromaticAberrationData a,LiveTimelineKeyChromaticAberrationData b,float t)
         {
-            var info = new ChromaticAberrationUpdateInfo();
-            if (groups == null || groups.Count == 0) return info;
-
-            for (int i = 0; i < groups.Count; i++)
-            {
-                var group = groups[i];
-                if (group == null) continue;
-                if (Evaluate(group.keys, frame, playMode, out var candidate)) return candidate;
-            }
-            return info;
+            if(a==null)throw new NullReferenceException("Original Chromatic current key");
+            bool blend=b!=null&&b.IsInterpolateKey();
+            return new ChromaticAberrationUpdateInfo {
+                isEnable=a.isEnable,type=a.effectType,
+                redOffset=blend?L(a.redOffset,b.redOffset,t):a.redOffset,
+                greenOffset=blend?L(a.greenOffset,b.greenOffset,t):a.greenOffset,
+                blueOffset=blend?L(a.blueOffset,b.blueOffset,t):a.blueOffset,
+                power=blend?L(a.power,b.power,t):a.power,
+                clip=blend?L(a.clip,b.clip,t):a.clip
+            };
         }
-
-        public static bool Evaluate(LiveTimelineKeyChromaticAberrationDataList keys,
-            float frame, TimelinePlayerMode playMode, out ChromaticAberrationUpdateInfo info)
+        // Original Director4e2dce0 + SetOffset52160a0 + power/clip setters.
+        // Preserve both offset.w, MixParameter.xy and authored pass event.
+        public static void Apply(ref ChromaticAberrationPass.Parameter p,ref ChromaticAberrationUpdateInfo info)
         {
-            info = new ChromaticAberrationUpdateInfo();
-            if (keys == null || keys.Count == 0 ||
-                keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) ||
-                !keys.EnablePlayModeTimeline(playMode) || frame < keys.thisList[0].frame)
-                return false;
-
-            LiveTimelineControl.FindTimelineKey(out var current, out var next, keys, frame);
-            var a = current as LiveTimelineKeyChromaticAberrationData;
-            if (a == null) return false;
-
-            var b = next as LiveTimelineKeyChromaticAberrationData;
-            float t = b != null ? LiveTimelineControl.CalculateInterpolationValue(a, b, frame) : 0f;
-            b = b ?? a;
-
-            info.isEnable = a.isEnable;
-            info.redOffset = Vector2.LerpUnclamped(a.redOffset, b.redOffset, t);
-            info.greenOffset = Vector2.LerpUnclamped(a.greenOffset, b.greenOffset, t);
-            info.blueOffset = Vector2.LerpUnclamped(a.blueOffset, b.blueOffset, t);
-            info.power = Mathf.LerpUnclamped(a.power, b.power, t);
-            info.clip = Mathf.LerpUnclamped(a.clip, b.clip, t);
-            info.effectType = a.effectType;
-            return true;
+            p.IsEnable=info.isEnable;
+            p.ColorOffsetX.x=F(info.redOffset.x*.01f);
+            p.ColorOffsetX.y=F(info.greenOffset.x*.01f);
+            p.ColorOffsetX.z=F(info.blueOffset.x*.01f);
+            p.ColorOffsetY.x=F(info.redOffset.y*.01f);
+            p.ColorOffsetY.y=F(info.greenOffset.y*.01f);
+            p.ColorOffsetY.z=F(info.blueOffset.y*.01f);
+            p.MixParameter.z=info.power;p.MixParameter.w=info.clip;p.Type=(int)info.type;
+        }
+    }
+    public partial class LiveTimelineControl
+    {
+        public event ChromaticAberrationUpdateInfoDelegate OnUpdateChromaticAberration;
+        public void AlterUpdate_ChromaticAberration(LiveTimelineWorkSheet sheet,int frame)
+        {
+            if(OnUpdateChromaticAberration==null)return;
+            if(sheet==null||sheet.chromaticAberrationList==null)throw new NullReferenceException("Original Chromatic group list");
+            foreach(var group in sheet.chromaticAberrationList)
+            {
+                if(group==null||group.keys==null)throw new NullReferenceException("Original Chromatic group keys");
+                var keys=group.keys;
+                if(keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable)||!keys.EnablePlayModeTimeline(_playMode))continue;
+                FindTimelineKey(out var current,out var next,keys,frame);
+                if(current==null)continue;
+                var a=current as LiveTimelineKeyChromaticAberrationData;
+                var b=next as LiveTimelineKeyChromaticAberrationData;
+                if(a==null)throw new InvalidCastException("Original Chromatic current key type");
+                float t=b!=null&&b.IsInterpolateKey()?CalculateInterpolationValue(a,b,frame):0f;
+                var info=LiveChromaticAberrationTimeline.SampleAt(a,b,t);
+                OnUpdateChromaticAberration(ref info);
+            }
         }
     }
 }

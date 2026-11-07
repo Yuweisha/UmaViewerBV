@@ -104,15 +104,11 @@ namespace Gallop.Live
             if (a.IsEnable)
             {
                 Texture texture = resolver?.Invoke(a.TextureId);
-                if (texture == null)
-                {
-                    projector.enabled = false;
-                    if (binding.missingTextures.Add(a.TextureId))
-                        Debug.LogError("MirrorBallProjector '" + projector.name + "' is missing authored ContentType " +
-                            info.group.ContentType + " texture " + a.TextureId + ".", projector);
-                    return true;
-                }
-                material.SetTexture(ShaderManager.GetPropertyId(ShaderManager.PropertyId._LightTex), texture);
+                // StageController.UpdateLightProjection 0x4eb9c03..0x4eb9c63:
+                // failed TryGetValue skips SetTexture for every projector kind.
+                // The authored/previous texture and the independent enable flag survive.
+                if (texture != null)
+                    material.SetTexture(ShaderManager.GetPropertyId(ShaderManager.PropertyId._LightTex), texture);
             }
             projector.enabled = a.IsEnable;
             return true;

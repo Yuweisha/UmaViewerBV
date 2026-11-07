@@ -54,4 +54,3 @@ namespace SFB.LegacyWindows {
 }
 
 #endif
-

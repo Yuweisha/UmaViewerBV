@@ -25,6 +25,13 @@ namespace Gallop.Live.Cutt
         public LiveTimelineKeyFacialEarData earPrev; // 0x38
         public LiveTimelineKeyFacialEarData earCur; // 0x38
         public LiveTimelineKeyFacialEarData earNext; // 0x38
+        // Original single-key fields, alongside the Viewer's interpolation
+        // compatibility fields above. Native parent conformance uses these.
+        public LiveTimelineKeyFacialMouthData mouth;
+        public LiveTimelineKeyFacialEyebrowData eyebrow;
+        public LiveTimelineKeyFacialEyeTrackData eyeTrack;
+        public LiveTimelineKeyFacialEarData ear;
+        public LiveTimelineKeyTailMotionData tail;
         public LiveTimelineKeyFacialEffectData effect; // 0x40
         public int faceKeyIndex; // 0x48
         public int mouthKeyIndex; // 0x4C
@@ -33,5 +40,7 @@ namespace Gallop.Live.Cutt
         public int eyeTrackKeyIndex; // 0x58
         public int earKeyIndex; // 0x5C
         public int effectKeyIndex; // 0x60
+        public int tailKeyIndex;
+        public float tailMotionSec;
     }
 }

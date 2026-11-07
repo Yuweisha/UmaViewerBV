@@ -8,9 +8,9 @@ namespace Gallop.Live.Cutt
     {
         public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.TiltShift;
         public int mode;
-        public int quality;
-        public float blurArea;
-        public float maxBlurSize;
+        public int quality=1;
+        public float blurArea=1;
+        public float maxBlurSize=5;
         public int downsample;
         public Vector2 offset;
         public float roll;

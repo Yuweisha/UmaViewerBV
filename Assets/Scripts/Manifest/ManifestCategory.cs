@@ -1,4 +1,4 @@
-﻿
+
 public static class ManifestCategory
 {
     public const int APP_DEFINED_KIND_BASE = 10;

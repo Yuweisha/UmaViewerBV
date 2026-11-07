@@ -18,7 +18,6 @@ namespace Gallop.RenderPipeline
         PostImageEffectFeature _feature;
         ExposureParam _exposure;
         ToneCurveParam _curve;
-
         public ExposureToneCurvePass(bool tone)
         {
             _tone = tone;
@@ -35,18 +34,19 @@ namespace Gallop.RenderPipeline
             if (_tone ? curve == null || !curve.IsEnable || !curve.IsValidity : exposure == null || !exposure.IsEnable)
                 return false;
             var shader = ShaderManager.GetShader(_tone ? ShaderManager.ShaderKinds.ToneCurve : ShaderManager.ShaderKinds.Exposure);
-            if (shader == null || !shader.isSupported) return false;
-            if (_material == null) _material = CoreUtils.CreateEngineMaterial(shader);
-            else if (_material.shader != shader) _material.shader = shader;
+            if (shader == null || !shader.isSupported)
+                return false;
+            if (_material == null)
+                _material = CoreUtils.CreateEngineMaterial(shader);
+            else if (_material.shader != shader)
+                _material.shader = shader;
             ConfigureInput(ScriptableRenderPassInput.Depth);
             return _material.passCount > 0;
         }
 
-        public static void RenderExposure(CommandBuffer cmd, Material material, ExposureParam parameter,
-            RenderTargetIdentifier source, RenderTargetIdentifier destination)
+        public static void RenderExposure(CommandBuffer cmd, Material material, ExposureParam parameter, RenderTargetIdentifier source, RenderTargetIdentifier destination)
         {
-            material.SetVector("_Parameter", new Vector4(1f + parameter.Gain, parameter.Lift,
-                1f + parameter.MaskGain, parameter.MaskLift));
+            material.SetVector("_Parameter", new Vector4(1f + parameter.Gain, parameter.Lift, 1f + parameter.MaskGain, parameter.MaskLift));
             material.SetFloat("_DepthMask", parameter.DepthMask);
             cmd.Blit(source, destination, material, 0);
         }
@@ -56,7 +56,11 @@ namespace Gallop.RenderPipeline
             // Native 0x1a52bc0: 256 samples per row, clamp then truncate to byte.
             if (_lut == null)
                 _lut = new Texture2D(256, 2, TextureFormat.ARGB32, false, true)
-                { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
             for (int i = 0; i < 256; i++)
             {
                 byte value = (byte)(Mathf.Clamp01(parameter.ToneCurve.Evaluate(i / 255f)) * 255f);
@@ -64,13 +68,13 @@ namespace Gallop.RenderPipeline
                 _pixels[i] = new Color32(value, value, value, 255);
                 _pixels[i + 256] = new Color32(mask, mask, mask, 255);
             }
+
             _lut.SetPixels32(_pixels);
             _lut.Apply(false, false);
             return _lut;
         }
 
-        public static void RenderToneCurve(CommandBuffer cmd, Material material, Texture lut, ToneCurveParam parameter,
-            RenderTargetIdentifier source, RenderTargetIdentifier destination)
+        public static void RenderToneCurve(CommandBuffer cmd, Material material, Texture lut, ToneCurveParam parameter, RenderTargetIdentifier source, RenderTargetIdentifier destination)
         {
             cmd.SetGlobalTexture("_CurveTex", lut);
             cmd.SetGlobalVector("_MinLevel", parameter.MinCorrectionLevel);
@@ -83,7 +87,8 @@ namespace Gallop.RenderPipeline
 
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            if (_feature == null || _material == null) return;
+            if (_feature == null || _material == null)
+                return;
             var cmd = CommandBufferPool.Get(_tone ? "Recovered.ToneCurve" : "Recovered.Exposure");
             try
             {
@@ -94,14 +99,17 @@ namespace Gallop.RenderPipeline
                 descriptor.useMipMap = descriptor.autoGenerateMips = false;
                 cmd.GetTemporaryRT(_output, descriptor, FilterMode.Bilinear);
                 var input = _feature.SourceRT;
-                if (_tone) RenderToneCurve(cmd, _material, UpdateToneCurveTexture(_curve), _curve, input.RtId, _output);
-                else RenderExposure(cmd, _material, _exposure, input.RtId, _output);
+                if (_tone)
+                    RenderToneCurve(cmd, _material, UpdateToneCurveTexture(_curve), _curve, input.RtId, _output);
+                else
+                    RenderExposure(cmd, _material, _exposure, input.RtId, _output);
                 _feature.SetSourceRT(RenderTextureHandle.Make(_output, descriptor.width, descriptor.height), cmd, ref renderingData);
                 context.ExecuteCommandBuffer(cmd);
-                LiveRuntimeDiagnostics.RecordRenderExecution(renderingData.cameraData.camera,
-                    _tone ? "ToneCurve" : "Exposure", renderPassEvent, input, _feature.SourceRT);
             }
-            finally { CommandBufferPool.Release(cmd); }
+            finally
+            {
+                CommandBufferPool.Release(cmd);
+            }
         }
 
         public void Dispose()

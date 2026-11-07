@@ -99,7 +99,7 @@ namespace Gallop.Live.Cutt
     public class LiveTimelineStageEnvironmentData : ILiveTimelineGroupDataWithName
     {
         private const string DEFAULT_NAME = "Environment";
-        public LiveTimelineKeyMirrorReflectionDataList keys = new LiveTimelineKeyMirrorReflectionDataList();
+        public LiveTimelineKeyStageEnvironmentDataList keys = new LiveTimelineKeyStageEnvironmentDataList();
 
         public LiveTimelineStageEnvironmentData()
         {

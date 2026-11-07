@@ -11,6 +11,7 @@ namespace Gallop.Live.Cutt
         public bool[] useHighPolygonModel;
         public bool[] useHighPolygonModelForLightMode;
         public bool[] useWetTexture;
+        public bool[] UseDirtTextureArray;
         public int[] EyeReflectionTextureSizeRateArray;
     }
 
@@ -186,6 +187,12 @@ namespace Gallop.Live.Cutt
         public bool isCheckCharacterPosition;
     }
 
+    [System.Serializable]
+    public class LiveTimelineProjectorSettings
+    {
+        public bool IsEnabledProjectorObjectForLightMode;
+    }
+
     public class LiveTimelineData : ScriptableObject
     {
         public enum CharacterPositionMode
@@ -216,7 +223,9 @@ namespace Gallop.Live.Cutt
         public LiveTimelineA2USettings a2uSettings;
         public LiveTimelineMultiCameraSettings multiCameraSettings;
         public LiveTimelineMonitorCameraSettings MonitorCameraSettings;
+        public LiveTimelineProjectorSettings ProjectorSettings;
         public List<LiveTimelineWorkSheet> worksheetList;
+        public LiveTimelineWorkSheet GetWorkSheet(int index)=>worksheetList[index];
         public LiveTimelineData.FacialTimelineType FacialLineType;
         public bool isUseHQParticle;
         public string[] particlePrefabNames;
@@ -228,8 +237,10 @@ namespace Gallop.Live.Cutt
         public bool IsChangedCharaLayerOnlyMirrorRendering;
         public bool IsRenderMirrorObjectOnlyOnBaseCamera;
         public bool UseDepthOnlyCube;
+        public int DepthOnlyCubeCount;
         public LiveTimelineStageObjectsSettings stageObjectsSettings;
         public LiveTimelineDebugSettings debugSettings;
+        public Vector3 StageArenaPosition;
     }
 
 }

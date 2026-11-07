@@ -17,6 +17,9 @@ namespace Gallop.Live
 
         [SerializeField] private Font _nameFont;
         [SerializeField] private Texture2D _catchCopyTexture;
+        public bool HasCatchCopyTexture=>_catchCopyTexture!=null;
+        public static string GetCatchCopyImagePath(int characterId,bool voicePermitted)
+            =>$"Single/ScenarioLegend/Live/tex_singlelegend_live_catchcopy{(voicePermitted?characterId:0):D4}";
 
         public override void Initialize(string flashResourcePath)
         {

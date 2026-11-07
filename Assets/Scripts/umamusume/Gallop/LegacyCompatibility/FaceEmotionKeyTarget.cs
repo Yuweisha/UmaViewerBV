@@ -1,4 +1,4 @@
-﻿using Gallop;
+using Gallop;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,7 +25,7 @@ public class FaceEmotionKeyTarget : ScriptableObject
         }
 
         if (UmaViewerUI.Instance)
-        { 
+        {
             UmaViewerUI.Instance.LoadEmotionPanels(this);
         }
     }
@@ -79,7 +79,7 @@ public class FaceEmotionKeyTarget : ScriptableObject
     public void UpdateAllTargetWeight()
     {
         if (FaceDrivenKeyTarget == null) return;
-        
+
         foreach (var emotion in FaceEmotionKey)
         {
             if (emotion.emotionKeys != null)
@@ -92,4 +92,3 @@ public class FaceEmotionKeyTarget : ScriptableObject
         }
     }
 }
-

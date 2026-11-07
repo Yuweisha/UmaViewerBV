@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
@@ -20,7 +20,6 @@ namespace Gallop.Live.Cutt
         public const float BaseCharaHeightMin = 130;
         public const float BaseCharaHeightMax = 190;
         public const float BaseCharaHeightDiff = 60;
-
         public struct FindTimelineConfig
         {
             public enum KeyType
@@ -30,91 +29,55 @@ namespace Gallop.Live.Cutt
             }
 
             public KeyType keyType;
-
             public ILiveTimelineKeyDataList posKeys;
-
             public ILiveTimelineKeyDataList lookAtKeys;
-
             public LiveTimelineKey curKey;
-
             public LiveTimelineKey nextKey;
-
             public int extraCameraIndex;
         }
 
         private LiveTimelineMotionSequence[] _motionSequenceArray;
-
         public LiveTimelineKeyCharaMotionSeqDataList[] _keyArray;
-
         public event Action<LiveTimelineKeyIndex, float> OnUpdateLipSync;
-
         public event Action<FacialDataUpdateInfo, float, int> OnUpdateFacial;
-
         public event Action<int> OnUpdateCameraSwitcher;
-
         public event GlobalLightUpdateInfoDelegate OnUpdateGlobalLight;
-
         public event BgColor1UpdateInfoDelegate OnUpdateBgColor1;
-
         public event BgColor2UpdateInfoDelegate OnUpdateBgColor2;
-
         public event TransformUpdateInfoDelegate OnUpdateTransform;
-
         public event ObjectUpdateInfoDelegate OnUpdateObject;
-
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> fnGetCameraPosValue = GetCameraPosValue;
-
         private static Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> fnGetCameraLookAtValue = GetCameraLookAtValue;
-
         private Vector3 _cameraLayerOffset = Vector3.zero;
-
         private CacheCamera[] _cameraArray = new CacheCamera[3];
-
         private LiveTimelineCamera[] _cameraScriptArray = new LiveTimelineCamera[3];
-
         private Dictionary<string, Transform> _cameraPositionLocatorDict;
-
         private Dictionary<string, Transform> _cameraLookAtLocatorDict;
-
         private CacheCamera[] _multiCameraCache;
-
         private MultiCamera[] _multiCamera;
-
         private bool _isMultiCameraEnable;
-        
         private bool _isNowAlterUpdate;
-
         private float _oldFrame;
-
         private float _oldLiveTime;
-
         private float _currentLiveTime;
-
         private float _deltaTimeRatio;
-
         private float _deltaTime;
-
         private float _baseCameraAspectRatio = 1.77777779f;
-
         public bool _limitFovForWidth = false;
-
         private float _currentFrame;
-
         private bool _isExtraCameraLayer;
-
         public bool IsRecordVMD;
         public List<LiveCameraFrame> RecordFrames = new List<LiveCameraFrame>();
         public List<List<LiveCameraFrame>> MultiRecordFrames = new List<List<LiveCameraFrame>>();
         public event Action RecordUma;
-
         public Dictionary<string, GameObject> StageObjectMap = new Dictionary<string, GameObject>();
-
         public float currentLiveTime
         {
             get
             {
                 return _currentLiveTime;
             }
+
             private set
             {
                 _currentLiveTime = value;
@@ -122,13 +85,13 @@ namespace Gallop.Live.Cutt
         }
 
         public event CameraPosUpdateInfoDelegate OnUpdateCameraPos;
-
         public CacheCamera[] cameraArray
         {
             get
             {
                 return _cameraArray;
             }
+
             private set
             {
                 _cameraArray = value;
@@ -153,6 +116,7 @@ namespace Gallop.Live.Cutt
                         }
                     }
                 }
+
                 return _cameraPositionLocatorDict;
             }
         }
@@ -173,6 +137,7 @@ namespace Gallop.Live.Cutt
                         }
                     }
                 }
+
                 return _cameraLookAtLocatorDict;
             }
         }
@@ -180,13 +145,10 @@ namespace Gallop.Live.Cutt
         public ILiveTimelineCharactorLocator[] liveCharactorLocators => _liveCharactorLocators;
 
         private ILiveTimelineCharactorLocator[] _liveCharactorLocators = new ILiveTimelineCharactorLocator[liveCharaPositionMax];
-
         public Vector3 liveStageCenterPos => _liveStageCenterPos;
 
         private Vector3 _liveStageCenterPos = Vector3.zero;
-
         private TimelinePlayerMode _playMode = TimelinePlayerMode.Default;
-
         public static int liveCharaPositionMax
         {
             get
@@ -195,6 +157,7 @@ namespace Gallop.Live.Cutt
                 {
                     _liveCharaPositionMax = Enum.GetValues(typeof(LiveCharaPosition)).Length;
                 }
+
                 return _liveCharaPositionMax;
             }
         }
@@ -205,17 +168,15 @@ namespace Gallop.Live.Cutt
             {
                 return null;
             }
+
             return _cameraArray[index];
         }
 
         private static int _liveCharaPositionMax = -1;
-
         private static bool availableFindKeyCache => true;
 
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> fnGetMultiCameraPositionValueFunc = GetMultiCameraPositionValue;
-
         private static Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> fnGetMultiCameraLookAtValueFunc = GetMultiCameraLookAtValue;
-
         public void CopyValues<T>(T from, T to)
         {
             var json = JsonUtility.ToJson(from);
@@ -234,16 +195,16 @@ namespace Gallop.Live.Cutt
 
         public void InitializeTimeLineData()
         {
-            //var LoadData = gameObject.AddComponent<LiveTimelineData>();
-            //CopyValues(data, LoadData);
-            //foreach(LiveTimelineWorkSheet worksheet in LoadData.worksheetList)
-            //{
-            //    var LoadSheet = gameObject.AddComponent<LiveTimelineWorkSheet>();
-            //    CopyValues(worksheet, LoadSheet);
-            //}
+        //var LoadData = gameObject.AddComponent<LiveTimelineData>();
+        //CopyValues(data, LoadData);
+        //foreach(LiveTimelineWorkSheet worksheet in LoadData.worksheetList)
+        //{
+        //    var LoadSheet = gameObject.AddComponent<LiveTimelineWorkSheet>();
+        //    CopyValues(worksheet, LoadSheet);
+        //}
         }
 
-        public void InitCharaMotionSequence(int[] motionSequence) 
+        public void InitCharaMotionSequence(int[] motionSequence)
         {
             //Create Animation
             foreach (var obj in Director.instance.charaObjs)
@@ -258,9 +219,7 @@ namespace Gallop.Live.Cutt
 
             //Get KeyArray
             var listCount = data.worksheetList[0].charaMotSeqList.Count;
-
             _keyArray = new LiveTimelineKeyCharaMotionSeqDataList[listCount];
-
             for (int i = 0; i < listCount; i++)
             {
                 _keyArray[i] = data.worksheetList[0].charaMotSeqList[i].keys;
@@ -270,17 +229,15 @@ namespace Gallop.Live.Cutt
             {
                 //Set Motion
                 int CharaPositionMax = Director.instance.allowCount;
-
                 _motionSequenceArray = new LiveTimelineMotionSequence[CharaPositionMax];
-
-
                 for (int i = 0; i < CharaPositionMax; i++)
                 {
+                    Debug.Log(i);
                     _motionSequenceArray[i] = new LiveTimelineMotionSequence();
                     _motionSequenceArray[i].Initialize(Director.instance.charaObjs[i], i, motionSequence[i], this);
                 }
             }
-            else if(Director.instance.liveMode == 0)
+            else if (Director.instance.liveMode == 0)
             {
                 List<AnimationClip> Anims = new List<AnimationClip>();
                 //Get MotionList
@@ -293,17 +250,13 @@ namespace Gallop.Live.Cutt
 
                 //Set Motion
                 int CharaPositionMax = Director.instance.allowCount;
-
                 _motionSequenceArray = new LiveTimelineMotionSequence[CharaPositionMax];
-
-
                 for (int i = 0; i < CharaPositionMax; i++)
                 {
                     _motionSequenceArray[i] = new LiveTimelineMotionSequence();
                     _motionSequenceArray[i].Initialize(Director.instance.charaObjs[i], i, motionSequence[i], this, Anims);
                 }
             }
-  
         }
 
         public void AlterUpdate(float liveTime)
@@ -340,24 +293,20 @@ namespace Gallop.Live.Cutt
             AlterUpdate_BgColor1(workSheet, _currentFrame);
             AlterUpdate_TransformControl(workSheet, _currentFrame);
             AlterUpdate_ObjectControl(workSheet, _currentFrame);
-
             _isNowAlterUpdate = false;
-            
             if (IsRecordVMD)
             {
                 var currentFrame = Mathf.RoundToInt(_currentFrame);
                 var oldFrame = Mathf.RoundToInt(_oldFrame);
                 CacheCamera cacheCamera = GetCamera(workSheet.targetCameraIndex);
-                if ((oldFrame == currentFrame && currentFrame > 0)|| cacheCamera == null) return;
-
+                if ((oldFrame == currentFrame && currentFrame > 0) || cacheCamera == null)
+                    return;
                 LiveCameraFrame lastframe = RecordFrames.Count > 0 ? RecordFrames[RecordFrames.Count - 1] : null;
-                
                 var transform = cacheCamera.cacheTransform;
                 var camera = cacheCamera.camera;
                 LiveCameraFrame frame = new LiveCameraFrame(currentFrame, transform, camera.fieldOfView, lastframe);
                 RecordFrames.Add(frame);
-
-                for (int i = 0; i < MultiRecordFrames.Count; i++) 
+                for (int i = 0; i < MultiRecordFrames.Count; i++)
                 {
                     var MulFrame = MultiRecordFrames[i];
                     LiveCameraFrame lastMulframe = MulFrame.Count > 0 ? MulFrame[MulFrame.Count - 1] : null;
@@ -367,7 +316,8 @@ namespace Gallop.Live.Cutt
                     MulFrame.Add(mulframe);
                 }
 
-                if (currentFrame % 2 == 0) RecordUma?.Invoke(); //Set 30 FPS
+                if (currentFrame % 2 == 0)
+                    RecordUma?.Invoke(); //Set 30 FPS
             }
         }
 
@@ -395,7 +345,7 @@ namespace Gallop.Live.Cutt
             }
 
             var otherFacialDataList = data.worksheetList[0].other4FacialArray;
-            for(int i = 0; i < otherFacialDataList.Length && i < Director.instance.characterCount - 1; i++)
+            for (int i = 0; i < otherFacialDataList.Length && i < Director.instance.characterCount - 1; i++)
             {
                 SetupFacialUpdateInfo_Mouth(ref updateInfo, otherFacialDataList[i].mouthKeys, liveTime);
                 SetupFacialUpdateInfo_Eye(ref updateInfo, otherFacialDataList[i].eyeKeys, liveTime);
@@ -403,7 +353,7 @@ namespace Gallop.Live.Cutt
                 SetupFacialUpdateInfo_Ear(ref updateInfo, otherFacialDataList[i].earKeys, liveTime);
                 SetupFacialUpdateInfo_EyeTrack(ref updateInfo, otherFacialDataList[i].eyeTrackKeys, liveTime);
                 SetupFacialUpdateInfo_Effect(ref updateInfo, otherFacialDataList[i].effectKeys, liveTime);
-                this.OnUpdateFacial(updateInfo, liveTime, i+1);
+                this.OnUpdateFacial(updateInfo, liveTime, i + 1);
             }
         }
 
@@ -412,14 +362,12 @@ namespace Gallop.Live.Cutt
             LiveTimelineKey liveTimelineKey = null;
             LiveTimelineKey liveTimelineKey2 = null;
             LiveTimelineKey liveTimelineKey3 = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.prevKey;
                 liveTimelineKey2 = curKey.key;
                 liveTimelineKey3 = curKey.nextKey;
-
                 updateInfo.mouthPrev = liveTimelineKey as LiveTimelineKeyFacialMouthData;
                 updateInfo.mouthCur = liveTimelineKey2 as LiveTimelineKeyFacialMouthData;
                 updateInfo.mouthNext = liveTimelineKey3 as LiveTimelineKeyFacialMouthData;
@@ -432,14 +380,12 @@ namespace Gallop.Live.Cutt
             LiveTimelineKey liveTimelineKey = null;
             LiveTimelineKey liveTimelineKey2 = null;
             LiveTimelineKey liveTimelineKey3 = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.prevKey;
                 liveTimelineKey2 = curKey.key;
                 liveTimelineKey3 = curKey.nextKey;
-
                 updateInfo.eyePrev = liveTimelineKey as LiveTimelineKeyFacialEyeData;
                 updateInfo.eyeCur = liveTimelineKey2 as LiveTimelineKeyFacialEyeData;
                 updateInfo.eyeNext = liveTimelineKey3 as LiveTimelineKeyFacialEyeData;
@@ -450,12 +396,10 @@ namespace Gallop.Live.Cutt
         private void SetupFacialUpdateInfo_Effect(ref FacialDataUpdateInfo updateInfo, LiveTimelineKeyFacialEffectDataList keys, float time)
         {
             LiveTimelineKey liveTimelineKey = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.key;
-
                 updateInfo.effect = liveTimelineKey as LiveTimelineKeyFacialEffectData;
                 updateInfo.effectKeyIndex = curKey.index;
             }
@@ -466,14 +410,12 @@ namespace Gallop.Live.Cutt
             LiveTimelineKey liveTimelineKey = null;
             LiveTimelineKey liveTimelineKey2 = null;
             LiveTimelineKey liveTimelineKey3 = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.prevKey;
                 liveTimelineKey2 = curKey.key;
                 liveTimelineKey3 = curKey.nextKey;
-
                 updateInfo.eyebrowPrev = liveTimelineKey as LiveTimelineKeyFacialEyebrowData;
                 updateInfo.eyebrowCur = liveTimelineKey2 as LiveTimelineKeyFacialEyebrowData;
                 updateInfo.eyebrowNext = liveTimelineKey3 as LiveTimelineKeyFacialEyebrowData;
@@ -486,14 +428,12 @@ namespace Gallop.Live.Cutt
             LiveTimelineKey liveTimelineKey = null;
             LiveTimelineKey liveTimelineKey2 = null;
             LiveTimelineKey liveTimelineKey3 = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.prevKey;
                 liveTimelineKey2 = curKey.key;
                 liveTimelineKey3 = curKey.nextKey;
-
                 updateInfo.earPrev = liveTimelineKey as LiveTimelineKeyFacialEarData;
                 updateInfo.earCur = liveTimelineKey2 as LiveTimelineKeyFacialEarData;
                 updateInfo.earNext = liveTimelineKey3 as LiveTimelineKeyFacialEarData;
@@ -506,14 +446,12 @@ namespace Gallop.Live.Cutt
             LiveTimelineKey liveTimelineKey = null;
             LiveTimelineKey liveTimelineKey2 = null;
             LiveTimelineKey liveTimelineKey3 = null;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(keys, time);
             if (curKey != null)
             {
                 liveTimelineKey = curKey.prevKey;
                 liveTimelineKey2 = curKey.key;
                 liveTimelineKey3 = curKey.nextKey;
-
                 updateInfo.eyeTrackPrev = liveTimelineKey as LiveTimelineKeyFacialEyeTrackData;
                 updateInfo.eyeTrackCur = liveTimelineKey2 as LiveTimelineKeyFacialEyeTrackData;
                 updateInfo.eyeTrackNext = liveTimelineKey3 as LiveTimelineKeyFacialEyeTrackData;
@@ -524,9 +462,7 @@ namespace Gallop.Live.Cutt
         public void AlterUpdate_LipSync(float liveTime)
         {
             var lipDataList = data.worksheetList[0].ripSyncKeys;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(lipDataList, liveTime);
-
             if (curKey != null && curKey.index != -1)
             {
                 this.OnUpdateLipSync(curKey, liveTime);
@@ -536,9 +472,7 @@ namespace Gallop.Live.Cutt
         public void AlterUpdate_LipSync2(float liveTime)
         {
             var lipDataList = data.worksheetList[0].ripSync2Keys;
-
             LiveTimelineKeyIndex curKey = AlterUpdate_Key(lipDataList, liveTime);
-
             if (curKey != null && curKey.index != -1)
             {
                 this.OnUpdateLipSync(curKey, liveTime);
@@ -549,7 +483,6 @@ namespace Gallop.Live.Cutt
         {
             FindKeyResult findKeyResult = keys.FindKeyCached(curFrame, availableFindKeyCache);
             curKey = findKeyResult.key;
-
             if (curKey != null)
             {
                 nextKey = keys.At(findKeyResult.index + 1);
@@ -562,13 +495,10 @@ namespace Gallop.Live.Cutt
 
         private void AlterLateUpdate_FormationOffset(float liveTime)
         {
-
             var formationList = data.worksheetList[0].formationOffsetSet.Init();
-
             for (int i = 0; i < Director.instance.characterCount; i++)
             {
                 LiveTimelineKeyIndex curKey = AlterUpdate_Key(formationList[i], liveTime);
-
                 if (curKey != null && curKey.index != -1)
                 {
                     LateUpdateFormationOffset_Transform(i, curKey, liveTime);
@@ -590,10 +520,12 @@ namespace Gallop.Live.Cutt
             {
                 return 0f;
             }
+
             if (liveTimelineKeyWithInterpolate2 == null)
             {
                 return 0f;
             }
+
             int num = to.frame - from.frame;
             float time = Mathf.Clamp01((curFrame - (float)from.frame) / (float)num);
             return liveTimelineKeyWithInterpolate2.curve.Evaluate(time);
@@ -607,28 +539,25 @@ namespace Gallop.Live.Cutt
             {
                 return 0f;
             }
+
             if (liveTimelineKeyWithInterpolate2 == null)
             {
                 return 0f;
             }
+
             int num = to.frame - from.frame;
             return LiveTimelineEasing.GetValue(liveTimelineKeyWithInterpolate2.easingType, curFrame - (float)from.frame, 0f, 1f, (float)num);
         }
-
-
 
         //修改(Live演出的显隐控制和位置变换相关)
         public void LateUpdateFormationOffset_Transform(int targetIndex, LiveTimelineKeyIndex curKeyIndex, float time)
         {
             bool ControlMode = UmaViewerUI.Instance != null && UmaViewerUI.Instance.isControlMode;
-
             LiveTimelineKeyFormationOffsetData curKey = curKeyIndex.key as LiveTimelineKeyFormationOffsetData;
             LiveTimelineKeyFormationOffsetData nextKey = curKeyIndex.nextKey as LiveTimelineKeyFormationOffsetData;
-
             var chara = Director.instance.CharaContainerScript[targetIndex];
-            if (!chara) return;
-
-
+            if (!chara)
+                return;
             if (ControlMode)
             {
                 if (chara.LiveVisible != curKey.visible)
@@ -643,8 +572,7 @@ namespace Gallop.Live.Cutt
                     });
                     chara.LiveVisible = curKey.visible;
                 }
-                
-    
+
                 if (curKey.visible || IsRecordVMD)
                 {
                     if (!string.IsNullOrEmpty(curKey.ParentObjectName))
@@ -662,7 +590,7 @@ namespace Gallop.Live.Cutt
                     {
                         chara.transform.SetParent(null);
                     }
-    
+
                     if (nextKey != null && nextKey.interpolateType != LiveCameraInterpolateType.None)
                     {
                         float ratio = CalculateInterpolationValue(curKey, nextKey, time * 60);
@@ -670,7 +598,6 @@ namespace Gallop.Live.Cutt
                         var x = chara.transform.eulerAngles.x;
                         var z = chara.transform.eulerAngles.z;
                         chara.transform.eulerAngles = new Vector3(x, Mathf.Lerp(curKey.RotationY, nextKey.RotationY, ratio), z);
-    
                         var local_x = chara.Position.localEulerAngles.x;
                         var local_z = chara.Position.localEulerAngles.z;
                         chara.Position.localEulerAngles = new Vector3(local_x, Mathf.Lerp(curKey.LocalRotationY, nextKey.LocalRotationY, ratio), local_z);
@@ -681,7 +608,6 @@ namespace Gallop.Live.Cutt
                         var x = chara.transform.eulerAngles.x;
                         var z = chara.transform.eulerAngles.z;
                         chara.transform.eulerAngles = new Vector3(x, curKey.RotationY, z);
-    
                         var local_x = chara.Position.localEulerAngles.x;
                         var local_z = chara.Position.localEulerAngles.z;
                         chara.Position.localEulerAngles = new Vector3(local_x, curKey.LocalRotationY, local_z);
@@ -708,8 +634,6 @@ namespace Gallop.Live.Cutt
             }
         }
 
-
-
         public static void FindTimelineKeyCurrent(out LiveTimelineKey curKey, ILiveTimelineKeyDataList keys, float curFrame)
         {
             LiveTimelineKey nextKey;
@@ -729,7 +653,6 @@ namespace Gallop.Live.Cutt
         public static LiveTimelineKeyIndex AlterUpdate_Key(ILiveTimelineKeyDataList keys, float curTime)
         {
             LiveTimelineKeyIndex curKey = keys.TimeKeyIndex;
-
             if (curKey.index == -1 || Director.instance.sliderControl.is_Touched)
             {
                 FindTimelineKeyCurrent(out curKey, keys, curTime);
@@ -742,13 +665,13 @@ namespace Gallop.Live.Cutt
             return curKey;
         }
 
-
         public Quaternion GetMultiCameraWorldRotation(int index)
         {
             if (_multiCameraCache == null || _multiCameraCache.Length <= index)
             {
                 return Quaternion.identity;
             }
+
             return _multiCameraCache[index].cacheTransform.rotation;
         }
 
@@ -758,9 +681,9 @@ namespace Gallop.Live.Cutt
             {
                 return Vector3.zero;
             }
+
             return _multiCameraCache[index].cacheTransform.position;
         }
-
 
         public bool ExistsMultiCamera(int index)
         {
@@ -768,6 +691,7 @@ namespace Gallop.Live.Cutt
             {
                 return _multiCameraCache[index] != null;
             }
+
             return false;
         }
 
@@ -791,172 +715,196 @@ namespace Gallop.Live.Cutt
                 switch (parts)
                 {
                     case LiveCameraCharaParts.Face:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaHeadPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaHeadPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.Waist:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaWaistPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaWaistPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.LeftHandWrist:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaLeftHandWristPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaLeftHandWristPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.LeftHandAttach:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaLeftHandAttachPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaLeftHandAttachPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.RightHandWrist:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaRightHandWristPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaRightHandWristPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.RightHandAttach:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaRightHandAttachPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaRightHandAttachPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.Chest:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaChestPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaChestPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.Foot:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaFootPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaFootPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.ConstFaceHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightHeadPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
+                                retPos.y += liveCharactorLocators[i].liveCharaConstHeightHeadPosition.y;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                retPos += charaPos;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.ConstWaistHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightWaistPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
+                                retPos.y += liveCharactorLocators[i].liveCharaConstHeightWaistPosition.y;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                retPos += charaPos;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.ConstChestHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightChestPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
+                                retPos.y += liveCharactorLocators[i].liveCharaConstHeightChestPosition.y;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                retPos += charaPos;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.ConstFootHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaFootPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
+                                retPos.y += liveCharactorLocators[i].liveCharaFootPosition.y;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                retPos += charaPos;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.InitFaceHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    /*
+                                /*
                                     retPos += liveCharactorLocators[i].liveCharaHeadPosition;
                                     tmpPos += liveCharactorLocators[i].liveCharaConstHeightHeadPosition;
                                     Vector3 vector3 = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
@@ -964,21 +912,22 @@ namespace Gallop.Live.Cutt
                                     tmpPos += vector3;
                                     num++;
                                     */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightHeadPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaInitialHeightHeadPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.InitChestHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    /*
+                                /*
                                     retPos += liveCharactorLocators[i].liveCharaChestPosition;
                                     tmpPos += liveCharactorLocators[i].liveCharaConstHeightChestPosition;
                                     Vector3 vector2 = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
@@ -986,21 +935,22 @@ namespace Gallop.Live.Cutt
                                     tmpPos += vector2;
                                     num++;
                                     */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightChestPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaInitialHeightChestPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
+
                     case LiveCameraCharaParts.InitWaistHeight:
+                    {
+                        for (int i = 0; i < liveCharaPositionMax; i++)
                         {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
+                            if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                             {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    /*
+                                /*
                                     retPos += liveCharactorLocators[i].liveCharaWaistPosition;
                                     tmpPos += liveCharactorLocators[i].liveCharaConstHeightWaistPosition;
                                     Vector3 vector = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
@@ -1008,21 +958,22 @@ namespace Gallop.Live.Cutt
                                     tmpPos += vector;
                                     num++;
                                     */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightWaistPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
+                                retPos += liveCharactorLocators[i].liveCharaInitialHeightWaistPosition;
+                                retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
+                                num++;
                             }
-                            break;
                         }
+
+                        break;
+                    }
                 }
+
                 bool flag = num > 1;
                 if (flag)
                 {
                     retPos /= (float)num;
                 }
-                /*
+            /*
                 if ((uint)(parts - 11) <= 2u)
                 {
                     if (flag)
@@ -1033,6 +984,7 @@ namespace Gallop.Live.Cutt
                 }
                 */
             }
+
             return retPos;
         }
 
@@ -1056,6 +1008,7 @@ namespace Gallop.Live.Cutt
                     result = EaseInterpolateKeyframes(curKey, nextKey, frame);
                     break;
             }
+
             return result;
         }
 
@@ -1071,11 +1024,13 @@ namespace Gallop.Live.Cutt
                 {
                     _cameraArray[index].Set(cam);
                 }
+
                 LiveTimelineCamera liveTimelineCamera = cam.gameObject.GetComponent<LiveTimelineCamera>();
                 if (liveTimelineCamera == null)
                 {
                     liveTimelineCamera = cam.gameObject.AddComponent<LiveTimelineCamera>();
                 }
+
                 _cameraScriptArray[index] = liveTimelineCamera;
                 if (liveTimelineCamera != null)
                 {
@@ -1090,12 +1045,14 @@ namespace Gallop.Live.Cutt
             {
                 return;
             }
+
             LiveTimelineKey curKey = null;
             FindTimelineKeyCurrent(out curKey, sheet.cameraSwitcherKeys, currentFrame);
             if (curKey == null)
             {
                 return;
             }
+
             LiveTimelineKeyCameraSwitcherData liveTimelineKeyCameraSwitcherData = curKey as LiveTimelineKeyCameraSwitcherData;
             if (this.OnUpdateCameraSwitcher != null)
             {
@@ -1107,12 +1064,14 @@ namespace Gallop.Live.Cutt
                 {
                     return;
                 }
+
                 for (int i = 0; i < cameraArray.Length; i++)
                 {
                     if (cameraArray[i] == null)
                     {
                         continue;
                     }
+
                     if (i == liveTimelineKeyCameraSwitcherData.cameraIndex)
                     {
                         if (!cameraArray[i].camera.enabled)
@@ -1150,15 +1109,15 @@ namespace Gallop.Live.Cutt
             {
                 return;
             }
+
             LiveTimelineKeyCameraPositionData liveTimelineKeyCameraPositionData = curKey as LiveTimelineKeyCameraPositionData;
             camera.camera.nearClipPlane = liveTimelineKeyCameraPositionData.nearClip;
             camera.camera.farClipPlane = liveTimelineKeyCameraPositionData.farClip;
             if (CalculateCameraPos(out var pos, sheet, curKey, nextKey, currentFrame))
             {
                 camera.cacheTransform.position = pos;
-
-                // TODO 这里用的还是CGSS的layer枚举，要进行替换
-                /*
+            // TODO 这里用的还是CGSS的layer枚举，要进行替换
+            /*
                 int num = liveTimelineKeyCameraPositionData.GetCullingMask();
                 if (num == 0)
                 {
@@ -1216,6 +1175,7 @@ namespace Gallop.Live.Cutt
             {
                 return false;
             }
+
             if (config.keyType == FindTimelineConfig.KeyType.CurrentFrame)
             {
                 FindTimelineKey(out curKey, out nextKey, config.posKeys, currentFrame);
@@ -1225,10 +1185,12 @@ namespace Gallop.Live.Cutt
                 curKey = config.curKey;
                 nextKey = config.nextKey;
             }
+
             if (curKey == null)
             {
                 return false;
             }
+
             LiveTimelineKeyCameraPositionData liveTimelineKeyCameraPositionData = curKey as LiveTimelineKeyCameraPositionData;
             LiveTimelineKeyCameraPositionData liveTimelineKeyCameraPositionData2 = nextKey as LiveTimelineKeyCameraPositionData;
             if (liveTimelineKeyCameraPositionData2 != null && liveTimelineKeyCameraPositionData2.interpolateType != 0)
@@ -1250,15 +1212,18 @@ namespace Gallop.Live.Cutt
             {
                 pos = getFunc(liveTimelineKeyCameraPositionData, this, config);
             }
+
             if (_isNowAlterUpdate && liveTimelineKeyCameraPositionData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayEnable) && (_oldFrame >= liveTimelineKeyCameraPositionData.frame || currentFrame < liveTimelineKeyCameraPositionData.frame || liveTimelineKeyCameraPositionData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayInherit)))
             {
                 if (targetCamera == null)
                 {
                     return false;
                 }
+
                 float t2 = liveTimelineKeyCameraPositionData.traceSpeed * _deltaTimeRatio;
                 pos = Vector3.Slerp(targetCamera.cacheTransform.position, pos, t2);
             }
+
             return true;
         }
 
@@ -1301,6 +1266,7 @@ namespace Gallop.Live.Cutt
             {
                 return false;
             }
+
             LiveTimelineKey curKey = null;
             LiveTimelineKey nextKey = null;
             FindTimelineKey(out curKey, out nextKey, config.lookAtKeys, currentFrame);
@@ -1308,6 +1274,7 @@ namespace Gallop.Live.Cutt
             {
                 return false;
             }
+
             Vector3 position = camera.cacheTransform.position;
             LiveTimelineKeyCameraLookAtData liveTimelineKeyCameraLookAtData = curKey as LiveTimelineKeyCameraLookAtData;
             LiveTimelineKeyCameraLookAtData liveTimelineKeyCameraLookAtData2 = nextKey as LiveTimelineKeyCameraLookAtData;
@@ -1339,23 +1306,25 @@ namespace Gallop.Live.Cutt
                             lookAtPos = LerpWithoutClamp(getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config), getLookAtValueFunc(liveTimelineKeyCameraLookAtData2, this, position, config), t);
                             break;
                         case 1:
-                            {
-                                Vector3 start3 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start3, ref end, ref cp, t, out lookAtPos);
-                                break;
-                            }
+                        {
+                            Vector3 start3 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
+                            BezierUtil.Calc(ref start3, ref end, ref cp, t, out lookAtPos);
+                            break;
+                        }
+
                         case 2:
-                            {
-                                Vector3 start2 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start2, ref end, ref cp, ref cp2, t, out lookAtPos);
-                                break;
-                            }
+                        {
+                            Vector3 start2 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
+                            BezierUtil.Calc(ref start2, ref end, ref cp, ref cp2, t, out lookAtPos);
+                            break;
+                        }
+
                         case 3:
-                            {
-                                Vector3 start = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start, ref end, ref cp, ref cp2, ref cp3, t, out lookAtPos);
-                                break;
-                            }
+                        {
+                            Vector3 start = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
+                            BezierUtil.Calc(ref start, ref end, ref cp, ref cp2, ref cp3, t, out lookAtPos);
+                            break;
+                        }
                     }
                 }
             }
@@ -1363,6 +1332,7 @@ namespace Gallop.Live.Cutt
             {
                 lookAtPos = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
             }
+
             if (_isNowAlterUpdate && liveTimelineKeyCameraLookAtData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayEnable) && (_oldFrame >= liveTimelineKeyCameraLookAtData.frame || currentFrame < liveTimelineKeyCameraLookAtData.frame || liveTimelineKeyCameraLookAtData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayInherit)))
             {
                 Vector3 b = lookAtPos - camera.cacheTransform.position;
@@ -1374,20 +1344,23 @@ namespace Gallop.Live.Cutt
                     lookAtPos = position + Vector3.Slerp(camera.cacheTransform.forward, b, t2) * magnitude;
                 }
             }
+
             return true;
         }
-        
+
         private void AlterUpdate_CameraFov(LiveTimelineWorkSheet sheet, float currentFrame)
         {
             if (sheet.cameraFovKeys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !sheet.cameraFovKeys.EnablePlayModeTimeline(_playMode))
             {
                 return;
             }
+
             CacheCamera camera = GetCamera(sheet.targetCameraIndex);
             if (camera == null)
             {
                 return;
             }
+
             LiveTimelineKey curKey = null;
             LiveTimelineKey nextKey = null;
             FindTimelineKey(out curKey, out nextKey, sheet.cameraFovKeys, currentFrame);
@@ -1395,6 +1368,7 @@ namespace Gallop.Live.Cutt
             {
                 return;
             }
+
             LiveTimelineKeyCameraFovData liveTimelineKeyCameraFovData = curKey as LiveTimelineKeyCameraFovData;
             LiveTimelineKeyCameraFovData liveTimelineKeyCameraFovData2 = nextKey as LiveTimelineKeyCameraFovData;
             float num = 80f;
@@ -1407,6 +1381,7 @@ namespace Gallop.Live.Cutt
             {
                 num = liveTimelineKeyCameraFovData.fov;
             }
+
             if (_limitFovForWidth)
             {
                 float num2 = (float)camera.camera.pixelWidth / (float)camera.camera.pixelHeight;
@@ -1416,6 +1391,7 @@ namespace Gallop.Live.Cutt
                     num /= num3;
                 }
             }
+
             camera.camera.fieldOfView = num;
         }
 
@@ -1425,11 +1401,13 @@ namespace Gallop.Live.Cutt
             {
                 return;
             }
+
             CacheCamera camera = GetCamera(sheet.targetCameraIndex);
             if (camera == null)
             {
                 return;
             }
+
             LiveTimelineKey curKey = null;
             LiveTimelineKey nextKey = null;
             FindTimelineKey(out curKey, out nextKey, sheet.cameraRollKeys, currentFrame);
@@ -1447,6 +1425,7 @@ namespace Gallop.Live.Cutt
                 {
                     num = liveTimelineKeyCameraRollData.degree;
                 }
+
                 camera.cacheTransform.Rotate(0f, 0f, num);
             }
         }
@@ -1478,6 +1457,7 @@ namespace Gallop.Live.Cutt
                 pos = Vector3.zero;
                 return false;
             }
+
             FindTimelineConfig config = default(FindTimelineConfig);
             config.curKey = curKey;
             config.nextKey = nextKey;
@@ -1498,6 +1478,7 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
+
                 LiveTimelineKey curKey = null;
                 LiveTimelineKey nextKey = null;
                 FindTimelineKey(out curKey, out nextKey, keys, currentFrame);
@@ -1505,21 +1486,21 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
+
                 CacheCamera cacheCamera = _multiCameraCache[i];
                 Camera camera = cacheCamera.camera;
                 if (curKey == null)
                 {
                     continue;
                 }
+
                 LiveTimelineKeyMultiCameraPositionData liveTimelineKeyMultiCameraPositionData = curKey as LiveTimelineKeyMultiCameraPositionData;
                 LiveTimelineKeyMultiCameraPositionData liveTimelineKeyMultiCameraPositionData2 = nextKey as LiveTimelineKeyMultiCameraPositionData;
                 // camera.enabled = liveTimelineKeyMultiCameraPositionData.enableMultiCamera;
                 if (liveTimelineKeyMultiCameraPositionData.enableMultiCamera)
                 {
-                    
                     _isMultiCameraEnable = true;
                     //camera.cullingMask = 0x10000000 | liveTimelineKeyMultiCameraPositionData.GetCullingMask();
-                    
                     float zAngle;
                     float fieldOfView;
                     Vector3 maskOffset;
@@ -1540,23 +1521,16 @@ namespace Gallop.Live.Cutt
                         zAngle = liveTimelineKeyMultiCameraPositionData.roll;
                     }
 
-                    
-
                     camera.nearClipPlane = liveTimelineKeyMultiCameraPositionData.nearClip;
                     camera.farClipPlane = liveTimelineKeyMultiCameraPositionData.farClip;
                     camera.fieldOfView = fieldOfView;
                     cacheCamera.cacheTransform.localPosition = pos;
                     cacheCamera.cacheTransform.Rotate(0f, 0f, zAngle);
-                    if (_multiCamera[i].maskIndex != (int)liveTimelineKeyMultiCameraPositionData.maskType)
-                    {
-                        //_multiCameraManager.AttachMask(i, (int)liveTimelineKeyMultiCameraPositionData.maskType);
-                    }
-
                     if (_multiCamera[i].maskIndex >= 0)
                     {
                         _multiCamera[i].MaskOffset = maskOffset;
-                        _multiCamera[i].MaskRoll= maskRoll;
-                        //_multiCamera[i].maskScale = maskScale;
+                        _multiCamera[i].MaskRoll = maskRoll;
+                    //_multiCamera[i].maskScale = maskScale;
                     }
                 }
             }
@@ -1574,6 +1548,7 @@ namespace Gallop.Live.Cutt
                 pos = Vector3.zero;
                 return false;
             }
+
             FindTimelineConfig config = default(FindTimelineConfig);
             config.curKey = curKey;
             config.nextKey = nextKey;
@@ -1583,7 +1558,6 @@ namespace Gallop.Live.Cutt
             config.extraCameraIndex = timelineIndex;
             return CalculateCameraLookAt(out pos, sheet, currentFrame, _multiCameraCache[timelineIndex], ref config, ref fnGetMultiCameraLookAtValueFunc, ref fnGetMultiCameraPositionValueFunc);
         }
-
 
         private void AlterUpdate_MultiCameraLookAt(LiveTimelineWorkSheet sheet, float currentFrame)
         {
@@ -1595,10 +1569,12 @@ namespace Gallop.Live.Cutt
                 {
                     break;
                 }
+
                 if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
                 {
                     continue;
                 }
+
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey != null && CalculateMultiCameraLookAt(out var pos, sheet, curKey, nextKey, currentFrame, i))
                 {
@@ -1614,25 +1590,27 @@ namespace Gallop.Live.Cutt
             if (_multiCameraCache != null)
             {
                 AlterUpdate_MultiCameraPosition(sheet, currentFrame);
-                if(_isMultiCameraEnable)
-                AlterUpdate_MultiCameraLookAt(sheet, currentFrame);
+                if (_isMultiCameraEnable)
+                    AlterUpdate_MultiCameraLookAt(sheet, currentFrame);
             }
         }
 
-        private void AlterUpdate_GlobalLight(LiveTimelineWorkSheet sheet, float currentFrame) {
+        private void AlterUpdate_GlobalLight(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
             GlobalLightUpdateInfo updateInfo = default;
             int count = sheet.globalLightDataLists.Count;
-            for(int i = 0; i < count; i++)
+            for (int i = 0; i < count; i++)
             {
                 LiveTimelineKeyGlobalLightDataList keys = sheet.globalLightDataLists[i].keys;
                 if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
                 {
                     continue;
                 }
-                else if (sheet.globalLightDataLists[i].name != "GlobalLight") 
+                else if (sheet.globalLightDataLists[i].name != "GlobalLight")
                 {
                     continue;
                 }
+
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey != null)
                 {
@@ -1643,6 +1621,7 @@ namespace Gallop.Live.Cutt
                     {
                         quaternion = GetCamera(sheet.targetCameraIndex).cacheTransform.rotation;
                     }
+
                     updateInfo.flags = lightData.flags;
                     if (lightData2 != null && lightData2.interpolateType != 0)
                     {
@@ -1685,16 +1664,22 @@ namespace Gallop.Live.Cutt
                         updateInfo.rimSpecRate2 = lightData.rimSpecRate2;
                         updateInfo.globalRimShadowRate2 = lightData.globalRimShadowRate2;
                     }
+
                     OnUpdateGlobalLight.Invoke(ref updateInfo);
                 }
             }
         }
 
-        private HashSet<string> validBgColorNames = new HashSet<string> { "CharaCenter", "CharaLeft", "CharaRight", "CharaColor" };
-
-        private void AlterUpdate_BgColor1(LiveTimelineWorkSheet sheet, float currentFrame) {
+        private HashSet<string> validBgColorNames = new HashSet<string>
+        {
+            "CharaCenter",
+            "CharaLeft",
+            "CharaRight",
+            "CharaColor"
+        };
+        private void AlterUpdate_BgColor1(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
             int count = sheet.bgColor1List.Count;
-            
             for (int i = 0; i < count; i++)
             {
                 LiveTimelineKeyBgColor1DataList keys = sheet.bgColor1List[i].keys;
@@ -1706,11 +1691,13 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
+
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey == null)
                 {
                     continue;
                 }
+
                 BgColor1UpdateInfo updateInfo = default;
                 LiveTimelineKeyBgColor1Data bgColorData = curKey as LiveTimelineKeyBgColor1Data;
                 LiveTimelineKeyBgColor1Data bgColorData2 = nextKey as LiveTimelineKeyBgColor1Data;
@@ -1735,11 +1722,12 @@ namespace Gallop.Live.Cutt
                     updateInfo.outlineColorBlend = bgColorData.outlineColorBlend;
                     updateInfo.Saturation = bgColorData.Saturation;
                 }
+
                 OnUpdateBgColor1.Invoke(ref updateInfo);
             }
         }
 
-        private void AlterUpdate_TransformControl(LiveTimelineWorkSheet sheet, float currentFrame) 
+        private void AlterUpdate_TransformControl(LiveTimelineWorkSheet sheet, float currentFrame)
         {
             int count = sheet.transformList.Count;
             for (int i = 0; i < count; i++)
@@ -1749,11 +1737,13 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
+
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey == null)
                 {
                     continue;
                 }
+
                 TransformUpdateInfo updateInfo = default;
                 updateInfo.data = sheet.transformList[i];
                 LiveTimelineKeyTransformData transformData = curKey as LiveTimelineKeyTransformData;
@@ -1771,6 +1761,7 @@ namespace Gallop.Live.Cutt
                     updateInfo.updateData.rotation = Quaternion.Euler(transformData.rotate);
                     updateInfo.updateData.scale = transformData.scale;
                 }
+
                 OnUpdateTransform.Invoke(ref updateInfo);
             }
         }
@@ -1789,11 +1780,13 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
+
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey == null)
                 {
                     continue;
                 }
+
                 ObjectUpdateInfo updateInfo = default;
                 LiveTimelineKeyObjectData objectData = curKey as LiveTimelineKeyObjectData;
                 LiveTimelineKeyObjectData objectData2 = nextKey as LiveTimelineKeyObjectData;
@@ -1810,6 +1803,7 @@ namespace Gallop.Live.Cutt
                     updateInfo.updateData.rotation = Quaternion.Euler(objectData.rotate);
                     updateInfo.updateData.scale = objectData.scale;
                 }
+
                 updateInfo.data = sheet.objectList[i];
                 updateInfo.renderEnable = objectData.renderEnable;
                 updateInfo.AttachTarget = objectData.AttachTarget;
@@ -1846,11 +1840,5 @@ namespace Gallop.Live.Cutt
         {
             return new Color(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
         }
-
     }
-
-
 }
-
-
-

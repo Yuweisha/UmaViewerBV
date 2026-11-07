@@ -1,4 +1,4 @@
-﻿%YAML 1.1
+%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!129 &1
 PlayerSettings:
@@ -12,7 +12,7 @@ PlayerSettings:
   targetDevice: 2
   useOnDemandResources: 0
   accelerometerFrequency: 60
-  companyName: Buenavista.fans
+  companyName: "\u8C03\u97F3\u7CD5\u624B"
   productName: UmaViewer
   defaultCursor: {fileID: 2800000, guid: 533f56f1c61acf543bf019a728aadcd4, type: 3}
   cursorHotspot: {x: 40, y: 4}
@@ -143,7 +143,7 @@ PlayerSettings:
   loadStoreDebugModeEnabled: 0
   visionOSBundleVersion: 1.0
   tvOSBundleVersion: 1.0
-  bundleVersion: 2.1.34
+  bundleVersion: 2.1.48
   preloadedAssets: []
   metroInputSource: 0
   wsaTransparentSwapchain: 0
@@ -165,7 +165,7 @@ PlayerSettings:
   androidSupportedAspectRatio: 1
   androidMaxAspectRatio: 2.1
   applicationIdentifier:
-    Android: fans.buenavista.umaviewer
+    Android: com.hongyiw689.umaviewer
     Standalone: com.UmaViewer
     iPhone: com.------------.UmaViewer
   buildNumber:
@@ -870,7 +870,7 @@ PlayerSettings:
   platformArchitecture: {}
   scriptingBackend:
     Android: 1
-    Standalone: 1
+    Standalone: 0
   il2cppCompilerConfiguration:
     Standalone: 1
   il2cppCodeGeneration: {}

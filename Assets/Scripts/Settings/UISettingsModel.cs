@@ -18,23 +18,24 @@ public class UISettingsModel : MonoBehaviour
 
     public ScrollRect MaterialsList;
 
-    private void Awake()
-    {
-        // El toggle de la escena puede venir marcado: se fuerza el estado inicial apagado para que
-        // el ajuste guardado en la escena no deje el seguimiento de ojos encendido al arrancar.
-        EnableEyeTracking = false;
-    }
-
     private bool
         _isHeadFix,
         _isTPose,
         _dynamicBoneEnable = true,
-        // El seguimiento de ojos arranca DESACTIVADO (los personajes del live no lo encienden por
-        // defecto; el ojo mirando a camara solo se usa cuando se pide explicitamente).
-        _enableEyeTracking = false,
+        _enableEyeTracking = true,
         _enableFaceOverride = true;
 
     private float _outlineWidth;
+
+    private void Awake()
+    {
+        if (UnifiedExportPanel.FeatureEnabled) return;
+        foreach (var button in GetComponentsInChildren<Button>(true))
+            for (int i = 0; i < button.onClick.GetPersistentEventCount(); i++)
+                if (button.onClick.GetPersistentTarget(i) == this &&
+                    button.onClick.GetPersistentMethodName(i) == nameof(ExportModel))
+                    button.gameObject.SetActive(false);
+    }
 
     public bool IsHeadFix
     {
@@ -108,6 +109,7 @@ public class UISettingsModel : MonoBehaviour
 
     public void ExportModel()
     {
+        if (!UnifiedExportPanel.FeatureEnabled) return;
 #if UNITY_STANDALONE || UNITY_EDITOR
         var container = Builder.CurrentUMAContainer;
         if (container)

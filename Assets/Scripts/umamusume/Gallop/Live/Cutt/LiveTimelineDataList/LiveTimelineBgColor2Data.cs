@@ -35,13 +35,28 @@ namespace Gallop.Live.Cutt
 
         public virtual int RandomTableIndex()
         {
-            return 0;
+            // Native 4f068c0 sign-extends the high half of attribute (+16h).
+            return unchecked((short)((uint)attribute >> 16));
         }
 
         public override void OnLoad(LiveTimelineControl timelineControl)
         {
-            if (!string.IsNullOrEmpty(BlinkLightName) && BlinkLightNameHash == 0)
-                BlinkLightNameHash = Animator.StringToHash(BlinkLightName);
+            // Native 4f06850 migrates the legacy saved fields once. It does not
+            // resolve or rewrite BlinkLightNameHash.
+            if (f32 > 0f)
+            {
+                power=f32;
+                f32=-1f;
+            }
+            if ((int)_loopType != 4)
+            {
+                loopType=_loopType;
+                loopCount=_loopCount;
+                loopExecutedCount=_loopExecutedCount;
+                loopIntervalFrame=_loopIntervalFrame;
+                isChangeLoopInterpolate=_isChangeLoopInterpolate;
+                _loopType=(LiveTimelineKeyLoopType)4;
+            }
         }
     }
 

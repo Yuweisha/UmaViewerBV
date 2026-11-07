@@ -32,6 +32,15 @@ namespace Gallop.Live
         // Same predicate used by LiveEffectController. Gated tracks are not silently
         // enabled when the Director has not supplied a variation selection.
         public Func<int, bool> VariationEnabled { get; set; }
+        // Original Props.ChangeRenderState receives LiveTimeController.DeltaTime.
+        public float ScrollDeltaTime {get;set;}
+
+        public void Pause(bool paused)
+        {
+            foreach(var prop in instances)
+                if(prop.CameraProps!=null && prop.CameraProps.EmissiveScroll!=null)
+                    prop.CameraProps.EmissiveScroll.Paused=paused;
+        }
 
         private static readonly string[] PropertyNames =
         {
@@ -71,7 +80,8 @@ namespace Gallop.Live
             public int CharacterIndex, PropsId;
             public LiveTimelinePropsSettings.PropsDataGroup Setting;
             public GameObject Instance;
-            public Transform Anchor, DefaultTarget;
+            public Transform Anchor, DefaultTarget, AttachmentTarget;
+            public Props CameraProps;
             public bool DefaultPropParent;
             public readonly Dictionary<string, Transform> Nodes = new Dictionary<string, Transform>(StringComparer.Ordinal);
             public RendererState[] Renderers;
@@ -80,6 +90,7 @@ namespace Gallop.Live
             public LiveTimelineKeyPropsData Appearance, NextAppearance;
             public LiveTimelineKeyPropsAttachData Attachment, NextAttachment;
             public float AppearanceRatio, AttachmentRatio;
+            public int AppearanceCommandFrame;
             public Animator Animator;
             public PlayableGraph Graph;
             public AnimationClipPlayable ClipPlayable;
@@ -87,6 +98,10 @@ namespace Gallop.Live
             public Transform[] PoseNodes;
             public Vector3[] PosePositions, PoseScales;
             public Quaternion[] PoseRotations;
+            public string ResourcePath;
+            public LivePropPhysics Physics;
+            public LivePropHandBoneLink HandLink;
+            public string HandLinkJoint;
         }
 
         public LivePropsController(Transform owner, LiveTimelinePropsSettings settings,
@@ -126,7 +141,6 @@ namespace Gallop.Live
                     // Timeline IDs address this character's eligible props, not
                     // the global settings array. Reserve IDs even when loading fails.
                     int id = logicalId++;
-                    DiagnoseSetting(setting);
                     string path = ResolveResourcePath(setting, characters[c]);
                     if (setting.isUseGenderDiffPropsId && CharacterSex(characters[c]) != 1 && CharacterSex(characters[c]) != 2)
                         Warn("Gender-differentiated props require CharaData.sex (1 male, 2 female); unknown metadata is not guessed.");
@@ -148,10 +162,22 @@ namespace Gallop.Live
                         PropsId = id,
                         Setting = setting,
                         Instance = instance,
+                        ResourcePath = path,
                         Anchor = anchor,
                         Animator = instance.GetComponentInChildren<Animator>(true)
                     };
                     CacheNodes(runtime);
+                    // The game installs its Props behavior dynamically on some
+                    // prefabs (e.g. toon1023 has only AssetHolder). Reuse the
+                    // inherited original attachment contract; specialized Toon/
+                    // Rich lifecycle remains outside this loaded-model bridge.
+                    runtime.CameraProps = instance.GetComponent<Props>();
+                    if (runtime.CameraProps == null) runtime.CameraProps = instance.AddComponent<Props>();
+                    runtime.CameraProps.InitializeAttachNodes();
+                    runtime.CameraProps.InitializeConstraint();
+                    runtime.CameraProps.InitializeDepthWriteAlphaMeshes(setting.IsToonProp, setting.IsDepthWriteAlphaMesh);
+                    runtime.CameraProps.InitializeEmissiveScroll();
+                    InitializeFlareCollision(runtime);
                     CacheRenderers(runtime);
                     props[c, id] = runtime;
                     instances.Add(runtime);
@@ -171,8 +197,38 @@ namespace Gallop.Live
                 // Animation transitions restore the initialized pose, not the prefab's
                 // unadjusted stand height. Native CreateProps scales once before playback.
                 CacheNodes(prop);
+                prop.Physics = new LivePropPhysics(prop.Instance, prop.ResourcePath, prop.Nodes);
             }
         }
+
+        internal bool TryGetAttachNodeTransform(int characterIndex, int propsIndex, int nodeIndex, out Transform target)
+        {
+            target = null;
+            if (disposed || propsIndex < 0 || characterIndex < 0 || characterIndex >= props.GetLength(0) || propsIndex >= props.GetLength(1)) return false;
+            var prop = props[characterIndex, propsIndex];
+            return prop != null && prop.CameraProps != null && prop.CameraProps.TryGetAttachNodeTransform(nodeIndex, out target);
+        }
+
+        internal Transform GetStageAttachmentRoot(int characterIndex,int propsIndex)
+        {
+            if(disposed||characterIndex<0||characterIndex>=props.GetLength(0)||propsIndex<0||propsIndex>=props.GetLength(1))return null;
+            return props[characterIndex,propsIndex]?.Instance?.transform;
+        }
+
+        private RuntimeProp ConstraintProp(UmaContainerCharacter actor,int dressIndex,int propsIndex)
+        {
+            // This host stores the one currently assembled dress. Native
+            // reserve-dress instances remain outside this loaded-model bridge.
+            if(disposed||dressIndex!=0||actor==null||propsIndex<0||propsIndex>=props.GetLength(1))return null;
+            int index=characters.IndexOf(actor);return index>=0&&index<props.GetLength(0)?props[index,propsIndex]:null;
+        }
+        internal bool TryGetConstraintSource(UmaContainerCharacter actor,int dressIndex,int propsIndex,int nodeHash,out Transform target)
+        {
+            target=null;var prop=ConstraintProp(actor,dressIndex,propsIndex);if(prop==null)return false;
+            foreach(var pair in prop.Nodes)if(FNVHash.Generate(pair.Key)==nodeHash){target=pair.Value;return true;}return false;
+        }
+        internal void ApplyParentConstraint(UmaContainerCharacter actor,int dressIndex,int propsIndex,bool enable,float weight,bool influence,IReadOnlyList<ConstraintUtil.Source> sources)
+        {ConstraintProp(actor,dressIndex,propsIndex)?.CameraProps?.ApplyConstraint(enable,weight,influence,sources);}
 
         // Actual-game Director.CreateProps registers all three stage work arrays
         // after creating/scaling props (Komoe RVA 0x7154755..0x71547ea).
@@ -183,6 +239,7 @@ namespace Gallop.Live
             registeredStage = stage;
             registeredBlinkDriver = stage.GetComponent<StageBlinkLightDriver>();
             registeredFlares = flares;
+            registeredBlinkDriver?.BindFlareController(flares);
             foreach (var prop in instances)
                 foreach (var component in prop.StageProps)
                 {
@@ -209,7 +266,12 @@ namespace Gallop.Live
                 {
                     if (setting == null || !SatisfiesConditions(setting, characters[c], c)) continue;
                     string path = ResolveResourcePath(setting, characters[c]);
-                    if (path != null) output.Add(path);
+                    if (path != null)
+                    {
+                        output.Add(path);
+                        string cloth = LivePropPhysics.ClothPath(path);
+                        if (LiveEffectController.FindResourceEntry(cloth) != null) output.Add(cloth);
+                    }
                 }
             }
         }
@@ -262,6 +324,9 @@ namespace Gallop.Live
 
         private static int CanonicalDressId(UmaContainerCharacter character)
         {
+            // CharacterData.GetCharacterPropsList0x4fbf4ac compares the selected
+            // DressIdArray entry. A body asset tuple is not a unique master dress.
+            if (character.LiveMasterDressId > 0) return character.LiveMasterDressId;
             string costume = character.VarCostumeIdLong;
             if (string.IsNullOrEmpty(costume)) costume = character.VarCostumeIdShort;
             var rows = UmaDatabaseController.Instance?.DressData;
@@ -335,11 +400,25 @@ namespace Gallop.Live
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out int sex) ? sex : 0;
         }
 
-        private void DiagnoseSetting(LiveTimelinePropsSettings.PropsDataGroup setting)
+        internal static string ResolveFlareCollisionPath(LiveTimelinePropsSettings.PropsDataGroup setting, string prefabPath)
         {
-            // Metadata is checked for each selected character by resource resolution.
-            if (setting.IsFlareCollisionEnabled) Warn("Props flare-collision integration is unrecovered; prefab components are preserved.");
-            if (setting.IsDepthWriteAlphaMesh) Warn("Props depth-write-alpha material policy is unrecovered; original prefab materials are preserved.");
+            if (!setting.IsFlareCollisionEnabled || !setting.isCharaProps) return null;
+            // Use the selected load identity, including gender IDs, from the same
+            // native resource family as the instantiated prop.
+            int slash = prefabPath.LastIndexOf('/');
+            string prefabName = prefabPath.Substring(slash + 1);
+            return prefabPath.Substring(0, slash) + "/flares/ast_" + prefabName.Substring(4) + "_flare";
+        }
+
+        private void InitializeFlareCollision(RuntimeProp prop)
+        {
+            // Original Director.CreateProps 0x4f8342d..0x4f83485, after the
+            // PropsManager creates the clone, loads the parameter on that clone.
+            string path = ResolveFlareCollisionPath(prop.Setting, prop.ResourcePath);
+            if (path == null) return;
+            var parameter = LiveFlashResourceUtility.LoadOnView<CharacterFlareCollisionParameter>(path);
+            if (!CharacterFlareCollision.AddCollisionToObject(prop.Instance, parameter))
+                Warn("Cannot install props flare collision parameter: " + path);
         }
 
         private static void CacheNodes(RuntimeProp prop)
@@ -438,8 +517,26 @@ namespace Gallop.Live
                     var target = PropJoint(prop, ids[i], names != null && i < names.Length ? names[i] : null);
                     if (target != null) { prop.DefaultTarget = target; prop.DefaultPropParent = true; break; }
                 }
+            prop.AttachmentTarget = prop.DefaultTarget;
             // No character/root fallback for an unresolved named attachment.
             // An explicit attach key can still resolve this on the first frame.
+        }
+
+        private Transform ResolveAttachmentTarget(RuntimeProp prop, LiveTimelineKeyPropsAttachData key)
+        {
+            if (key._attachPropId >= 0)
+                return PropJoint(prop, key._attachPropId, key._attachTargetPropNodeName);
+            // Original Props.StartAttach registers only the per-prop allowed
+            // joints. ChangeAttach ignores zero/unknown hashes but still writes
+            // the command's other parameters.
+            if (key._attachJointHash != 0 && prop.Setting.attachJointNames != null)
+                foreach (var name in prop.Setting.attachJointNames)
+                {
+                    if (string.IsNullOrEmpty(name) || FNVHash.Generate(name) != key._attachJointHash) continue;
+                    var target = CharacterJoint(prop.CharacterIndex, name);
+                    if (target != null) return target;
+                }
+            return prop.AttachmentTarget;
         }
 
         private Transform PropJoint(RuntimeProp prop, int id, string name)
@@ -451,7 +548,7 @@ namespace Gallop.Live
             return other.Nodes.TryGetValue(name, out var node) ? node : null;
         }
 
-        public void Evaluate(IList<LiveTimelineWorkSheet> sheets, float frame, TimelinePlayerMode mode)
+        public void Evaluate(IList<LiveTimelineWorkSheet> sheets, float frame, TimelinePlayerMode mode, float? currentTime = null, LiveTimelineWorkSheet activeSheet = null)
         {
             if (disposed) return;
             foreach (var prop in instances)
@@ -459,12 +556,13 @@ namespace Gallop.Live
                 prop.Appearance = prop.NextAppearance = null;
                 prop.Attachment = prop.NextAttachment = null;
                 prop.AppearanceRatio = prop.AttachmentRatio = 0f;
+                prop.AppearanceCommandFrame = int.MinValue;
             }
             if (sheets != null)
                 for (int s = 0; s < sheets.Count; s++)
                 {
                     var sheet = sheets[s];
-                    if (sheet == null || !sheet.enableAtRuntime) continue;
+                    if (sheet == null || !sheet.enableAtRuntime || (activeSheet != null && sheet != activeSheet)) continue;
                     if (sheet.propsList != null)
                         foreach (var group in sheet.propsList)
                         {
@@ -473,13 +571,17 @@ namespace Gallop.Live
                             DiagnoseRequestedResource(current as LiveTimelineKeyPropsData);
                             foreach (var prop in instances)
                             {
-                                var a = LatestAppearance(group.keys, current as LiveTimelineKeyPropsData, prop, frame);
-                                if (a == null || (prop.Appearance != null && a.frame < prop.Appearance.frame)) continue;
-                                var b = next as LiveTimelineKeyPropsData;
-                                if (b == null || !Selected(b.settingFlags, b.propsID, prop)) b = a;
+                                var a = LatestAppearance(group.keys, current as LiveTimelineKeyPropsData,
+                                    next as LiveTimelineKeyPropsData, prop, frame, out var b, out int commandFrame);
+                                if (a == null || commandFrame < prop.AppearanceCommandFrame) continue;
+                                // Native reissues every current group in source order. An
+                                // earlier key is still a command on this frame, so it must
+                                // override an earlier group's newer broadcast key.
+                                prop.AppearanceCommandFrame = commandFrame;
                                 prop.Appearance = a;
-                                prop.NextAppearance = b;
-                                prop.AppearanceRatio = b != a && b.IsInterpolateKey() ? LiveTimelineControl.CalculateInterpolationValue(a, b, frame) : 0f;
+                                prop.NextAppearance = b ?? a;
+                                prop.AppearanceRatio = b != null && b != a && b.IsInterpolateKey()
+                                    ? LiveTimelineControl.CalculateInterpolationValue(a, b, commandFrame) : 0f;
                             }
                         }
                     if (sheet.propsAttachList != null)
@@ -490,7 +592,10 @@ namespace Gallop.Live
                             foreach (var prop in instances)
                             {
                                 var a = LatestAttachment(group.keys, current as LiveTimelineKeyPropsAttachData, prop, frame);
-                                if (a == null || (prop.Attachment != null && a.frame < prop.Attachment.frame)) continue;
+                                if (a == null) continue;
+                                // Native groups issue commands in order. A failed
+                                // joint lookup preserves the last successful target.
+                                prop.AttachmentTarget = ResolveAttachmentTarget(prop, a);
                                 var b = next as LiveTimelineKeyPropsAttachData;
                                 if (b == null || !Selected(b._settingFlags, b._propsId, prop)) b = a;
                                 prop.Attachment = a;
@@ -501,11 +606,39 @@ namespace Gallop.Live
                 }
             foreach (var prop in instances)
             {
-                ApplyAnimation(prop, frame);
+                ApplyAnimation(prop, frame, currentTime ?? frame / 60f);
                 ApplyAppearance(prop);
                 ApplyAttachment(prop);
             }
             registeredBlinkDriver?.UpdateRegisteredRoots();
+        }
+
+        // Director owns these two phases. Begin follows props pose/attachment;
+        // End belongs to AlterLateUpdatePost, after timeline camera sampling.
+        public void BeginPhysics(float deltaTime)
+        {
+            if (disposed) return;
+            foreach (var prop in instances)
+                prop.Physics?.Begin(deltaTime, characters[prop.CharacterIndex]?.LiveCySpringController);
+        }
+
+        internal void ReserveWarmingUpCySpring(int characterIndex, int dressIndex, float seconds)
+        {
+            // The loaded-model bridge currently owns dress zero only.
+            if (disposed || dressIndex != 0) return;
+            foreach (var prop in instances)
+                if (prop.CharacterIndex == characterIndex)
+                    prop.Physics?.ReserveWarming(seconds, 0);
+        }
+
+        public void EndPhysics()
+        {
+            if (disposed) return;
+            foreach (var prop in instances)
+            {
+                prop.Physics?.End();
+                prop.CameraProps?.AfterLateUpdateEmissiveScroll();
+            }
         }
 
         private void DiagnoseRequestedResource(LiveTimelineKeyPropsData key)
@@ -532,18 +665,33 @@ namespace Gallop.Live
 
         private static bool Selected(int flags, int id, RuntimeProp prop)
         {
-            return (flags & (1 << prop.CharacterIndex)) != 0 && (id == -1 || id == prop.PropsId);
+            // Original PropsManager.ApplyPropsUpdateInfo 0x4e9e840: settingFlags < 1
+            // addresses every physical character slot; otherwise each set bit selects
+            // one slot. A negative propsId addresses the whole eligible props list.
+            bool characterSelected = flags < 1 || (flags & (1 << prop.CharacterIndex)) != 0;
+            return characterSelected && (id < 0 || id == prop.PropsId);
         }
 
         // A mask only updates selected characters. Looking back to the last selected
         // key makes seeking deterministic instead of leaking the previous playhead's
         // visibility/attachment state into characters omitted by the current key.
         private static LiveTimelineKeyPropsData LatestAppearance(ILiveTimelineKeyDataList keys,
-            LiveTimelineKeyPropsData current, RuntimeProp prop, float frame)
+            LiveTimelineKeyPropsData current, LiveTimelineKeyPropsData next, RuntimeProp prop,
+            float frame, out LiveTimelineKeyPropsData following, out int commandFrame)
         {
+            following = next;
+            commandFrame = Mathf.FloorToInt(frame);
             if (current != null && Selected(current.settingFlags, current.propsID, prop)) return current;
+            // A mask can stop addressing this prop. Retain its most recent actual
+            // command, dated at the end of that key's active interval, not its
+            // start. This also reconstructs state when seeking backwards.
             for (int i = keys.Count - 1; i >= 0; i--)
-                if (keys[i] is LiveTimelineKeyPropsData key && key.frame <= frame && Selected(key.settingFlags, key.propsID, prop)) return key;
+                if (keys[i] is LiveTimelineKeyPropsData key && key.frame <= frame && Selected(key.settingFlags, key.propsID, prop))
+                {
+                    following = i + 1 < keys.Count ? keys[i + 1] as LiveTimelineKeyPropsData : null;
+                    if (following != null) commandFrame = System.Math.Min(commandFrame, following.frame - 1);
+                    return key;
+                }
             return null;
         }
 
@@ -560,23 +708,39 @@ namespace Gallop.Live
         {
             var a = prop.Attachment;
             var b = prop.NextAttachment;
-            Transform target = prop.DefaultTarget;
+            Transform target = prop.AttachmentTarget;
             Transform copy = null;
             Vector3 position = Vector3.zero, rotation = Vector3.zero, scale = Vector3.one;
+            if (a == null) { prop.HandLink = null; prop.HandLinkJoint = null; }
             if (a != null)
             {
                 if (a._attachType != 0 && a._attachPropId < 0)
                     Warn("Unrecovered nonzero props attachType; resolving the explicit named attachment only.");
-                target = a._attachPropId >= 0 ? PropJoint(prop, a._attachPropId, a._attachTargetPropNodeName)
-                    : CharacterJoint(prop.CharacterIndex, a._attachJointName, a._attachJointHash);
-                if (target == null && string.IsNullOrEmpty(a._attachJointName) && a._attachPropId < 0) target = prop.DefaultTarget;
+                // AttachmentTarget already reflects every command in group order.
+                // Invalid character joints do not suppress offset/scale updates.
                 copy = CharacterJoint(prop.CharacterIndex, a._copyPositionJointName, a._copyPositionJointHash);
                 float t = prop.AttachmentRatio;
                 position = Vector3.LerpUnclamped(a._offsetPosition, b._offsetPosition, t);
                 rotation = Vector3.LerpUnclamped(a.OffsetRotate, b.OffsetRotate, t);
                 scale = Vector3.LerpUnclamped(a.OffsetScale, b.OffsetScale, t);
                 if (a.IsLinkAttachBone)
-                    Warn("IsLinkAttachBone transform-link override is unrecovered; requested bone parenting and offsets remain active.");
+                {
+                    string joint = a._attachJointName;
+                    bool handJoint = joint == "Elbow_L" || joint == "Elbow_R" ||
+                        joint == "Wrist_L" || joint == "Wrist_R" ||
+                        joint == "Hand_Attach_L" || joint == "Hand_Attach_R";
+                    if (handJoint && prop.HandLinkJoint != joint)
+                    {
+                        prop.HandLink = new LivePropHandBoneLink(characterBones[prop.CharacterIndex],
+                            prop.Nodes, joint.EndsWith("_L", StringComparison.Ordinal));
+                        prop.HandLinkJoint = joint;
+                    }
+                    if (!handJoint) prop.HandLink = null;
+                    // Per-motion hide-reference exclusions still need the native
+                    // LinkPropHideBoneExcludeSetting owner data, independently of pose linking.
+                    Warn("Props hand pose linking is active; per-motion reference-finger hide exclusions remain unverified.");
+                }
+                else { prop.HandLink = null; prop.HandLinkJoint = null; }
             }
             if (target == null)
             {
@@ -603,6 +767,7 @@ namespace Gallop.Live
             if (!prop.Setting.isInfluenceOfCharaHeight && characterParent && inheritsHeight && bodyScale > 0f) scale /= bodyScale;
             prop.Anchor.localScale = scale;
             if (copy != null) prop.Anchor.position = copy.position + target.TransformVector(position);
+            prop.HandLink?.Apply();
         }
 
         private void ApplyAppearance(RuntimeProp prop)
@@ -610,12 +775,22 @@ namespace Gallop.Live
             var a = prop.Appearance;
             var b = prop.NextAppearance;
             bool visible = a != null && a.rendererEnable;
-            if (visible && a.IsVisibleAttachedCharaLinked)
-                visible = characters[prop.CharacterIndex].gameObject.activeInHierarchy
-                    && (locators == null || prop.CharacterIndex >= locators.Count || locators[prop.CharacterIndex] == null || locators[prop.CharacterIndex].liveCharaVisible);
+            if (a != null && a.IsVisibleAttachedCharaLinked)
+            {
+                // Native ChangeRenderState replaces renderEnable with the
+                // attached CharacterObject visibility when that owner exists.
+                // Unity hierarchy activation is not part of this logical gate.
+                var locator=locators!=null&&prop.CharacterIndex<locators.Count?locators[prop.CharacterIndex]:null;
+                if(locator!=null)visible=locator.liveCharaVisible;
+            }
             if (a != null && a.AutoSwitchLayerOnMirrorRendering)
                 Warn("Props mirror-pass layer switching is unrecovered; authored prefab layers are preserved.");
             float t = prop.AppearanceRatio;
+            // Original invisible Props skip parameter/delta writes, while their
+            // post-update component retains and consumes its previous state.
+            if(visible)prop.CameraProps?.SetEmissiveScrollParameters(
+                Mathf.LerpUnclamped(a.EmissiveScrollTimeScale,b.EmissiveScrollTimeScale,t),
+                Mathf.LerpUnclamped(a.EmissiveScrollEnergyScale,b.EmissiveScrollEnergyScale,t),ScrollDeltaTime);
             foreach (var state in prop.Renderers)
             {
                 var renderer = state.Renderer;
@@ -672,14 +847,14 @@ namespace Gallop.Live
             if ((slot.Properties & (1 << index)) != 0) slot.Block.SetFloat(PropertyIds[index], value);
         }
 
-        private void ApplyAnimation(RuntimeProp prop, float frame)
+        private void ApplyAnimation(RuntimeProp prop, float frame, float currentTime)
         {
             var key = prop.Appearance;
             AnimationClip clip = key != null && key.IsApplyAnimation ? key.AnimationClip : null;
             if (key != null && key.IsApplyAnimation && clip == null)
                 Warn("Props animation key has no resolved AnimationClip reference.");
-            if (key != null && key.IsApplyReserveWarming)
-                Warn("Props reserve-warming policy is unrecovered; the requested clip is evaluated at timeline time.");
+            if (key != null && (!key.IsApplyAnimation || clip != null))
+                prop.Physics?.SetAnimationState(key.frame, clip != null, key.IsApplyReserveWarming);
             if (prop.PlayingClip != clip)
             {
                 if (prop.Graph.IsValid()) prop.Graph.Destroy();
@@ -700,7 +875,8 @@ namespace Gallop.Live
                 }
             }
             if (clip == null) return;
-            float time = Mathf.Max(0f, key.StartAnimationTime + (frame - key.frame + key.AnimationHeadFrame) / 60f);
+            float time = LivePropsAnimationClock.Calculate(key.frame, key.AnimationHeadFrame,
+                Mathf.FloorToInt(frame), currentTime);
             time = clip.isLooping && clip.length > 0f ? Mathf.Repeat(time, clip.length) : Mathf.Min(time, clip.length);
             if (clip.legacy) clip.SampleAnimation(prop.Instance, time);
             else
@@ -747,6 +923,7 @@ namespace Gallop.Live
                     registeredFlares?.RemoveSources(component.transform, prop.NameSuffixToken);
                 }
                 if (prop.Graph.IsValid()) prop.Graph.Destroy();
+                prop.Physics?.Dispose();
                 // Destroy separately: a prop-to-prop parent may already have been removed.
                 if (prop.Instance != null) Object.Destroy(prop.Instance);
                 if (prop.Anchor != null) Object.Destroy(prop.Anchor.gameObject);

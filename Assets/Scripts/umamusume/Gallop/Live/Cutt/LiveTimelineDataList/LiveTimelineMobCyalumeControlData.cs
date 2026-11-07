@@ -20,6 +20,13 @@ namespace Gallop.Live.Cutt
         [NonSerialized]
         private bool _hasRotationCache;
 
+        public override void OnLoad(LiveTimelineControl timelineControl)
+        {
+            base.OnLoad(timelineControl);
+            _rotationCache = Quaternion.Euler(Angle);
+            _hasRotationCache = true;
+        }
+
         public Quaternion GetRotation()
         {
             if (!_hasRotationCache)
@@ -38,10 +45,36 @@ namespace Gallop.Live.Cutt
     }
 
     [Serializable]
-    public class LiveTimelineMobCyalumeControlData : ILiveTimelineGroupDataWithName
+    public class LiveTimelineKeyMobControlData : LiveTimelineKeyMobCyalumeControlData
+    {
+        public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.MobControl;
+    }
+    [Serializable]
+    public class LiveTimelineKeyCyalumeControlData : LiveTimelineKeyMobCyalumeControlData
+    {
+        public override LiveTimelineKeyDataType dataType => LiveTimelineKeyDataType.CyalumeControl;
+    }
+    [Serializable]
+    public class LiveTimelineKeyMobControlDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyMobControlData> { }
+    [Serializable]
+    public class LiveTimelineKeyCyalumeControlDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyCyalumeControlData> { }
+    [Serializable]
+    public abstract class LiveTimelineMobCyalumeControlData : ILiveTimelineGroupDataWithName
     {
         public int GroupIndex;
-        public LiveTimelineKeyMobCyalumeControlDataList Keys;
+        public abstract override ILiveTimelineKeyDataList GetKeyList();
+    }
+    [Serializable]
+    public class LiveTimelineMobControlData : LiveTimelineMobCyalumeControlData
+    {
+        public LiveTimelineKeyMobControlDataList Keys;
+        public override ILiveTimelineKeyDataList GetKeyList() => Keys;
+    }
+    [Serializable]
+    public class LiveTimelineCyalumeControlData : LiveTimelineMobCyalumeControlData
+    {
+        public LiveTimelineKeyCyalumeControlDataList Keys;
+        public override ILiveTimelineKeyDataList GetKeyList() => Keys;
     }
 
     public delegate void MobCyalumeUpdateInfoDelegate(ref MobCyalumeUpdateInfo updateInfo);
