@@ -1,0 +1,116 @@
+name: Build src branch - Windows Mono
+
+on:
+  push:
+    branches:
+      - src
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unity-src-mono-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 Mono
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout src branch
+        uses: actions/checkout@v4
+        with:
+          ref: src
+          fetch-depth: 0
+          lfs: true
+
+      - name: Verify Unity version
+        shell: pwsh
+        run: |
+          $versionFile = "ProjectSettings/ProjectVersion.txt"
+
+          if (!(Test-Path $versionFile)) {
+            throw "Unity project version file not found."
+          }
+
+          $version = Get-Content $versionFile -Raw
+          Write-Host $version
+
+          if ($version -notmatch 'm_EditorVersion:\s*2022\.3\.62f3') {
+            throw "Unity version mismatch. Expected 2022.3.62f3."
+          }
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-src-Windows-Mono-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-src-Windows-Mono-
+
+      - name: Build Windows Mono player
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: .
+          unityVersion: 2022.3.62f3
+          targetPlatform: StandaloneWindows64
+          buildName: UmaViewer
+          buildsPath: build
+          scriptingBackend: Mono
+          allowDirtyBuild: false
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $buildDir = "build/StandaloneWindows64"
+
+          if (!(Test-Path $buildDir)) {
+            throw "Build output directory not found: $buildDir"
+          }
+
+          $exe = Get-ChildItem $buildDir -Filter "*.exe" -File |
+            Select-Object -First 1
+
+          if ($null -eq $exe) {
+            throw "No Windows executable was produced."
+          }
+
+          Write-Host "Build executable: $($exe.FullName)"
+
+      - name: Package Windows Mono build
+        shell: pwsh
+        run: |
+          $buildDir = "build/StandaloneWindows64"
+          $zipPath = "UmaViewer-Windows-x64-Mono.zip"
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive `
+            -Path "$buildDir/*" `
+            -DestinationPath $zipPath `
+            -CompressionLevel Optimal
+
+          if (!(Test-Path $zipPath)) {
+            throw "ZIP packaging failed."
+          }
+
+          Write-Host "Package size: $((Get-Item $zipPath).Length) bytes"
+
+      - name: Upload Windows Mono artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UmaViewer-Windows-x64-Mono
+          path: UmaViewer-Windows-x64-Mono.zip
+          if-no-files-found: error
+          retention-days: 14
