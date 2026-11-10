@@ -111,11 +111,10 @@ public partial class UmaViewerUI
             if (Main.Costumes == null || !Main.Costumes.Any(c => c.CharaId == charaId))
                 continue;
 
-            if (MakeRow($"Chara_{charaId}", _gachaCharaColumn, y, rowHeight, chara.Icon,
+            if (MakeContainer(UmaContainerPrefab, _gachaCharaColumn, chara.Icon,
                     $"{charaId}  {chara.GetName()}", () => SelectGachaChara(charaId)) == null)
                 break;
 
-            y -= rowHeight + 4f;
             count++;
         }
 
@@ -159,76 +158,40 @@ public partial class UmaViewerUI
             int capturedCard = cardId;
             int capturedChara = charaId;
 
-            if (MakeRow($"Card_{cardId}", _gachaCardColumn, y, rowHeight, costume.Icon, label,
+            if (MakeContainer(UmaContainerCostumePrefab, _gachaCardColumn, costume.Icon, label,
                     () => ShowGachaCutinPopup(capturedCard, capturedChara)) == null)
                 break;
 
-            y -= rowHeight + 4f;
             count++;
         }
 
         Debug.Log($"[Gacha] 角色 {charaId} 的育成卡 {count} 张");
     }
 
-    /// <summary>一行：缩略图 + 文字 + 点击。</summary>
-    private GameObject MakeRow(string name, Transform parent, float y, float height, Sprite icon,
+    /// <summary>用角色页同一套 prefab 建一行，样式自动一致（白色按钮/缩略图/高亮）。</summary>
+    private UmaUIContainer MakeContainer(GameObject prefab, Transform parent, Sprite icon,
         string label, Action onClick)
     {
-        if (parent == null)
+        if (prefab == null || parent == null)
             return null;
 
-        var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
-        go.transform.SetParent(parent, false);
+        var container = Instantiate(prefab, parent).GetComponent<UmaUIContainer>();
 
-        RectTransform rect = (RectTransform)go.transform;
-        rect.anchorMin = new Vector2(0f, 1f);
-        rect.anchorMax = new Vector2(1f, 1f);
-        rect.pivot = new Vector2(0.5f, 1f);
-        rect.anchoredPosition = new Vector2(0f, y);
-        rect.sizeDelta = new Vector2(0f, height);
+        if (container == null)
+            return null;
 
-        Image background = go.GetComponent<Image>();
-        background.color = new Color(0.16f, 0.20f, 0.26f, 0.92f);
+        container.Name = label;
 
-        Button button = go.GetComponent<Button>();
-        button.targetGraphic = background;
-        button.onClick.AddListener(() => onClick());
-
-        if (icon != null)
+        if (icon != null && container.Image != null)
         {
-            var thumb = new GameObject("Icon", typeof(RectTransform), typeof(Image));
-            thumb.transform.SetParent(go.transform, false);
-            RectTransform thumbRect = (RectTransform)thumb.transform;
-            thumbRect.anchorMin = new Vector2(0f, 0.5f);
-            thumbRect.anchorMax = new Vector2(0f, 0.5f);
-            thumbRect.pivot = new Vector2(0f, 0.5f);
-            thumbRect.anchoredPosition = new Vector2(6f, 0f);
-            thumbRect.sizeDelta = new Vector2(height - 10f, height - 10f);
-
-            Image thumbImage = thumb.GetComponent<Image>();
-            thumbImage.sprite = icon;
-            thumbImage.preserveAspect = true;
-            thumbImage.raycastTarget = false;
+            container.Image.sprite = icon;
+            container.Image.enabled = true;
         }
 
-        var textGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
-        textGo.transform.SetParent(go.transform, false);
-        RectTransform textRect = (RectTransform)textGo.transform;
-        textRect.anchorMin = Vector2.zero;
-        textRect.anchorMax = Vector2.one;
-        textRect.offsetMin = new Vector2(icon != null ? height : 8f, 2f);
-        textRect.offsetMax = new Vector2(-8f, -2f);
+        if (container.Button != null)
+            container.Button.onClick.AddListener(() => onClick());
 
-        TextMeshProUGUI text = textGo.GetComponent<TextMeshProUGUI>();
-        text.text = label;
-        text.font = TMP_Settings.defaultFontAsset;
-        text.fontSize = 18f;
-        text.color = Color.white;
-        text.alignment = TextAlignmentOptions.MidlineLeft;
-        text.enableWordWrapping = false;
-        text.raycastTarget = false;
-
-        return go;
+        return container;
     }
 
     /// <summary>点击一张卡 → 单槽位窗口，选择用哪个角色播。</summary>
