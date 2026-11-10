@@ -72,8 +72,12 @@ public sealed class LiveRenderSettings
 
         try
         {
+            // IL2CPP 下不设 WorkingDirectory 会报 "Native error= Success" 启动失败
+            string workDir=Path.GetDirectoryName(executable);
+
             using(var process=new Process{StartInfo=new ProcessStartInfo(executable,"-version")
-                {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true}})
+                {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
+                 RedirectStandardInput=true,WorkingDirectory=string.IsNullOrEmpty(workDir)?Environment.CurrentDirectory:workDir}})
             {
                 process.Start();
 

@@ -38,21 +38,32 @@ public partial class UmaViewerUI
     {
         _gachaList = FindGachaListScrollRect();
 
-        if (_gachaList == null)
+        RectTransform host;
+
+        if (_gachaList != null && _gachaList.content != null)
         {
-            Debug.LogWarning("[Gacha] 没找到 Gacha List 下的 ScrollRect，分页保持空白");
-            return;
+            host = _gachaList.content;
+            Debug.Log($"[Gacha] 容器 = ScrollRect '{_gachaList.name}'.content size={host.rect.size}");
+        }
+        else
+        {
+            // 场景里的 Gacha List 只是一个 Image 面板，没有 ScrollRect —— 直接把面板本身当容器
+            RectTransform panel = FindGachaListPanel();
+
+            if (panel == null)
+            {
+                Debug.LogWarning("[Gacha] 既没找到 ScrollRect 也没找到 Gacha List 面板，分页保持空白");
+                return;
+            }
+
+            host = panel;
+            Debug.Log($"[Gacha] 容器 = 面板 '{panel.name}' size={panel.rect.size}");
         }
 
-        for (int i = _gachaList.content.childCount - 1; i >= 0; i--)
-            Destroy(_gachaList.content.GetChild(i).gameObject);
-
-        RectTransform host = _gachaList.content;
-        host.anchorMin = Vector2.zero;
-        host.anchorMax = Vector2.one;
+        for (int i = host.childCount - 1; i >= 0; i--)
+            Destroy(host.GetChild(i).gameObject);
+        // 面板被 tab 切换时是整块显示/隐藏的，这里只保证两栏铺满它
         host.pivot = new Vector2(0.5f, 1f);
-        host.offsetMin = Vector2.zero;
-        host.offsetMax = Vector2.zero;
 
         _gachaCharaColumn = MakeColumn("GachaCharaColumn", host, new Vector2(0f, 0f), new Vector2(0.42f, 1f));
         _gachaCardColumn = MakeColumn("GachaCardColumn", host, new Vector2(0.44f, 0f), new Vector2(1f, 1f));
@@ -430,13 +441,26 @@ public partial class UmaViewerUI
         }
     }
 
+    /// <summary>按名字找 Gacha List 面板（tab 切换 SetActive 的就是它）。</summary>
+    private RectTransform FindGachaListPanel()
+    {
+        // 面板挂在 Canvas 的另一个分支下，不在 UmaViewerUI 的子树里，所以整场景找
+        foreach (var rect in UnityEngine.Object.FindObjectsOfType<RectTransform>(true))
+        {
+            if (rect.name == "Gacha List")
+                return rect;
+        }
+
+        return null;
+    }
+
     /// <summary>Gacha List 面板下的 ScrollRect（场景里没有对应的 public 字段）。</summary>
     private ScrollRect FindGachaListScrollRect()
     {
         if (_gachaList != null)
             return _gachaList;
 
-        foreach (var rect in GetComponentsInChildren<ScrollRect>(true))
+        foreach (var rect in UnityEngine.Object.FindObjectsOfType<ScrollRect>(true))
         {
             Transform t = rect.transform;
 
