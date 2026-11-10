@@ -37,6 +37,8 @@ public partial class UmaViewerUI
     /// <summary>建立 Gacha 分页：左角色、右育成卡。</summary>
     public void LoadGachaPanels()
     {
+        Debug.LogWarning($"[Gacha] LoadGachaPanels 进入 chars={Main.Characters?.Count ?? 0} costumes={Main.Costumes?.Count ?? 0}");
+
         _gachaList = FindGachaListScrollRect();
 
         RectTransform host;
@@ -44,7 +46,7 @@ public partial class UmaViewerUI
         if (_gachaList != null && _gachaList.content != null)
         {
             host = _gachaList.content;
-            Debug.Log($"[Gacha] 容器 = ScrollRect '{_gachaList.name}'.content size={host.rect.size}");
+            Debug.LogWarning($"[Gacha] 容器 = ScrollRect '{_gachaList.name}'.content size={host.rect.size}");
         }
         else
         {
@@ -58,7 +60,7 @@ public partial class UmaViewerUI
             }
 
             host = panel;
-            Debug.Log($"[Gacha] 容器 = 面板 '{panel.name}' size={panel.rect.size}");
+            Debug.LogWarning($"[Gacha] 容器 = 面板 '{panel.name}' size={panel.rect.size}");
         }
 
         for (int i = host.childCount - 1; i >= 0; i--)
@@ -71,7 +73,7 @@ public partial class UmaViewerUI
 
         BuildGachaCharaColumn();
 
-        Debug.Log($"[Gacha] 分页建立完成 chars={Main.Characters?.Count ?? 0} costumes={Main.Costumes?.Count ?? 0}");
+        Debug.LogWarning($"[Gacha] 分页建立完成 chars={Main.Characters?.Count ?? 0} costumes={Main.Costumes?.Count ?? 0}");
     }
 
     private Transform MakeColumn(string name, RectTransform parent, Vector2 anchorMin, Vector2 anchorMax)
@@ -128,7 +130,7 @@ public partial class UmaViewerUI
             count++;
         }
 
-        Debug.Log($"[Gacha] 角色栏 {count} 项");
+        Debug.LogWarning($"[Gacha] 角色栏 {count} 项");
     }
 
     private void SelectGachaChara(int charaId)
@@ -175,7 +177,7 @@ public partial class UmaViewerUI
             count++;
         }
 
-        Debug.Log($"[Gacha] 角色 {charaId} 的育成卡 {count} 张");
+        Debug.LogWarning($"[Gacha] 角色 {charaId} 的育成卡 {count} 张");
     }
 
     /// <summary>用角色页同一套 prefab 建一行，样式自动一致（白色按钮/缩略图/高亮）。</summary>
@@ -354,7 +356,7 @@ public partial class UmaViewerUI
         }
 
         string stagePath = $"3d/env/cutin/cutin{ownerCharaId}_{bgId:00}/pfb_env_cutin{ownerCharaId}_{bgId:00}_00";
-        Debug.Log($"[Gacha] 卡 {cardId} 归属 {ownerCharaId} 舞台 {stagePath} 播放角色 {playAsCharaId} 服装 {costumeId}");
+        Debug.LogWarning($"[Gacha] 卡 {cardId} 归属 {ownerCharaId} 舞台 {stagePath} 播放角色 {playAsCharaId} 服装 {costumeId}");
 
         var load = new List<UmaDatabaseEntry>();
         load.AddRange(Main.AbChara.Where(a => a.Name.StartsWith(UmaDatabaseController.BodyPath)
@@ -425,6 +427,38 @@ public partial class UmaViewerUI
             Debug.LogWarning($"[Gacha] 舞台实例化失败 {stagePath}: {error.Message}");
             _gachaStagePath = null;
         }
+    }
+
+    private bool _gachaTabHooked;
+
+    /// <summary>
+    /// 给场景里的 Gacha tab 挂一个监听：点一下就把分页建起来。
+    /// 启动时序不可靠（Start 里调用实测没生效），改成点击时懒加载最稳。
+    /// </summary>
+    public void HookGachaTab()
+    {
+        if (_gachaTabHooked)
+            return;
+
+        foreach (Button button in UnityEngine.Object.FindObjectsOfType<Button>(true))
+        {
+            Transform t = button.transform;
+
+            for (int depth = 0; depth < 4 && t != null; depth++)
+            {
+                if (t.name == "Gacha")
+                {
+                    button.onClick.AddListener(() => LoadGachaPanels());
+                    _gachaTabHooked = true;
+                    Debug.LogWarning($"[Gacha] 已给 tab '{t.name}' 挂上监听");
+                    return;
+                }
+
+                t = t.parent;
+            }
+        }
+
+        Debug.LogWarning("[Gacha] 没找到 Gacha tab 按钮，无法挂监听");
     }
 
     /// <summary>按名字找 Gacha List 面板（tab 切换 SetActive 的就是它）。</summary>

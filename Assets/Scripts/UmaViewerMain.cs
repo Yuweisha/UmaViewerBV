@@ -113,6 +113,11 @@ public class UmaViewerMain : MonoBehaviour
 
     private IEnumerator Start()
     {
+        // 确保日志没有被过滤：默认级别就是 Log，但发布包里可能被别的设置改掉
+        Debug.unityLogger.logEnabled = true;
+        Debug.unityLogger.filterLogType = LogType.Log;
+
+        Debug.LogWarning($"[Boot] Start 进入 logEnabled={Debug.unityLogger.logEnabled} filter={Debug.unityLogger.filterLogType}");
         if (Config.Instance.WorkMode == WorkMode.Standalone && UmaStandalone.IsSupportedPlatform)
         {
             bool ready = false;
@@ -305,8 +310,13 @@ public class UmaViewerMain : MonoBehaviour
         UI.LoadMapPanel();
         loadingUI.LoadingProgressChange(loadingStep++, loadingStepsTotal, "Loading UI");
         yield return null;
+        Debug.LogWarning("[Boot] 到达 Live 面板");
         UI.LoadLivePanels();
+        Debug.LogWarning("[Boot] LoadLivePanels 完成");
+        UI.HookGachaTab();
+        Debug.LogWarning("[Boot] HookGachaTab 完成");
         UI.LoadGachaPanels();
+        Debug.LogWarning("[Boot] LoadGachaPanels 完成");
         loadingUI.LoadingProgressChange(-1, -1);
 
         //Load Shader First
