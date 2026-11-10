@@ -6,6 +6,7 @@ on:
     branches:
       - master
       - il2cppsrc
+      - gachatest
     tags:
       - "v*"
 
