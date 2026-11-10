@@ -60,6 +60,9 @@ public partial class UmaDatabaseController
 
     public Dictionary<string, UmaDatabaseEntry> MetaEntries;
     public List<DataRow> CharaData;
+
+    /// <summary>card_data 原始表：CutIn 演出要用 chara_id / bg_id 拼环境资源路径。</summary>
+    public List<DataRow> CardData;
     public List<DataRow> MobCharaData;
     public List<FaceTypeData> FaceTypeData;
     public List<DataRow> LiveData;
@@ -183,6 +186,7 @@ public partial class UmaDatabaseController
             MobCharaData = ReadMobCharaMaster(masterDb);
             FaceTypeData = ReadFaceTypeData(masterDb);
             LiveData = ReadAllLiveData(masterDb);
+            CardData = ReadMaster(masterDb, "SELECT id, chara_id, default_rarity, bg_id FROM card_data");
             DressData = ReadAllDressData(masterDb);
             JukeboxMusicData = new Gallop.MasterJukeboxMusicData(masterDb);
 

@@ -306,6 +306,7 @@ public class UmaViewerMain : MonoBehaviour
         loadingUI.LoadingProgressChange(loadingStep++, loadingStepsTotal, "Loading UI");
         yield return null;
         UI.LoadLivePanels();
+        UI.LoadGachaPanels();
         loadingUI.LoadingProgressChange(-1, -1);
 
         //Load Shader First
