@@ -38,15 +38,45 @@ public sealed class UmaAssetBundleStream : FileStream
             int keyLength = keys.Length;
             int keyIndex = (int)((startPosition + begin) % keyLength);
             int end = offset + read;
+            int p = offset + begin;
 
-            for (int bufferIndex = offset + begin;
-                 bufferIndex < end;
-                 bufferIndex++)
+            // 密钥流长度是 8 的倍数（ABKey 11 字节 × 8 = 88）时按 8 字节批量异或，
+            // ARM 上逐字节取模/边界检查的开销很明显，这里一次处理 8 字节。
+            if ((keyLength & 7) == 0 && keyLength >= 8)
             {
-                buffer[bufferIndex] ^= keys[keyIndex];
-                keyIndex++;
+                // 先推进到 8 字节对齐，之后 keyIndex 始终保持 8 的倍数
+                while (p < end && (keyIndex & 7) != 0)
+                {
+                    buffer[p++] ^= keys[keyIndex];
 
-                if (keyIndex == keyLength)
+                    if (++keyIndex == keyLength)
+                        keyIndex = 0;
+                }
+
+                while (p + 8 <= end)
+                {
+                    buffer[p] ^= keys[keyIndex];
+                    buffer[p + 1] ^= keys[keyIndex + 1];
+                    buffer[p + 2] ^= keys[keyIndex + 2];
+                    buffer[p + 3] ^= keys[keyIndex + 3];
+                    buffer[p + 4] ^= keys[keyIndex + 4];
+                    buffer[p + 5] ^= keys[keyIndex + 5];
+                    buffer[p + 6] ^= keys[keyIndex + 6];
+                    buffer[p + 7] ^= keys[keyIndex + 7];
+
+                    p += 8;
+                    keyIndex += 8;
+
+                    if (keyIndex >= keyLength)
+                        keyIndex = 0;
+                }
+            }
+
+            while (p < end)
+            {
+                buffer[p++] ^= keys[keyIndex];
+
+                if (++keyIndex == keyLength)
                     keyIndex = 0;
             }
 

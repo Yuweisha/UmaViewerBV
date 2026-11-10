@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -81,7 +81,9 @@ public class UmaViewerDownload : MonoBehaviour
     }
 
 #if UNITY_ANDROID || UNITY_IOS || UNITY_IPHONE
-    private const int maxConcurrentDownloads = 6;
+    // 移动端原本只有 6 路，比桌面端的 30 路差 5 倍，首次加载要慢好几倍。
+    // 12 路在移动网络下通常已能跑满带宽，再高会明显吃内存。
+    private const int maxConcurrentDownloads = 12;
 #else
     private const int maxConcurrentDownloads = 30;
 #endif
