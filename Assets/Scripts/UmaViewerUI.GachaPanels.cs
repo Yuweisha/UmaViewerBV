@@ -1,0 +1,454 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+
+/// <summary>
+/// Live 标签 → Gacha 分页：育成卡 CutIn 演出。
+///
+/// 布局照游戏内的「演出」页：
+///   左栏  角色列表（缩略图 + ID + 名字）
+///   右栏  该角色的育成卡 = 服装列表（服装名 + 缩略图）
+///   点击一张卡 → 弹窗里只有一个槽位，指定「用哪个角色播这段 CutIn」→ 播放
+///
+/// 演出是实时演算，资源在 3d/motion/cutin/card/：
+///   body/crd{cardId}_001/anm_cti_crd{cardId}_001_01..NN   身体动作（多段）
+///   camera/..._NN_cam   facial/..._NN_face/ear   position/..._NN_pos   bg/..._bg
+///   UmaContainerCharacter.LoadAnimation 认识 "_cti_crd"，拿到第 01 段会自动串后续段。
+///
+/// 舞台由 card_data 的 chara_id / bg_id 决定：
+///   3d/env/cutin/cutin{charaId}_{bgId:00}/pfb_env_cutin{charaId}_{bgId:00}_00
+/// </summary>
+public partial class UmaViewerUI
+{
+    private const string CutinCardMotionRoot = "3d/motion/cutin/card/body/";
+
+    private ScrollRect _gachaList;
+    private Transform _gachaCharaColumn;
+    private Transform _gachaCardColumn;
+    private GameObject _gachaStage;
+    private string _gachaStagePath;
+    private GameObject _gachaPopup;
+    private int _gachaPopupCharaId = -1;
+
+    /// <summary>建立 Gacha 分页：左角色、右育成卡。</summary>
+    public void LoadGachaPanels()
+    {
+        _gachaList = FindGachaListScrollRect();
+
+        if (_gachaList == null)
+        {
+            Debug.LogWarning("[Gacha] 没找到 Gacha List 下的 ScrollRect，分页保持空白");
+            return;
+        }
+
+        for (int i = _gachaList.content.childCount - 1; i >= 0; i--)
+            Destroy(_gachaList.content.GetChild(i).gameObject);
+
+        RectTransform host = _gachaList.content;
+        host.anchorMin = Vector2.zero;
+        host.anchorMax = Vector2.one;
+        host.pivot = new Vector2(0.5f, 1f);
+        host.offsetMin = Vector2.zero;
+        host.offsetMax = Vector2.zero;
+
+        _gachaCharaColumn = MakeColumn("GachaCharaColumn", host, new Vector2(0f, 0f), new Vector2(0.42f, 1f));
+        _gachaCardColumn = MakeColumn("GachaCardColumn", host, new Vector2(0.44f, 0f), new Vector2(1f, 1f));
+
+        BuildGachaCharaColumn();
+
+        Debug.Log($"[Gacha] 分页建立完成，角色 {Main.Characters?.Count ?? 0} 个");
+    }
+
+    private Transform MakeColumn(string name, RectTransform parent, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+
+        RectTransform rect = (RectTransform)go.transform;
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.offsetMin = new Vector2(8f, 8f);
+        rect.offsetMax = new Vector2(-8f, -8f);
+
+        return rect;
+    }
+
+    /// <summary>左栏：有育成卡的角色。</summary>
+    private void BuildGachaCharaColumn()
+    {
+        if (_gachaCharaColumn == null || Main.Characters == null)
+            return;
+
+        for (int i = _gachaCharaColumn.childCount - 1; i >= 0; i--)
+            Destroy(_gachaCharaColumn.GetChild(i).gameObject);
+
+        const float rowHeight = 52f;
+        float y = 0f;
+        int count = 0;
+
+        foreach (CharaEntry chara in Main.Characters)
+        {
+            if (chara == null || chara.IsMob)
+                continue;
+
+            int charaId = chara.Id;
+
+            // 只列有服装（= 有育成卡）的角色
+            if (Main.Costumes == null || !Main.Costumes.Any(c => c.CharaId == charaId))
+                continue;
+
+            if (MakeRow($"Chara_{charaId}", _gachaCharaColumn, y, rowHeight, chara.Icon,
+                    $"{charaId}  {chara.GetName()}", () => SelectGachaChara(charaId)) == null)
+                break;
+
+            y -= rowHeight + 4f;
+            count++;
+        }
+
+        Debug.Log($"[Gacha] 角色栏 {count} 项");
+    }
+
+    private void SelectGachaChara(int charaId)
+    {
+        BuildGachaCardColumn(charaId);
+    }
+
+    /// <summary>右栏：该角色的育成卡（每套服装一张）。</summary>
+    private void BuildGachaCardColumn(int charaId)
+    {
+        if (_gachaCardColumn == null || Main.Costumes == null)
+            return;
+
+        for (int i = _gachaCardColumn.childCount - 1; i >= 0; i--)
+            Destroy(_gachaCardColumn.GetChild(i).gameObject);
+
+        const float rowHeight = 60f;
+        float y = 0f;
+        int count = 0;
+
+        foreach (CostumeEntry costume in Main.Costumes.Where(c => c.CharaId == charaId))
+        {
+            int cardId = costume.MasterDressId > 0
+                ? costume.MasterDressId
+                : (int.TryParse(costume.Id, out int parsed) ? parsed : 0);
+
+            if (cardId == 0)
+                continue;
+
+            // 只列真的有 CutIn 动作的卡（动作名 crd{cardId}_001）
+            string clipPath = $"{CutinCardMotionRoot}crd{cardId}_001/anm_cti_crd{cardId}_001_01";
+
+            if (!Main.AbList.ContainsKey(clipPath))
+                continue;
+
+            string label = string.IsNullOrEmpty(costume.DressName) ? costume.Id : costume.DressName;
+            int capturedCard = cardId;
+            int capturedChara = charaId;
+
+            if (MakeRow($"Card_{cardId}", _gachaCardColumn, y, rowHeight, costume.Icon, label,
+                    () => ShowGachaCutinPopup(capturedCard, capturedChara)) == null)
+                break;
+
+            y -= rowHeight + 4f;
+            count++;
+        }
+
+        Debug.Log($"[Gacha] 角色 {charaId} 的育成卡 {count} 张");
+    }
+
+    /// <summary>一行：缩略图 + 文字 + 点击。</summary>
+    private GameObject MakeRow(string name, Transform parent, float y, float height, Sprite icon,
+        string label, Action onClick)
+    {
+        if (parent == null)
+            return null;
+
+        var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+        go.transform.SetParent(parent, false);
+
+        RectTransform rect = (RectTransform)go.transform;
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(0.5f, 1f);
+        rect.anchoredPosition = new Vector2(0f, y);
+        rect.sizeDelta = new Vector2(0f, height);
+
+        Image background = go.GetComponent<Image>();
+        background.color = new Color(0.16f, 0.20f, 0.26f, 0.92f);
+
+        Button button = go.GetComponent<Button>();
+        button.targetGraphic = background;
+        button.onClick.AddListener(() => onClick());
+
+        if (icon != null)
+        {
+            var thumb = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+            thumb.transform.SetParent(go.transform, false);
+            RectTransform thumbRect = (RectTransform)thumb.transform;
+            thumbRect.anchorMin = new Vector2(0f, 0.5f);
+            thumbRect.anchorMax = new Vector2(0f, 0.5f);
+            thumbRect.pivot = new Vector2(0f, 0.5f);
+            thumbRect.anchoredPosition = new Vector2(6f, 0f);
+            thumbRect.sizeDelta = new Vector2(height - 10f, height - 10f);
+
+            Image thumbImage = thumb.GetComponent<Image>();
+            thumbImage.sprite = icon;
+            thumbImage.preserveAspect = true;
+            thumbImage.raycastTarget = false;
+        }
+
+        var textGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+        textGo.transform.SetParent(go.transform, false);
+        RectTransform textRect = (RectTransform)textGo.transform;
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = new Vector2(icon != null ? height : 8f, 2f);
+        textRect.offsetMax = new Vector2(-8f, -2f);
+
+        TextMeshProUGUI text = textGo.GetComponent<TextMeshProUGUI>();
+        text.text = label;
+        text.font = TMP_Settings.defaultFontAsset;
+        text.fontSize = 18f;
+        text.color = Color.white;
+        text.alignment = TextAlignmentOptions.MidlineLeft;
+        text.enableWordWrapping = false;
+        text.raycastTarget = false;
+
+        return go;
+    }
+
+    /// <summary>点击一张卡 → 单槽位窗口，选择用哪个角色播。</summary>
+    private void ShowGachaCutinPopup(int cardId, int defaultCharaId)
+    {
+        CloseGachaPopup();
+
+        var panel = new GameObject("GachaCutinPopup", typeof(RectTransform), typeof(Image));
+        panel.transform.SetParent(transform, false);
+
+        RectTransform panelRect = (RectTransform)panel.transform;
+        panelRect.anchorMin = panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+        panelRect.pivot = new Vector2(0.5f, 0.5f);
+        panelRect.sizeDelta = new Vector2(440f, 230f);
+
+        panel.GetComponent<Image>().color = new Color(0.12f, 0.15f, 0.20f, 0.98f);
+        _gachaPopup = panel;
+        _gachaPopupCharaId = defaultCharaId;
+
+        var title = new GameObject("Title", typeof(RectTransform), typeof(TextMeshProUGUI));
+        title.transform.SetParent(panel.transform, false);
+        RectTransform titleRect = (RectTransform)title.transform;
+        titleRect.anchorMin = new Vector2(0f, 1f);
+        titleRect.anchorMax = new Vector2(1f, 1f);
+        titleRect.pivot = new Vector2(0.5f, 1f);
+        titleRect.anchoredPosition = new Vector2(0f, -12f);
+        titleRect.sizeDelta = new Vector2(-24f, 30f);
+
+        TextMeshProUGUI titleText = title.GetComponent<TextMeshProUGUI>();
+        titleText.text = $"CutIn · 卡 {cardId}";
+        titleText.font = TMP_Settings.defaultFontAsset;
+        titleText.fontSize = 20f;
+        titleText.color = Color.white;
+        titleText.alignment = TextAlignmentOptions.Center;
+        titleText.raycastTarget = false;
+
+        TMP_Dropdown dropdown = CreateDropdown(panel.transform, new Vector2(0f, 20f), new Vector2(320f, 34f));
+
+        if (dropdown != null)
+        {
+            var options = new List<TMP_Dropdown.OptionData>();
+            var ids = new List<int>();
+            int initial = 0;
+
+            foreach (CharaEntry chara in Main.Characters)
+            {
+                if (chara == null || chara.IsMob)
+                    continue;
+
+                if (chara.Id == defaultCharaId)
+                    initial = options.Count;
+
+                options.Add(new TMP_Dropdown.OptionData($"{chara.Id} {chara.GetName()}"));
+                ids.Add(chara.Id);
+            }
+
+            dropdown.ClearOptions();
+            dropdown.AddOptions(options);
+            dropdown.SetValueWithoutNotify(initial);
+            dropdown.RefreshShownValue();
+            dropdown.onValueChanged.AddListener(index =>
+            {
+                if (index >= 0 && index < ids.Count)
+                    _gachaPopupCharaId = ids[index];
+            });
+
+            FitDropdownTemplate(dropdown);
+        }
+
+        LiveRenderUI.Button(UiLocalization.T("Play"), panel.transform, new Vector2(-85f, -75f), () =>
+        {
+            int playAs = _gachaPopupCharaId;
+            CloseGachaPopup();
+            PlayGachaCutin(cardId, playAs);
+        });
+
+        LiveRenderUI.Button(UiLocalization.T("Cancel"), panel.transform, new Vector2(85f, -75f), CloseGachaPopup);
+    }
+
+    private void CloseGachaPopup()
+    {
+        if (_gachaPopup != null)
+        {
+            Destroy(_gachaPopup);
+            _gachaPopup = null;
+        }
+    }
+
+    /// <summary>加载指定角色并播放这张卡的 CutIn 第 01 段，同时换上它的舞台。</summary>
+    private void PlayGachaCutin(int cardId, int playAsCharaId)
+    {
+        // 卡本身记着归属角色与舞台编号
+        int ownerCharaId = cardId / 100;
+        int bgId = 0;
+
+        var cards = UmaDatabaseController.Instance != null
+            ? UmaDatabaseController.Instance.CardData
+            : null;
+
+        if (cards != null)
+        {
+            var row = cards.Find(r => Convert.ToInt32(r["id"]) == cardId);
+
+            if (row != null)
+            {
+                ownerCharaId = Convert.ToInt32(row["chara_id"]);
+                bgId = Convert.ToInt32(row["bg_id"]);
+            }
+        }
+
+        if (playAsCharaId <= 0)
+            playAsCharaId = ownerCharaId;
+
+        CharaEntry chara = Main.Characters != null
+            ? Main.Characters.FirstOrDefault(c => c.Id == playAsCharaId)
+            : null;
+
+        if (chara == null)
+        {
+            ShowMessage($"找不到角色 {playAsCharaId}（卡 {cardId}）", UIMessageType.Warning);
+            return;
+        }
+
+        // 服装跟着卡走（不是跟着播放角色），动作才对得上
+        CostumeEntry costume = Main.Costumes != null
+            ? Main.Costumes.FirstOrDefault(c => c.CharaId == ownerCharaId
+                && (c.MasterDressId == cardId || c.Id == cardId.ToString()))
+            : null;
+
+        string costumeId = costume != null ? costume.Id : string.Empty;
+        string clipPath = $"{CutinCardMotionRoot}crd{cardId}_001/anm_cti_crd{cardId}_001_01";
+
+        if (!Main.AbList.TryGetValue(clipPath, out UmaDatabaseEntry clip) || clip == null)
+        {
+            ShowMessage($"卡 {cardId} 没有 CutIn 动作", UIMessageType.Warning);
+            return;
+        }
+
+        string stagePath = $"3d/env/cutin/cutin{ownerCharaId}_{bgId:00}/pfb_env_cutin{ownerCharaId}_{bgId:00}_00";
+        Debug.Log($"[Gacha] 卡 {cardId} 归属 {ownerCharaId} 舞台 {stagePath} 播放角色 {playAsCharaId} 服装 {costumeId}");
+
+        var load = new List<UmaDatabaseEntry>();
+        load.AddRange(Main.AbChara.Where(a => a.Name.StartsWith(UmaDatabaseController.BodyPath)
+                                           && a.Name.Contains(playAsCharaId.ToString())));
+        load.AddRange(Main.AbChara.Where(a => a.Name.StartsWith(UmaDatabaseController.HeadPath)
+                                           && a.Name.Contains(playAsCharaId.ToString())));
+        load.Add(clip);
+
+        if (Main.AbList.TryGetValue("3d/animator/drivenkeylocator", out var locator))
+            load.Add(locator);
+
+        if (Main.AbList.TryGetValue(stagePath, out UmaDatabaseEntry stageEntry) && stageEntry != null)
+            load.Add(stageEntry);
+        else
+            Debug.LogWarning($"[Gacha] 找不到舞台 {stagePath}，只放角色");
+
+        Builder.UnloadUma();
+        UmaAssetManager.PreLoadAndRun(load, delegate
+        {
+            StartCoroutine(Builder.LoadUma(chara, costumeId, false, CurrentHeadCostumeId));
+            StartCoroutine(PlayWhenReady(clip, stagePath));
+        });
+    }
+
+    private System.Collections.IEnumerator PlayWhenReady(UmaDatabaseEntry clip, string stagePath)
+    {
+        SpawnStage(stagePath);
+
+        for (int i = 0; i < 300; i++)
+        {
+            var container = Builder.CurrentUMAContainer;
+
+            if (container != null)
+            {
+                container.LoadAnimation(clip);
+                LoadedAnimation();
+                yield break;
+            }
+
+            yield return null;
+        }
+
+        Debug.LogWarning("[Gacha] 角色加载超时，未能播放 " + clip.Name);
+    }
+
+    /// <summary>换上 CutIn 舞台，换卡时销毁旧的。</summary>
+    private void SpawnStage(string stagePath)
+    {
+        if (string.IsNullOrEmpty(stagePath))
+            return;
+
+        if (_gachaStage != null && _gachaStagePath == stagePath)
+            return;
+
+        if (_gachaStage != null)
+        {
+            Destroy(_gachaStage);
+            _gachaStage = null;
+        }
+
+        try
+        {
+            _gachaStage = Builder.LoadAssetPath(stagePath, null);
+            _gachaStagePath = stagePath;
+        }
+        catch (Exception error)
+        {
+            Debug.LogWarning($"[Gacha] 舞台实例化失败 {stagePath}: {error.Message}");
+            _gachaStagePath = null;
+        }
+    }
+
+    /// <summary>Gacha List 面板下的 ScrollRect（场景里没有对应的 public 字段）。</summary>
+    private ScrollRect FindGachaListScrollRect()
+    {
+        if (_gachaList != null)
+            return _gachaList;
+
+        foreach (var rect in GetComponentsInChildren<ScrollRect>(true))
+        {
+            Transform t = rect.transform;
+
+            for (int depth = 0; depth < 4 && t != null; depth++)
+            {
+                if (t.name.IndexOf("Gacha", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return rect;
+
+                t = t.parent;
+            }
+        }
+
+        return null;
+    }
+}
