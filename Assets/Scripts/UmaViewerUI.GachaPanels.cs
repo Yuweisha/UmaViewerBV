@@ -131,6 +131,7 @@ public partial class UmaViewerUI
         }
 
         Debug.LogWarning($"[Gacha] 角色栏 {count} 项");
+        UpdateGachaContentHeight();
     }
 
     private void SelectGachaChara(int charaId)
@@ -178,6 +179,26 @@ public partial class UmaViewerUI
         }
 
         Debug.LogWarning($"[Gacha] 角色 {charaId} 的育成卡 {count} 张");
+        UpdateGachaContentHeight();
+    }
+
+    /// <summary>
+    /// content 的高度原本是 0（场景里那条 ScrollRect 没配 ContentSizeFitter），
+    /// 所有行都被裁掉了，所以画面一片空白。按栏内项数把高度撑开。
+    /// </summary>
+    private void UpdateGachaContentHeight()
+    {
+        if (_gachaList == null || _gachaList.content == null)
+            return;
+
+        int rows = Mathf.Max(
+            _gachaCharaColumn != null ? _gachaCharaColumn.childCount : 0,
+            _gachaCardColumn != null ? _gachaCardColumn.childCount : 0);
+
+        float height = Mathf.Max(rows * GachaRowHeight + 16f, 240f);
+        _gachaList.content.sizeDelta = new Vector2(_gachaList.content.sizeDelta.x, height);
+
+        Debug.LogWarning($"[Gacha] content 高度 -> {height:0} (rows={rows})");
     }
 
     /// <summary>用角色页同一套 prefab 建一行，样式自动一致（白色按钮/缩略图/高亮）。</summary>
