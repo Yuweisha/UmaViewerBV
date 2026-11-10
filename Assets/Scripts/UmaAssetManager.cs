@@ -115,10 +115,24 @@ public class UmaAssetManager : MonoBehaviour
         // entire request is already cached and completes in one time slice.
         yield return null;
         var loadSlice = System.Diagnostics.Stopwatch.StartNew();
+        var totalWatch = System.Diagnostics.Stopwatch.StartNew();
+        double slowest = 0;
+        string slowestName = null;
+        int frames = 1;
+
         for (int i = 0; i < loadItems.Count; i++)
         {
             LoadItem item = loadItems[i];
+            var oneWatch = System.Diagnostics.Stopwatch.StartNew();
             AcquireOne(item.Entry, item.NeverUnload);
+            oneWatch.Stop();
+
+            if (oneWatch.Elapsed.TotalMilliseconds > slowest)
+            {
+                slowest = oneWatch.Elapsed.TotalMilliseconds;
+                slowestName = item.Entry != null ? item.Entry.Name : "?";
+            }
+
             completed++;
             // Cache hits still acquire their original references, but do not
             // each consume a fraction of a frame. Yield on real loading cost.
@@ -126,9 +140,14 @@ public class UmaAssetManager : MonoBehaviour
             {
                 OnLoadProgressChange?.Invoke(completed, loadItems.Count, "Loading");
                 yield return null;
+                frames++;
                 loadSlice.Restart();
             }
         }
+
+        totalWatch.Stop();
+        Debug.LogWarning($"[Load] {loadItems.Count} 项, 总耗时 {totalWatch.ElapsedMilliseconds}ms, "
+            + $"跨 {frames} 帧, 单次最慢 {slowest:F0}ms ({slowestName}）");
 
         OnLoadProgressChange?.Invoke(-1, loadItems.Count, null);
         LoadCoroutine = null;
