@@ -24,6 +24,7 @@ using UnityEngine.UI;
 public partial class UmaViewerUI
 {
     private const string CutinCardMotionRoot = "3d/motion/cutin/card/body/";
+    private const float GachaRowHeight = 54f;
 
     private ScrollRect _gachaList;
     private Transform _gachaCharaColumn;
@@ -70,12 +71,21 @@ public partial class UmaViewerUI
 
         BuildGachaCharaColumn();
 
-        Debug.Log($"[Gacha] 分页建立完成，角色 {Main.Characters?.Count ?? 0} 个");
+        Debug.Log($"[Gacha] 分页建立完成 chars={Main.Characters?.Count ?? 0} costumes={Main.Costumes?.Count ?? 0}");
     }
 
     private Transform MakeColumn(string name, RectTransform parent, Vector2 anchorMin, Vector2 anchorMax)
     {
-        var go = new GameObject(name, typeof(RectTransform));
+        var go = new GameObject(name, typeof(RectTransform), typeof(VerticalLayoutGroup));
+
+        VerticalLayoutGroup vlg = go.GetComponent<VerticalLayoutGroup>();
+        vlg.spacing = 4f;
+        vlg.padding = new RectOffset(4, 4, 4, 4);
+        vlg.childAlignment = TextAnchor.UpperCenter;
+        vlg.childControlWidth = true;
+        vlg.childControlHeight = true;
+        vlg.childForceExpandWidth = true;
+        vlg.childForceExpandHeight = false;
         go.transform.SetParent(parent, false);
 
         RectTransform rect = (RectTransform)go.transform;
@@ -112,7 +122,7 @@ public partial class UmaViewerUI
                 continue;
 
             if (MakeContainer(UmaContainerPrefab, _gachaCharaColumn, chara.Icon,
-                    $"{charaId}  {chara.GetName()}", () => SelectGachaChara(charaId)) == null)
+                    $"{charaId}  {chara.GetName()}", () => SelectGachaChara(charaId), count) == null)
                 break;
 
             count++;
@@ -159,7 +169,7 @@ public partial class UmaViewerUI
             int capturedChara = charaId;
 
             if (MakeContainer(UmaContainerCostumePrefab, _gachaCardColumn, costume.Icon, label,
-                    () => ShowGachaCutinPopup(capturedCard, capturedChara)) == null)
+                    () => ShowGachaCutinPopup(capturedCard, capturedChara), count) == null)
                 break;
 
             count++;
@@ -170,7 +180,7 @@ public partial class UmaViewerUI
 
     /// <summary>用角色页同一套 prefab 建一行，样式自动一致（白色按钮/缩略图/高亮）。</summary>
     private UmaUIContainer MakeContainer(GameObject prefab, Transform parent, Sprite icon,
-        string label, Action onClick)
+        string label, Action onClick, int index)
     {
         if (prefab == null || parent == null)
             return null;
@@ -181,6 +191,19 @@ public partial class UmaViewerUI
             return null;
 
         container.Name = label;
+
+        // prefab 上的 LayoutElement / 布局组会把行钉成固定尺寸（被压成小方块就是这个原因），
+        // 拆掉后由栏上的 VerticalLayoutGroup 统一拉成整栏宽、固定行高。
+        LayoutElement element = container.GetComponent<LayoutElement>();
+
+        if (element != null)
+            Destroy(element);
+
+        foreach (LayoutGroup group in container.GetComponents<LayoutGroup>())
+            Destroy(group);
+
+        RectTransform rect = (RectTransform)container.transform;
+        rect.sizeDelta = new Vector2(rect.sizeDelta.x, GachaRowHeight);
 
         if (icon != null && container.Image != null)
         {
