@@ -155,6 +155,8 @@ namespace Gallop.Live
             if(_subtitleLyrics==null)
             {
                 _subtitleLyrics=Instantiate(template,_titleCanvas.transform,false);
+                if(Config.Instance!=null&&Config.Instance.Language==Language.Cn)
+                    _subtitleLyrics.font=Resources.Load<Font>("Fonts/NotoSansCJKsc-Bold");
                 _subtitleLyrics.name="LiveSubtitleLyrics";
                 _subtitleLyrics.gameObject.SetActive(true);
                 _subtitleLyrics.enabled=true;
