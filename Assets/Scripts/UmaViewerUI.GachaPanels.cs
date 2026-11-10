@@ -68,33 +68,92 @@ public partial class UmaViewerUI
         // 面板被 tab 切换时是整块显示/隐藏的，这里只保证两栏铺满它
         host.pivot = new Vector2(0.5f, 1f);
 
-        _gachaCharaColumn = MakeColumn("GachaCharaColumn", host, new Vector2(0f, 0f), new Vector2(0.42f, 1f));
-        _gachaCardColumn = MakeColumn("GachaCardColumn", host, new Vector2(0.44f, 0f), new Vector2(1f, 1f));
+        _gachaCharaColumn = MakeColumnFrom(
+            CharactersList != null ? CharactersList.content.gameObject : null,
+            host, "GachaCharaColumn", new Vector2(0f, 0f), new Vector2(0.42f, 1f));
+
+        _gachaCardColumn = MakeColumnFrom(
+            CostumeList != null ? CostumeList.content.gameObject : null,
+            host, "GachaCardColumn", new Vector2(0.44f, 0f), new Vector2(1f, 1f));
 
         BuildGachaCharaColumn();
 
         Debug.LogWarning($"[Gacha] 分页建立完成 chars={Main.Characters?.Count ?? 0} costumes={Main.Costumes?.Count ?? 0}");
     }
 
-    private Transform MakeColumn(string name, RectTransform parent, Vector2 anchorMin, Vector2 anchorMax)
+    /// <summary>
+    /// 照抄角色页：直接复制它 content 的 GameObject（布局组/尺寸/spacing 全部继承），
+    /// 清空子节点后当自己的容器用。这样不碰任何 RectTransform，样式和角色页完全一致。
+    /// </summary>
+    private Transform MakeColumnFrom(GameObject templateContent, Transform parent,
+        string name, Vector2 anchorMin, Vector2 anchorMax)
     {
-        var go = new GameObject(name, typeof(RectTransform), typeof(VerticalLayoutGroup));
-
-        VerticalLayoutGroup vlg = go.GetComponent<VerticalLayoutGroup>();
-        vlg.spacing = 4f;
-        vlg.padding = new RectOffset(4, 4, 4, 4);
-        vlg.childAlignment = TextAnchor.UpperCenter;
-        vlg.childControlWidth = true;
-        vlg.childControlHeight = true;
-        vlg.childForceExpandWidth = true;
-        vlg.childForceExpandHeight = false;
+        var go = new GameObject(name, typeof(RectTransform));
         go.transform.SetParent(parent, false);
 
         RectTransform rect = (RectTransform)go.transform;
         rect.anchorMin = anchorMin;
         rect.anchorMax = anchorMax;
-        rect.offsetMin = new Vector2(8f, 8f);
-        rect.offsetMax = new Vector2(-8f, -8f);
+        rect.offsetMin = new Vector2(6f, 6f);
+        rect.offsetMax = new Vector2(-6f, -6f);
+
+        if (templateContent == null)
+        {
+            Debug.LogWarning($"[Gacha] {name} 缺少模板 content，退化为空容器");
+            return rect;
+        }
+
+        // 手工复制布局组参数（ComponentUtility 只在编辑器可用，打包后会编译失败）
+        var sourceGrid = templateContent.GetComponent<GridLayoutGroup>();
+        if (sourceGrid != null)
+        {
+            var target = go.AddComponent<GridLayoutGroup>();
+            target.cellSize = sourceGrid.cellSize;
+            target.spacing = sourceGrid.spacing;
+            target.padding = sourceGrid.padding;
+            target.constraint = sourceGrid.constraint;
+            target.constraintCount = sourceGrid.constraintCount;
+            target.startCorner = sourceGrid.startCorner;
+            target.startAxis = sourceGrid.startAxis;
+            target.childAlignment = sourceGrid.childAlignment;
+        }
+
+        var sourceVlg = templateContent.GetComponent<VerticalLayoutGroup>();
+        if (sourceVlg != null)
+        {
+            var target = go.AddComponent<VerticalLayoutGroup>();
+            target.spacing = sourceVlg.spacing;
+            target.padding = sourceVlg.padding;
+            target.childControlWidth = sourceVlg.childControlWidth;
+            target.childControlHeight = sourceVlg.childControlHeight;
+            target.childForceExpandWidth = sourceVlg.childForceExpandWidth;
+            target.childForceExpandHeight = sourceVlg.childForceExpandHeight;
+            target.childAlignment = sourceVlg.childAlignment;
+        }
+
+        var sourceHlg = templateContent.GetComponent<HorizontalLayoutGroup>();
+        if (sourceHlg != null)
+        {
+            var target = go.AddComponent<HorizontalLayoutGroup>();
+            target.spacing = sourceHlg.spacing;
+            target.padding = sourceHlg.padding;
+            target.childControlWidth = sourceHlg.childControlWidth;
+            target.childControlHeight = sourceHlg.childControlHeight;
+            target.childForceExpandWidth = sourceHlg.childForceExpandWidth;
+            target.childForceExpandHeight = sourceHlg.childForceExpandHeight;
+            target.childAlignment = sourceHlg.childAlignment;
+        }
+
+        var sourceFitter = templateContent.GetComponent<ContentSizeFitter>();
+        if (sourceFitter != null)
+        {
+            var target = go.AddComponent<ContentSizeFitter>();
+            target.horizontalFit = sourceFitter.horizontalFit;
+            target.verticalFit = sourceFitter.verticalFit;
+        }
+
+        Debug.LogWarning($"[Gacha] {name} 布局: grid={sourceGrid != null} vlg={sourceVlg != null} "
+            + $"hlg={sourceHlg != null} fitter={sourceFitter != null}");
 
         return rect;
     }
@@ -225,8 +284,6 @@ public partial class UmaViewerUI
         foreach (LayoutGroup group in container.GetComponents<LayoutGroup>())
             Destroy(group);
 
-        RectTransform rect = (RectTransform)container.transform;
-        rect.sizeDelta = new Vector2(rect.sizeDelta.x, GachaRowHeight);
 
         if (icon != null && container.Image != null)
         {
