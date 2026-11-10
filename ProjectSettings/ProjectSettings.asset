@@ -12,7 +12,7 @@ PlayerSettings:
   targetDevice: 2
   useOnDemandResources: 0
   accelerometerFrequency: 60
-  companyName: "buenavista.fans"
+  companyName: buenavista.fans
   productName: UmaViewerBV
   defaultCursor: {fileID: 2800000, guid: 533f56f1c61acf543bf019a728aadcd4, type: 3}
   cursorHotspot: {x: 40, y: 4}
