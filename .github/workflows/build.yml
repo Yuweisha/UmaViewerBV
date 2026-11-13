@@ -181,7 +181,9 @@ jobs:
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          # UNITY_SERIAL 会强制走在线激活，而 windows 容器里没有 LicenseClient 服务，
+          # 报 "Channel LicenseClient-ContainerAdministrator doesn't exist"。只给 .ulf 让它离线激活。
+          # UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
