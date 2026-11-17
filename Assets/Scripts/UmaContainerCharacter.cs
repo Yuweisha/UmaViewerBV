@@ -197,12 +197,14 @@ public partial class UmaContainerCharacter : UmaContainer
 
     private void OnDisable()
     {
+        StopPreviewIdle();
         UnregisterLiveModelIK();
         RestoreMirrorChangedLayers();
     }
 
     private void OnDestroy()
     {
+        StopPreviewIdle();
         ReleasePreviewShaderEffects();
         ReleaseLiveAnimation();
         LiveEyeHighlight?.Dispose();
@@ -787,6 +789,7 @@ public partial class UmaContainerCharacter : UmaContainer
     private void LateUpdate()
     {
         AdvancePreviewLegacy(Time.deltaTime);
+        UpdatePreviewIdle();
         if (IsMini)
             return;
         if (IsLive)
@@ -1769,7 +1772,12 @@ public partial class UmaContainerCharacter : UmaContainer
         {
             //Debug.Log("LiveTime" + UI.LiveTime.ToString());
             aClip.name = entry.Name; // Need a complete path to find dependencies
-            LoadAnimation(aClip);
+            bool outerLoad = previewAnimationLoadDepth == 0;
+            if (outerLoad) SelectPreviewIdle(entry.Name);
+            previewAnimationLoadDepth++;
+            try { LoadAnimation(aClip); }
+            finally { previewAnimationLoadDepth--; }
+            if (outerLoad) StartPreviewIdle();
             return;
         }
 

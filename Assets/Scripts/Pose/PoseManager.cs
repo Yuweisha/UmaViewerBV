@@ -114,6 +114,7 @@ public class PoseManager : MonoBehaviour
     {
         if (PoseModeOn) return;
 
+        UmaViewerBuilder.Instance.CurrentUMAContainer?.SuspendPreviewIdle();
         var modelSettings = UmaViewerUI.Instance.ModelSettings;
         var builder = UmaViewerBuilder.Instance;
         modelSettings.SetEyeTrackingEnable(false);

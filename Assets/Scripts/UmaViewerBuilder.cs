@@ -106,6 +106,7 @@ public class UmaViewerBuilder : MonoBehaviour
             LoadNormalUma(umaContainer, chara, costumeId, true, haedCostumeId);
         }
 
+        yield return umaContainer.InitializePreviewIdle();
         yield break;
     }
 
@@ -1422,6 +1423,7 @@ public class UmaViewerBuilder : MonoBehaviour
         PoseManager.SetPoseModeStatic(false);
         if (CurrentUMAContainer != null)
         {
+            CurrentUMAContainer.StopPreviewIdle();
             //It seems that OnDestroy will executed after new model loaded, which cause new FacialPanels empty...
             UI.currentFaceDrivenKeyTarget = null;
             UI.LoadEmotionPanels(null);
