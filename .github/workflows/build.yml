@@ -62,6 +62,11 @@ jobs:
       - name: Build Android ARM64 CySpring kernel
         run: python3 Native/UmaSpringNative/build_android.py
 
+      # 媒体导出用的 MediaCodec 硬编桥。必须和 APK 一起出，否则 Live 录制在
+      # Android 上会退回 FFmpeg 管道（IL2CPP 下 Process 不可用，等于没有）。
+      - name: Build Android ARM64 MediaCodec encoder
+        run: python3 Native/UmaVideoNative/android/build_android.py
+
       - name: Build Android APK
         uses: game-ci/unity-builder@v4
         env:

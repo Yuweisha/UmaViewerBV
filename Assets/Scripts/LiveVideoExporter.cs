@@ -45,7 +45,9 @@ public sealed class LiveVideoExporter : MonoBehaviour
     private readonly Queue<AsyncGPUReadbackRequest> readbacks=new Queue<AsyncGPUReadbackRequest>();
     private LiveVideoFrameWriter frameWriter;
     private LiveGpuVideoEncoder gpuEncoder;
+    private LiveAndroidVideoEncoder androidEncoder;
     public bool UsesGpuDirect {get;private set;}
+    public bool UsesAndroidNative {get;private set;}
     public int GpuWrittenFrames {get;private set;}
     public double GpuSubmissionMs {get;private set;}
     public string VideoBackend {get;private set;}="FFmpeg rawvideo";
@@ -90,7 +92,8 @@ public sealed class LiveVideoExporter : MonoBehaviour
     public static void Begin(UmaViewerUI ui,LiveEntry song,LiveRenderSettings options,string directory)
     {
         if(IsActive)throw new InvalidOperationException("A Live render is already running");
-        LiveRenderSettings.RequireFfmpeg();
+        // Android 走 MediaCodec 硬编，不依赖外部 ffmpeg，因此这里只在桌面平台校验。
+        if(Application.platform!=RuntimePlatform.Android)LiveRenderSettings.RequireFfmpeg();
         options.Validate();
         var owner=new GameObject("Live video export");
         DontDestroyOnLoad(owner);
@@ -135,19 +138,29 @@ public sealed class LiveVideoExporter : MonoBehaviour
         WriteWaveHeader(0);
         LiveSongAudioControl.Start(director,0f,0);
         string nativeFile=Path.ChangeExtension(videoFile,"ts");
+
         if(LiveGpuVideoEncoder.TryCreate(target,settings,nativeFile,out gpuEncoder,out string nativeReason))
         {
             videoFile=nativeFile;UsesGpuDirect=true;asyncReadback=false;
             VideoBackend="NVENC GPU-direct (D3D11)";
             Debug.Log("[LiveRender] "+VideoBackend+"; no per-frame pixel readback/rawvideo pipe");
         }
+        else if(TryCreateAndroidEncoder(out string androidReason))
+        {
+            // Android：MediaCodec 硬编直出 MP4，不需要 FFmpeg 子进程。
+            // 像素仍走 AsyncGPUReadback，但编码在 VPU，CPU 只做一次拷贝 + YUV 转换。
+            UsesAndroidNative=true;asyncReadback=true;
+            VideoBackend="MediaCodec hardware (Android)";
+            Debug.Log("[LiveRender] "+VideoBackend+"; MP4 written directly by MediaMuxer");
+        }
         else
         {
+            if(!string.IsNullOrEmpty(androidReason))Debug.LogWarning("[LiveRender] Android native unavailable: "+androidReason);
             if(!string.IsNullOrEmpty(nativeReason))Debug.LogWarning("[LiveRender] GPU-direct unavailable, using FFmpeg: "+nativeReason);
             StartEncoder();
         }
-        bool parallel=true;
-        if(!UsesGpuDirect)frameWriter=new LiveVideoFrameWriter(encoder.StandardInput.BaseStream,settings.Width*settings.Height*(asyncReadback?4:3),parallel);
+
+        if(!UsesGpuDirect&&!UsesAndroidNative)frameWriter=new LiveVideoFrameWriter(encoder.StandardInput.BaseStream,settings.Width*settings.Height*(asyncReadback?4:3),true);
         captureTimer.Start();
         capturing=true;
         CurrentPhase="rendering";
@@ -190,10 +203,13 @@ public sealed class LiveVideoExporter : MonoBehaviour
     {
         status.text="Checking encoder...";
         CurrentPhase="checking-encoder";
-        executable=LiveRenderSettings.RequireFfmpeg();
-        var check=Task.Run(()=>settings.VerifyEncoder(executable));
-        while(!check.IsCompleted)yield return null;
-        if(check.IsFaulted)throw check.Exception.GetBaseException();
+        if(Application.platform!=RuntimePlatform.Android)
+        {
+            executable=LiveRenderSettings.RequireFfmpeg();
+            var check=Task.Run(()=>settings.VerifyEncoder(executable));
+            while(!check.IsCompleted)yield return null;
+            if(check.IsFaulted)throw check.Exception.GetBaseException();
+        }
         if(cancelled)yield break;
         Directory.CreateDirectory(Path.GetDirectoryName(output));
         tempFolder=Path.Combine(Path.GetDirectoryName(output),".umaviewer-render-"+Guid.NewGuid().ToString("N"));
@@ -245,6 +261,13 @@ public sealed class LiveVideoExporter : MonoBehaviour
             if(GpuWrittenFrames!=frame)throw new InvalidOperationException("GPU video encoder frame count mismatch");
             gpuEncoder.Dispose();gpuEncoder=null;
         }
+        else if(UsesAndroidNative)
+        {
+            androidEncoder.Finish();
+            while(!androidEncoder.IsDone)yield return null;
+            if(androidEncoder.WrittenFrames!=frame)throw new InvalidOperationException("Android encoder frame count mismatch");
+            androidEncoder.Dispose();androidEncoder=null;
+        }
         else
         {
             frameWriter.Complete();
@@ -266,6 +289,15 @@ public sealed class LiveVideoExporter : MonoBehaviour
         director.SetPlaybackPaused(true);
         status.text="Finalizing MP4...";
         CurrentPhase="finalizing";
+        if(UsesAndroidNative)
+        {
+            // MediaMuxer 已经把音视频写进 videoFile（就是最终 mp4），不需要再走 FFmpeg 封装。
+            string androidOutput=videoFile;
+            finalization=Task.Run(()=>{ if(!cancelled)File.Move(androidOutput,output); });
+            while(!finalization.IsCompleted)yield return null;
+            if(finalization.IsFaulted)throw finalization.Exception.GetBaseException();
+            yield break;
+        }
         if(encoder!=null)encoder.StandardInput.Close();
         finalization=Task.Run(()=>
         {
@@ -352,6 +384,16 @@ public sealed class LiveVideoExporter : MonoBehaviour
                 gpuEncoder.Submit(target);submittedFrames++;
                 GpuSubmissionMs+=(Stopwatch.GetTimestamp()-start)*1000.0/Stopwatch.Frequency;
             }
+            else if(UsesAndroidNative)
+            {
+                // MediaCodec 路径：一定要经过 CPU 读回，原生侧负责转 YUV + 硬编。
+                if(readbacks.Count>=3)
+                {
+                    readbacks.Peek().WaitForCompletion();
+                    DrainReadbacks();
+                }
+                readbacks.Enqueue(AsyncGPUReadback.Request(target,0,TextureFormat.RGBA32));
+            }
             else if(asyncReadback)
             {
                 if(readbacks.Count>=3)
@@ -384,6 +426,18 @@ public sealed class LiveVideoExporter : MonoBehaviour
         {
             var request=readbacks.Dequeue();
             if(request.hasError)throw new InvalidOperationException("GPU video readback failed");
+
+            if(UsesAndroidNative&&androidEncoder!=null)
+            {
+                // 直接拷进托管数组交给原生 MediaCodec，绕开 FFmpeg 管道
+                var frameBytes=request.GetData<byte>();
+                var copy=new byte[frameBytes.Length];
+                frameBytes.CopyTo(copy);
+                androidEncoder.Submit(copy);
+                submittedFrames++;
+                continue;
+            }
+
             var data=frameWriter.Rent();request.GetData<byte>().CopyTo(data);
             frameWriter.Submit(data);submittedFrames++;
         }
@@ -398,7 +452,18 @@ public sealed class LiveVideoExporter : MonoBehaviour
             if(!AudioRenderer.Render(buffer))throw new InvalidOperationException("Offline audio rendering failed");
             int write=System.Math.Min(count,maximum-audioSamples);
             if(write<=0)return;
-            var samples=buffer.ToArray();var bytes=new byte[write*8];Buffer.BlockCopy(samples,0,bytes,0,bytes.Length);
+            var samples=buffer.ToArray();
+
+            if(UsesAndroidNative&&androidEncoder!=null)
+            {
+                // 只交前 write 个采样的立体声数据（buffer 里可能多出这一帧的余量）
+                var chunk=new float[write*2];
+                Array.Copy(samples,chunk,chunk.Length);
+                long timestampUs=(long)System.Math.Round((double)audioSamples*1000000.0/sampleRate);
+                androidEncoder.SubmitAudio(chunk,write,timestampUs);
+            }
+
+            var bytes=new byte[write*8];Buffer.BlockCopy(samples,0,bytes,0,bytes.Length);
             audio.Write(bytes);audioSamples+=write;
         }
     }
@@ -410,6 +475,20 @@ public sealed class LiveVideoExporter : MonoBehaviour
         audio.Write(Encoding.ASCII.GetBytes("data"));audio.Write(samples*8);
         audio.BaseStream.Position=System.Math.Max(44,previous);
     }
+    /// <summary>
+    /// Android 上建 MediaCodec 硬编，输出直接是 MP4（不需要 FFmpeg 子进程）。
+    /// 非 Android 平台或原生库缺失时返回 false。
+    /// </summary>
+    private bool TryCreateAndroidEncoder(out string reason)
+    {
+        reason=null;
+
+        if(!LiveAndroidVideoEncoder.TryCreate(settings,videoFile,out androidEncoder,out reason))
+            return false;
+
+        return true;
+    }
+
     private void StartEncoder()
     {
         int filterThreads=0,encoderThreads=0;
@@ -431,6 +510,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
         if(audioRecording){AudioRenderer.Stop();audioRecording=false;}
         audio?.Dispose();audio=null;
         gpuEncoder?.Dispose();gpuEncoder=null;
+        androidEncoder?.Dispose();androidEncoder=null;
         frameWriter?.Abort();
         if(encoder!=null)
         {
