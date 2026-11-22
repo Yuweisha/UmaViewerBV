@@ -52,6 +52,7 @@ struct VideoFrame {
 struct AudioChunk {
     std::vector<int16_t> pcm;  // interleaved stereo
     int64_t timestampUs = 0;
+    size_t offsetSamples = 0;  // 已被送进编码器的采样数（缓冲装不下时分批送）
 };
 
 struct Encoder {
@@ -350,17 +351,16 @@ bool FeedOneVideoFrame(Encoder* enc, const VideoFrame& frame, int64_t frameIndex
     return Check(enc, status, "video queueInputBuffer");
 }
 
+// AAC 编码器给出的输入缓冲往往小于 MAX_INPUT_SIZE，一次送不满一个 chunk 时
+// 只送缓冲能装下的部分，其余留在队列里等下一个空缓冲 —— 不能直接判失败。
 bool FeedAudio(Encoder* enc) {
     if (!enc->audioEnabled) {
-        // 没有音频编码器就直接丢弃，避免队列无限增长
-        AudioChunk chunk;
-        {
-            std::unique_lock<std::mutex> guard(enc->lock);
-            if (enc->audioQueue.empty()) return false;
-            chunk = std::move(enc->audioQueue.front());
+        std::lock_guard<std::mutex> guard(enc->lock);
+        if (!enc->audioQueue.empty()) {
             enc->audioQueue.pop_front();
+            return true;
         }
-        return true;
+        return false;
     }
 
     ssize_t index = AMediaCodec_dequeueInputBuffer(enc->audioCodec, 0);
@@ -368,17 +368,6 @@ bool FeedAudio(Encoder* enc) {
     if (index < 0) {
         enc->Fail("audio dequeueInputBuffer: " + std::to_string(index));
         return false;
-    }
-
-    AudioChunk chunk;
-    {
-        std::unique_lock<std::mutex> guard(enc->lock);
-        if (enc->audioQueue.empty()) {
-            AMediaCodec_queueInputBuffer(enc->audioCodec, static_cast<size_t>(index), 0, 0, 0, 0);
-            return false;
-        }
-        chunk = std::move(enc->audioQueue.front());
-        enc->audioQueue.pop_front();
     }
 
     size_t capacity = 0;
@@ -389,16 +378,48 @@ bool FeedAudio(Encoder* enc) {
         return false;
     }
 
-    const size_t bytes = chunk.pcm.size() * sizeof(int16_t);
-    if (bytes > capacity) {
-        enc->Fail("audio input buffer too small");
-        return false;
+    size_t sendSamples = 0;
+    int64_t timestampUs = 0;
+
+    {
+        std::lock_guard<std::mutex> guard(enc->lock);
+
+        if (enc->audioQueue.empty()) {
+            AMediaCodec_queueInputBuffer(enc->audioCodec, static_cast<size_t>(index), 0, 0,
+                                         enc->pushedAudioSamples * 1000000LL / enc->sampleRate, 0);
+            return false;
+        }
+
+        AudioChunk& chunk = enc->audioQueue.front();
+
+        // 缓冲按字节计量，采样是 16 位立体声：容量 / 4 = 可装采样帧数
+        const size_t chunkSamples = chunk.pcm.size() / enc->channels;
+        const size_t chunkOffset = chunk.offsetSamples;
+        const size_t remaining = chunkSamples - chunkOffset;
+        const size_t maxSamples = capacity / (sizeof(int16_t) * enc->channels);
+
+        if (maxSamples == 0) {
+            enc->Fail("audio input buffer too small for even one sample");
+            return false;
+        }
+
+        sendSamples = remaining < maxSamples ? remaining : maxSamples;
+        timestampUs = chunk.timestampUs
+                      + static_cast<int64_t>(chunkOffset) * 1000000LL / enc->sampleRate;
+
+        std::memcpy(buffer,
+                    chunk.pcm.data() + chunkOffset * enc->channels,
+                    sendSamples * enc->channels * sizeof(int16_t));
+
+        chunk.offsetSamples += sendSamples;
+        enc->pushedAudioSamples += static_cast<int64_t>(sendSamples);
+
+        if (chunk.offsetSamples >= chunkSamples) enc->audioQueue.pop_front();
     }
 
-    std::memcpy(buffer, chunk.pcm.data(), bytes);
     return Check(enc, AMediaCodec_queueInputBuffer(enc->audioCodec, static_cast<size_t>(index), 0,
-                                                   bytes,
-                                                   static_cast<uint64_t>(chunk.timestampUs), 0),
+                                                   sendSamples * enc->channels * sizeof(int16_t),
+                                                   static_cast<uint64_t>(timestampUs), 0),
                  "audio queueInputBuffer");
 }
 
