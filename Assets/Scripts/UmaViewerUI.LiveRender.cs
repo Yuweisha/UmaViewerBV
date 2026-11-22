@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using SFB;
 using UnityEngine;
@@ -10,6 +11,8 @@ public partial class UmaViewerUI
     private Button _liveRenderButton;
     private GameObject _liveRenderDialog;
     private Dropdown _renderResolution,_renderFrameRate,_renderBitrate,_renderEncoder;
+    // 桌面端下拉项 → LiveRenderSettings.Encoders 的索引（NVENC 不可用时会被剔除）
+    private int[] _encoderIndices;
 
     private void EnsureLiveRenderEntry()
     {
@@ -32,7 +35,8 @@ public partial class UmaViewerUI
     public void RenderLive()
     {
         if(currentLive==null||LiveVideoExporter.IsActive)return;
-        if(!LiveRenderSettings.FfmpegDetected)
+        // Android 用 MediaCodec 硬编，不依赖外部 ffmpeg（IL2CPP 下本来也起不了子进程）
+        if(Application.platform!=RuntimePlatform.Android&&!LiveRenderSettings.FfmpegDetected)
         { ShowMessage(LiveRenderSettings.FfmpegMissingMessage,UIMessageType.Error);return; }
         if(_liveRenderDialog==null)
         {
@@ -48,8 +52,21 @@ public partial class UmaViewerUI
             _renderResolution=RenderChoice(template,panel,"Resolution",100,LiveRenderSettings.ResolutionLabels,1);
             _renderFrameRate=RenderChoice(template,panel,"Frame rate",40,LiveRenderSettings.FrameRates.Select(f=>f+" fps").ToArray(),2);
             _renderBitrate=RenderChoice(template,panel,"Video bitrate",-20,LiveRenderSettings.Bitrates.Select(b=>b+" Mbps").ToArray(),2);
-            _renderEncoder=RenderChoice(template,panel,"Encoder",-80,LiveRenderSettings.EncoderLabels,0);
-            LiveRenderUI.Text("Audio: AAC / 320 kbps / stereo",panel,new Vector2(0,-128),new Vector2(670,30),17);
+            // Android 只有 MediaCodec（H.264/H.265）；桌面只列 ffmpeg 真的能打开的编码器
+            // —— 旧 NVIDIA 驱动会让 *_nvenc 在 configure 阶段就失败。
+            if(Application.platform==RuntimePlatform.Android)
+            {
+                _renderEncoder=RenderChoice(template,panel,"Encoder",-80,LiveRenderSettings.AndroidEncoderLabels,1);
+            }
+            else
+            {
+                _encoderIndices=LiveRenderSettings.AvailableEncoders(LiveRenderSettings.RequireFfmpeg());
+                var labels=_encoderIndices.Select(i=>LiveRenderSettings.EncoderLabels[i]).ToArray();
+                _renderEncoder=RenderChoice(template,panel,"Encoder",-80,labels,0);
+            }
+            LiveRenderUI.Text(Application.platform==RuntimePlatform.Android
+                ?"Audio: AAC-LC / 192 kbps / stereo (MediaCodec)":"Audio: AAC / 320 kbps / stereo",
+                panel,new Vector2(0,-128),new Vector2(670,30),17);
             LiveRenderUI.Button("Cancel",panel,new Vector2(-145,-183),()=>_liveRenderDialog.SetActive(false));
             LiveRenderUI.Button("Render MP4",panel,new Vector2(145,-183),ChooseLiveRenderDirectory);
         }
@@ -74,6 +91,17 @@ public partial class UmaViewerUI
 
     private void ChooseLiveRenderDirectory()
     {
+        // StandaloneFileBrowser 在 Android 上没有原生实现，直接用应用的持久化目录；
+        // Unity 会把它映射到 /storage/emulated/0/Android/data/<pkg>/files。
+        if(Application.platform==RuntimePlatform.Android)
+        {
+            string folder=Path.Combine(Application.persistentDataPath,"Render");
+            try { Directory.CreateDirectory(folder); }
+            catch(Exception error) { ShowMessage("Cannot create output folder: "+error.Message,UIMessageType.Error);return; }
+            BeginLiveRender(ReadLiveRenderSettings(),folder);
+            return;
+        }
+
         var directories=StandaloneFileBrowser.OpenFolderPanel("Render output folder",Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),false);
         if(directories.Length==0||string.IsNullOrWhiteSpace(directories[0]))return;
         BeginLiveRender(ReadLiveRenderSettings(),directories[0]);
@@ -82,8 +110,18 @@ public partial class UmaViewerUI
     private LiveRenderSettings ReadLiveRenderSettings()
     {
         var resolution=LiveRenderSettings.Resolutions[_renderResolution.value];
+        // Android 的下拉只有 H.264/H.265 两项，映射到 MediaCodec 内部使用的名字；
+        // LiveAndroidVideoEncoder 只看名字里有没有 "265" 来决定 hevc。
+        string encoder;
+
+        if(Application.platform==RuntimePlatform.Android)
+            encoder=_renderEncoder.value==1?"h265_mediacodec":"h264_mediacodec";
+        else if(_encoderIndices!=null&&_renderEncoder.value>=0&&_renderEncoder.value<_encoderIndices.Length)
+            encoder=LiveRenderSettings.Encoders[_encoderIndices[_renderEncoder.value]];
+        else
+            encoder=LiveRenderSettings.Encoders[_renderEncoder.value];
         return new LiveRenderSettings{Width=resolution.x,Height=resolution.y,Fps=LiveRenderSettings.FrameRates[_renderFrameRate.value],
-            BitrateMbps=LiveRenderSettings.Bitrates[_renderBitrate.value],Encoder=LiveRenderSettings.Encoders[_renderEncoder.value]};
+            BitrateMbps=LiveRenderSettings.Bitrates[_renderBitrate.value],Encoder=encoder};
     }
 
     public void BeginLiveRender(LiveRenderSettings settings,string directory)

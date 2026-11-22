@@ -32,6 +32,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
     private Director director;
     private string executable,output,tempFolder,videoFile,audioFile,error;
     private Process encoder;
+    private NativeProcess encoderNative;
     private readonly StringBuilder encoderErrors=new StringBuilder();
     private BinaryWriter audio;
     private int sampleRate,frame,totalFrames,audioSamples;
@@ -160,7 +161,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
             StartEncoder();
         }
 
-        if(!UsesGpuDirect&&!UsesAndroidNative)frameWriter=new LiveVideoFrameWriter(encoder.StandardInput.BaseStream,settings.Width*settings.Height*(asyncReadback?4:3),true);
+        if(!UsesGpuDirect&&!UsesAndroidNative)frameWriter=new LiveVideoFrameWriter(encoder!=null?encoder.StandardInput.BaseStream:encoderNative.StandardInput,settings.Width*settings.Height*(asyncReadback?4:3),true);
         captureTimer.Start();
         capturing=true;
         CurrentPhase="rendering";
@@ -299,21 +300,59 @@ public sealed class LiveVideoExporter : MonoBehaviour
             yield break;
         }
         if(encoder!=null)encoder.StandardInput.Close();
+        encoderNative?.StandardInput.Close();
+
         finalization=Task.Run(()=>
         {
+            if(encoderNative!=null)
+            {
+                // libx264 fast 编 1080p60 大约 0.1~0.3x 实时，帧喂完只代表 stdin 结束，
+                // 编码器还要把 backlog 排空。按视频时长给足余量，别用固定 2 分钟。
+                int encodeTimeout=System.Math.Max(300000,(int)((double)frame/settings.Fps*12.0*1000.0));
+
+                if(!encoderNative.WaitForExit(encodeTimeout))
+                    throw new TimeoutException("Encoder did not finish within "+encodeTimeout+" ms");
+
+                // 子进程退出后 stderr 才有 EOF，这时才能把内容读完
+                string nativeErrors=string.Empty;
+
+                try
+                {
+                    using(var reader=new StreamReader(encoderNative.StandardError))
+                        nativeErrors=reader.ReadToEnd();
+                }
+                catch(Exception) { }
+
+                if(encoderNative.ExitCode!=0)
+                    throw new InvalidOperationException("Video encoding failed: "+nativeErrors);
+            }
+
             if(encoder!=null)
             {
-                if(!encoder.WaitForExit(120000))throw new TimeoutException("Encoder did not finish");
+                int legacyTimeout=System.Math.Max(300000,(int)((double)frame/settings.Fps*12.0*1000.0));
+
+                if(!encoder.WaitForExit(legacyTimeout))
+                    throw new TimeoutException("Encoder did not finish within "+legacyTimeout+" ms");
                 if(encoder.ExitCode!=0)throw new InvalidOperationException("Video encoding failed: "+encoderErrors);
             }
             string destination=Path.Combine(tempFolder,"complete.mp4");
             string arguments="-hide_banner -loglevel error -nostdin -n -i "+LiveRenderSettings.Quote(videoFile)+" -i "+LiveRenderSettings.Quote(audioFile)+
                 " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k -t "+((double)frame/settings.Fps).ToString("R",System.Globalization.CultureInfo.InvariantCulture)+
                 " -movflags +faststart "+LiveRenderSettings.Quote(destination);
-            using(var mux=new Process{StartInfo=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardError=true}})
+            if(Application.platform==RuntimePlatform.WindowsPlayer||Application.platform==RuntimePlatform.WindowsEditor)
             {
-                mux.Start();string message=mux.StandardError.ReadToEnd();mux.WaitForExit();
-                if(mux.ExitCode!=0)throw new InvalidOperationException("Audio/video mux failed: "+message);
+                if(!NativeProcessProbe.Run(executable,arguments,180000,out int muxCode,out string muxOutput,out string muxError))
+                    throw new InvalidOperationException("Audio/video mux failed: "+(muxError??muxOutput));
+
+                if(muxCode!=0)throw new InvalidOperationException("Audio/video mux failed: "+muxOutput);
+            }
+            else
+            {
+                using(var mux=new Process{StartInfo=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardError=true}})
+                {
+                    mux.Start();string message=mux.StandardError.ReadToEnd();mux.WaitForExit();
+                    if(mux.ExitCode!=0)throw new InvalidOperationException("Audio/video mux failed: "+message);
+                }
             }
             if(!cancelled)File.Move(destination,output);
         });
@@ -495,6 +534,18 @@ public sealed class LiveVideoExporter : MonoBehaviour
         string arguments="-hide_banner -loglevel warning -nostats -n -f rawvideo -pixel_format "+(asyncReadback?"rgba":"rgb24")+" -video_size "+settings.Width+"x"+settings.Height+
             " -framerate "+settings.Fps+" -i pipe:0 -filter_threads "+filterThreads+" -vf vflip -an "+settings.EncoderArguments+
             " -threads "+encoderThreads+" -movflags +faststart "+LiveRenderSettings.Quote(videoFile);
+
+        // IL2CPP 下 System.Diagnostics.Process 起不来，走 kernel32 的 CreateProcess
+        if(Application.platform==RuntimePlatform.WindowsPlayer||Application.platform==RuntimePlatform.WindowsEditor)
+        {
+            encoderNative=NativeProcess.Start(executable,arguments,true,out string reason);
+
+            if(encoderNative==null)
+                throw new InvalidOperationException("Could not start ffmpeg: "+reason);
+
+            return;
+        }
+
         encoder=new Process{StartInfo=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardError=true}};
         encoder.ErrorDataReceived+=(sender,args)=>{if(args.Data!=null)lock(encoderErrors)encoderErrors.AppendLine(args.Data);};
         encoder.Start();encoder.BeginErrorReadLine();
@@ -512,6 +563,11 @@ public sealed class LiveVideoExporter : MonoBehaviour
         gpuEncoder?.Dispose();gpuEncoder=null;
         androidEncoder?.Dispose();androidEncoder=null;
         frameWriter?.Abort();
+        if(encoderNative!=null)
+        {
+            try { encoderNative.Kill(); } catch { }
+            encoderNative.Dispose();encoderNative=null;
+        }
         if(encoder!=null)
         {
             try { if(!encoder.HasExited){encoder.Kill();encoder.WaitForExit();} }
