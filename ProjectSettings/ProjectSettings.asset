@@ -165,7 +165,7 @@ PlayerSettings:
   androidSupportedAspectRatio: 1
   androidMaxAspectRatio: 2.1
   applicationIdentifier:
-    Android: com.hongyiw689.umaviewer
+    Android: fans.buenavista.umaviewer
     Standalone: com.UmaViewer
     iPhone: com.------------.UmaViewer
   buildNumber:

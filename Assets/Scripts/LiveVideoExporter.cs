@@ -293,8 +293,30 @@ public sealed class LiveVideoExporter : MonoBehaviour
         if(UsesAndroidNative)
         {
             // MediaMuxer 已经把音视频写进 videoFile（就是最终 mp4），不需要再走 FFmpeg 封装。
+            // 再把它发布到公共 Downloads（MediaStore），用户能在文件管理器里直接看到。
             string androidOutput=videoFile;
-            finalization=Task.Run(()=>{ if(!cancelled)File.Move(androidOutput,output); });
+            string fileName=Path.GetFileName(output);
+
+            finalization=Task.Run(()=>
+            {
+                if(cancelled)return;
+
+                if(HasEnoughSpaceForExport(androidOutput))
+                {
+                    if(AndroidMediaExport.TryExport(androidOutput,fileName,"UmaViewer",out string exported,out string reason))
+                    {
+                        output=exported;
+                        try { File.Delete(androidOutput); } catch(Exception) { }
+                        return;
+                    }
+
+                    Debug.LogWarning("[LiveRender] 导出到 Downloads 失败，保留应用目录副本: "+reason);
+                }
+
+                // MediaStore 被 ROM 挡住，或空间不足：留在应用目录，至少别丢文件
+                File.Move(androidOutput,output);
+            });
+
             while(!finalization.IsCompleted)yield return null;
             if(finalization.IsFaulted)throw finalization.Exception.GetBaseException();
             yield break;
@@ -526,6 +548,24 @@ public sealed class LiveVideoExporter : MonoBehaviour
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// MediaStore 走流式复制，会短暂占用双份空间。剩余空间不够就别试，否则写到一半失败
+    /// 还会在 Downloads 里留一个残缺条目。
+    /// </summary>
+    private static bool HasEnoughSpaceForExport(string path)
+    {
+        try
+        {
+            long size=new FileInfo(path).Length;
+            var drive=new DriveInfo(Path.GetPathRoot(Application.persistentDataPath));
+            return !drive.IsReady||drive.AvailableFreeSpace>size+16L*1024*1024;
+        }
+        catch(Exception)
+        {
+            return true;
+        }
     }
 
     private void StartEncoder()
