@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -135,6 +135,29 @@ public class UmaAssetManager : MonoBehaviour
         onDone?.Invoke();
     }
 
+    private static List<UmaDatabaseEntry> capturedLoads;
+
+    internal static void LoadTracked(List<UmaDatabaseEntry> loads, Action action)
+    {
+        var previous = capturedLoads;
+        capturedLoads = loads;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            capturedLoads = previous;
+        }
+    }
+
+    internal static void ReleaseTracked(List<UmaDatabaseEntry> loads)
+    {
+        for (int i = loads.Count - 1; i >= 0; i--)
+            Dereference(loads[i].Name, false, false);
+        loads.Clear();
+    }
+
     public static AssetBundle LoadAssetBundle(UmaDatabaseEntry entry, bool neverUnload = false, bool isRecursive = true)
     {
         if (instance == null || entry == null)
@@ -145,13 +168,14 @@ public class UmaAssetManager : MonoBehaviour
             for (int i = 0; i < requests.Count; i++)
             {
                 UmaDatabaseEntry request = requests[i];
-                if (request != null)
-                    AcquireOne(request, neverUnload);
+                if (request != null && AcquireOne(request, neverUnload))
+                    capturedLoads?.Add(request);
             }
         }
         else
         {
-            AcquireOne(entry, neverUnload);
+            if (AcquireOne(entry, neverUnload))
+                capturedLoads?.Add(entry);
         }
 
         return Get(entry);
@@ -213,7 +237,11 @@ public class UmaAssetManager : MonoBehaviour
         UmaAssetBundleStream stream = null;
         try
         {
-            if (!entry.IsEncrypted)
+            if (UmaAssetBundleReferenceFallback.TryLoad(entry, filePath, out bundle))
+            {
+                Debug.LogWarning($"[AssetBundleReferenceFallback] Corrected official texture reference in '{entry.Name}'");
+            }
+            else if (!entry.IsEncrypted)
             {
                 bundle = AssetBundle.LoadFromFile(filePath);
             }
@@ -484,6 +512,9 @@ public class UmaAssetManager : MonoBehaviour
             prerequisites.AddRange(SearchAB(main, dependency));
         }
 
+        var referenceDependency = UmaAssetBundleReferenceFallback.GetDependency(main, entry);
+        if (referenceDependency != null && !prerequisites.Any(dependency => dependency.Name == referenceDependency.Name))
+            prerequisites.AddRange(SearchAB(main, referenceDependency));
         entry.CachedPrerequisites = prerequisites;
         return new List<UmaDatabaseEntry>
         {

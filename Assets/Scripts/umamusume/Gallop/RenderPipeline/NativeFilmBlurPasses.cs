@@ -72,15 +72,22 @@ namespace Gallop.RenderPipeline
         protected override void OriginalService(NativePostCommand command)=>ApplyScroll(command);
         public static void ApplyScroll(NativePostCommand command)
         {
-            if(OriginalGraphicSettings==null)throw new InvalidOperationException("Original GraphicSettings instance owner is not installed.");
+            if (OriginalGraphicSettings == null)
+            {
+                Shader.SetGlobalVector("_GlobalScreenUVScrollParam",
+                    command.Call == "scrollWrite" ? command.Vector : Vector4.zero);
+                return;
+            }
             var owner=OriginalGraphicSettings();if(owner==null)throw new NullReferenceException();
             if(command.Call=="scrollWrite")owner.ScreenUVScrollParameter=command.Vector;
             else owner.ResetScreenUVScrollParameter();
         }
         public override List<NativePostCommand> Build(PostImageEffectFeature.Parameter p,int width,int height)
         {
-            if(OriginalScreenWidth==null||OriginalScreenHeight==null)throw new InvalidOperationException("Original Gallop.Screen owner is not installed.");
-            float invW=F(1f/OriginalScreenWidth()),invH=F(1f/OriginalScreenHeight());var a=p.FilmRoll;
+            var virtualSize = NativeVirtualScreenSize.Evaluate(false, false, width, height);
+            int screenWidth = OriginalScreenWidth?.Invoke() ?? virtualSize.x;
+            int screenHeight = OriginalScreenHeight?.Invoke() ?? virtualSize.y;
+            float invW=F(1f/screenWidth),invH=F(1f/screenHeight);var a=p.FilmRoll;
             var c=new List<NativePostCommand>();NativePostCommand.Allocate(c,"target",feature==null?width:feature.SourceRT.Width,feature==null?height:feature.SourceRT.Height);
             float x=F(invW*a.RollMaskSize.x),y=F(invH*a.RollMaskSize.y);
             var scroll=new Vector4(a.RollPosition.x,a.RollPosition.y,x,y);
@@ -91,7 +98,7 @@ namespace Gallop.RenderPipeline
             NativePostCommand.Float(c,0x1ca,a.NoisePower,"material");NativePostCommand.Float(c,0x1cb,a.IsNoiseRandom?1:-1,"material");
             NativePostCommand.Vec(c,0x1cc,a.NoiseColor,"material");NativePostCommand.Vec(c,0x1cd,new Vector4(a.NoiseRange.x,a.NoiseRange.y,0,0),"material");
             NativePostCommand.Float(c,0x1ce,F(invH*a.ScanLineSpeed),"material");NativePostCommand.Float(c,0x1d0,a.ScanLinePower,"material");NativePostCommand.Float(c,0x44,a.Time,"material");
-            NativePostCommand.Float(c,0x1cf,a.ScanLineSize>0?F((float)OriginalScreenHeight()/a.ScanLineSize):0,"material");NativePostCommand.Vec(c,0x1d1,new Vector4(a.ScanlineBlurSize.x,a.ScanlineBlurSize.y,0,0),"material");
+            NativePostCommand.Float(c,0x1cf,a.ScanLineSize>0?F((float)screenHeight/a.ScanLineSize):0,"material");NativePostCommand.Vec(c,0x1d1,new Vector4(a.ScanlineBlurSize.x,a.ScanlineBlurSize.y,0,0),"material");
             NativePostCommand.Blit(c,"source","target",true);NativePostCommand.Resolve(c,NativeEvent((RenderPassEvent)(a.EnqueueTiming==Parameter.EnqueueTimingType.BeforeImageEffect?550:601)));return c;
         }
     }

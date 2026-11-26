@@ -35,7 +35,7 @@ namespace Gallop.Live
             var entry=UmaViewerMain.Instance.AbList[path];
             return UmaAssetManager.LoadAssetBundle(entry).LoadAllAssets<T>().Single();
         }
-        public void Initialize(UmaContainerCharacter model)
+        public void Initialize(UmaContainerCharacter model, Animator positionAnimator = null)
         {
             Model=model;
             RendererHolder=new LiveRendererHolder();
@@ -67,7 +67,9 @@ namespace Gallop.Live
             // Original MiniAnimationController51a83a0 adds the position Animator
             // to ModelControllerBehaviour.PositionNode (virtual slot11), while
             // the timeline transform writes the cached model transform.
-            Animation=new LiveMiniAnimationRuntime(model.UmaAnimator,model.Position.gameObject.AddComponent<Animator>(),facial,ear);
+            if (positionAnimator == null)
+                positionAnimator = model.Position.gameObject.AddComponent<Animator>();
+            Animation=new LiveMiniAnimationRuntime(model.UmaAnimator,positionAnimator,facial,ear);
             model.InitializeLiveMiniPhysics();
             SetLayerIndex(1);
         }

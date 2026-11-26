@@ -15,6 +15,7 @@ public struct ManifestEntry
     public uint priority;
     public ulong size;
     public ulong checksum;
+    public long key;
     public string hname;
     public int kind;
 
@@ -26,6 +27,7 @@ public struct ManifestEntry
         this.priority = priority;
         this.size = size;
         this.checksum = checksum;
+        this.key = 0;
         this.hname = hname;
         this.kind = kind;
         this.tname = Encoding.UTF8.GetString(this.name);
@@ -129,8 +131,7 @@ public struct ManifestEntry
             dat.priority = (uint)ReadVLQ(buf, ref offset, 4);
             dat.size = ReadVLQ(buf, ref offset, 8);
             dat.checksum = ReadUNum(buf, ref offset, 8);
-            // Default records contain an additional fixed-width field after checksum.
-            ReadUNum(buf, ref offset, 8);
+            dat.key = unchecked((long)ReadUNum(buf, ref offset, 8));
             dat.hname = CalHNameString(dat.checksum, dat.size, dat.name);
             dat.tname = Encoding.UTF8.GetString(dat.name);
             dat.tdeps = (dat.deps == null ? null : Encoding.UTF8.GetString(dat.deps));

@@ -15,6 +15,7 @@ namespace Gallop
         // PMX samples the authored transform rules without entering the Live timeline.
         internal bool ExportNativeFaceProperties;
         private bool NativeFaceProperties => Container.IsLive || ExportNativeFaceProperties;
+        private bool NativeFaceScale => NativeFaceProperties || Container.IsGachaPreview;
         [NonSerialized]
         public Live.LiveEyeTraceController LiveEyeTrace;
         public List<EyeTarget> _eyeTarget;
@@ -357,23 +358,64 @@ namespace Gallop
             });
         }
 
-        public void ChangeMorph()
+        public void ChangeMorph() => ChangeMorph(false, null);
+
+        private void ChangeMorph(bool cutIn, DrivenKeyAnimation earAnimation)
         {
-            FacialResetAll();
+            FacialResetAll(!cutIn || earAnimation != null);
             if (Container.FaceOverrideData && Container.FaceOverrideData.Enable)
             {
                 OverrideFace(Container.FaceOverrideData);
             }
 
-            EarMorphs.ForEach(morph => ProcessMorph(morph));
+            if (cutIn)
+                ApplyCutInEarAnimation(earAnimation);
+            else
+                EarMorphs.ForEach(morph => ProcessMorph(morph));
             EyeBrowMorphs.ForEach(morph => ProcessMorph(morph));
-            EyeMorphs.ForEach(morph => ProcessMorph(morph));
+            foreach (var morph in EyeMorphs)
+                if (!cutIn || !IsEyeRangeMorph(morph))
+                    ProcessMorph(morph);
             MouthMorphs.ForEach(morph => ProcessMorph(morph));
             ProcessLiveTargetOverrides(EyeMorphs, BaseREyeMorph, BaseLEyeMorph);
             ProcessLiveTargetOverrides(EyeBrowMorphs, BaseREyeBrowMorph, BaseLEyeBrowMorph);
             ProcessLiveTargetOverrides(MouthMorphs, BaseMouthMorph, null);
             OtherMorphs.ForEach(morph => ProcessExtraMorph(morph));
             ApplyRotation();
+            if (cutIn)
+                ApplyCutInEyeDirection();
+        }
+
+        bool IsEyeRangeMorph(FacialMorph morph) => morph == LeftEyeXrange || morph == RightEyeXrange ||
+            morph == LeftEyeYrange || morph == RightEyeYrange;
+
+        void ApplyCutInEyeDirection()
+        {
+            var inner = LeftEyeXrange?.trsArray.FirstOrDefault(t => t._path == "Eye_L");
+            var outer = RightEyeXrange?.trsArray.FirstOrDefault(t => t._path == "Eye_R");
+            var upper = LeftEyeYrange?.trsArray.FirstOrDefault(t => t._path == "Eye_L");
+            var lower = RightEyeYrange?.trsArray.FirstOrDefault(t => t._path == "Eye_R");
+            if (inner?.transform == null || outer?.transform == null || upper == null || lower == null)
+                return;
+
+            // JP DrivenKeyComponent.InitializeEyeRange / CalcEyeTargetPosition:
+            // group 1 is the left inner/upper sample, group 0 the right outer/lower.
+            // Mirror X for the opposite eye; up/down and inner/outer are asymmetric.
+            Vector3 Mirror(Vector3 value) => new Vector3(-value.x, value.y, value.z);
+            var all = EyeballCtrl_All_Locator.localPosition;
+            Apply(outer.transform, EyeballCtrl_R_Locator.localPosition + all,
+                Mirror(inner._position), outer._position, Mirror(upper._position), lower._position, -100f);
+            Apply(inner.transform, EyeballCtrl_L_Locator.localPosition + all,
+                inner._position, Mirror(outer._position), upper._position, Mirror(lower._position), 100f);
+
+            void Apply(Transform eye, Vector3 control, Vector3 inward, Vector3 outward,
+                Vector3 upward, Vector3 downward, float horizontalSign)
+            {
+                float x = control.x * horizontalSign;
+                float y = control.y * 100f;
+                eye.localPosition += (x > 0 ? inward : -outward) * x +
+                    (y > 0 ? upward : -downward) * y;
+            }
         }
 
         public void ChangeMorphEye() => ChangeMorphEye(FaceEyeType.Base);
@@ -480,6 +522,7 @@ namespace Gallop
                 if (ear && !LiveEarState.Weights.ActiveTypes.Contains(morph.index) && (!isOverride || morph.OverrideType == OverrideType.None))
                     return;
                 var weight = (isOverride && morph.OverrideType == OverrideType.Override ? morph.overrideWeight : manualWeight);
+                bool scaleCutInFace = Container.IsGachaPreview && !EarMorphs.Contains(morph);
                 for (int bone = 0; bone < morph.trsArray.Count; bone++)
                 {
                     var trs = morph.trsArray[bone];
@@ -488,18 +531,52 @@ namespace Gallop
                     float boneWeight = ear && (!isOverride || morph.OverrideType == OverrideType.None) ? LiveEarState.Weights.Weights[morph.index * 6 + (morph.direction ? 3 : 0) + bone] : weight;
                     if (ear && boneWeight <= 0f)
                         continue;
-                    ApplyMorphTransform(trs, boneWeight);
+                    ApplyMorphTransform(trs, boneWeight, scaleCutInFace);
                 }
             }
         }
 
-        void ApplyMorphTransform(TrsArray trs, float weight)
+        void ApplyMorphTransform(TrsArray trs, float weight, bool scaleCutInFace = false)
         {
             if (!trs.transform) return;
-            if (NativeFaceProperties ? LiveFacialTargetProperties.IsScaleBone(trs._path) : trs._isValidScaleTransform)
+            if (scaleCutInFace || (NativeFaceScale ? LiveFacialTargetProperties.IsScaleBone(trs._path) : trs._isValidScaleTransform))
                 trs.transform.localScale += trs._scale * weight;
             trs.transform.localPosition += trs._position * weight;
             RotationRecorder[trs.transform] += trs._rotation * weight;
+        }
+
+        private void ApplyCutInEarAnimation(DrivenKeyAnimation animation)
+        {
+            var groups = animation?.animationEarType;
+            if (groups == null || groups.Length == 0)
+                return;
+            Vector3 ReadWeights(FacialMorph morph)
+            {
+                int side = morph.direction ? 1 : 0;
+                if (!morph.locator || side >= groups.Length || groups[side]?.faceType == null ||
+                    Array.IndexOf(groups[side].faceType, (EarType)morph.index) < 0)
+                    return Vector3.zero;
+                var position = morph.locator.localPosition;
+                return new Vector3(position.x * -100f, position.y * 100f, position.z * 100f);
+            }
+            uint activeTypes = 0;
+            foreach (var morph in EarMorphs)
+            {
+                var weights = ReadWeights(morph);
+                if (weights.x + weights.y + weights.z > Mathf.Epsilon)
+                    activeTypes |= 1u << morph.index;
+            }
+            foreach (var morph in EarMorphs)
+            {
+                if ((activeTypes & (1u << morph.index)) == 0)
+                    continue;
+                var weights = ReadWeights(morph);
+                for (int bone = 0; bone < Mathf.Min(morph.trsArray.Count, 3); bone++)
+                {
+                    if (weights[bone] > 0f)
+                        ApplyMorphTransform(morph.trsArray[bone], weights[bone]);
+                }
+            }
         }
 
         void ProcessLiveTargetOverrides(List<FacialMorph> morphs, FacialMorph rightBase, FacialMorph leftBase)
@@ -595,10 +672,21 @@ namespace Gallop
             }
         }
 
-        public void FacialResetAll()
+        public void FacialResetAll() => FacialResetAll(true);
+
+        private void FacialResetAll(bool resetEars)
         {
-            FacialReset(BaseLEarMorph.trsArray);
-            FacialReset(BaseREarMorph.trsArray);
+            if (resetEars)
+                FacialResetEar();
+            else
+            {
+                foreach (var trs in BaseLEarMorph.trsArray)
+                    if (trs.transform)
+                        RotationRecorder.Remove(trs.transform);
+                foreach (var trs in BaseREarMorph.trsArray)
+                    if (trs.transform)
+                        RotationRecorder.Remove(trs.transform);
+            }
             FacialReset(BaseLEyeBrowMorph.trsArray);
             FacialReset(BaseREyeBrowMorph.trsArray);
             FacialReset(BaseLEyeMorph.trsArray);
@@ -644,12 +732,14 @@ namespace Gallop
         public void FacialReset(List<TrsArray> trsArrays)
         {
             {
+                bool scaleCutInFace = Container.IsGachaPreview &&
+                    trsArrays != BaseLEarMorph.trsArray && trsArrays != BaseREarMorph.trsArray;
                 foreach (TrsArray trs in trsArrays)
                 {
                     if (trs.transform)
                     {
                         trs.transform.localPosition = trs._position;
-                        if (!NativeFaceProperties || Live.LiveFacialTargetProperties.IsScaleBone(trs._path))
+                        if (scaleCutInFace || !NativeFaceScale || LiveFacialTargetProperties.IsScaleBone(trs._path))
                             trs.transform.localScale = trs._scale;
                         RotationRecorder[trs.transform] = trs._rotation;
                     }
@@ -792,18 +882,23 @@ namespace Gallop
             }
         }
 
-        public void ProcessLocator()
+        public void ProcessLocator() => ProcessLocator(false, null);
+
+        internal void ProcessCutInLocator(DrivenKeyAnimation earAnimation) => ProcessLocator(true, earAnimation);
+
+        private void ProcessLocator(bool cutIn, DrivenKeyAnimation earAnimation)
         {
             EyeBrowMorphs.ForEach(morph =>
             {
                 if (morph.locator)
                     morph.weight = morph.locator.transform.localPosition.x * -100;
             });
-            EarMorphs.ForEach(morph =>
-            {
-                if (morph.locator)
-                    morph.weight = morph.locator.transform.localPosition.x * -100;
-            });
+            if (!cutIn)
+                EarMorphs.ForEach(morph =>
+                {
+                    if (morph.locator)
+                        morph.weight = morph.locator.transform.localPosition.x * -100;
+                });
             MouthMorphs.ForEach(morph =>
             {
                 if (morph.locator)
@@ -832,7 +927,7 @@ namespace Gallop
             RightEyeXrange.weight = -(EyeballCtrl_R_Locator.transform.localPosition.x * -100 + EyeballCtrl_All_Locator.transform.localPosition.x * -100);
             LeftEyeYrange.weight = -(EyeballCtrl_L_Locator.transform.localPosition.y * -100 + EyeballCtrl_All_Locator.transform.localPosition.y * -100);
             RightEyeYrange.weight = (EyeballCtrl_R_Locator.transform.localPosition.y * -100 + EyeballCtrl_All_Locator.transform.localPosition.y * -100);
-            ChangeMorph();
+            ChangeMorph(cutIn, earAnimation);
         }
 
         public void ResetLocator()

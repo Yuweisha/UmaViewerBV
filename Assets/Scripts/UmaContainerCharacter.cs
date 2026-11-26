@@ -36,6 +36,7 @@ public partial class UmaContainerCharacter : UmaContainer
     public GameObject Hair;
     [NonSerialized]
     public string LiveHeadResourceName;
+    internal string BodyResourceName { get; private set; }
     [NonSerialized]
     public Gallop.Live.LiveEyeHighlightController LiveEyeHighlight;
     [NonSerialized]
@@ -52,6 +53,7 @@ public partial class UmaContainerCharacter : UmaContainer
     public Animator UmaFaceAnimator;
     public AnimatorOverrideController FaceOverrideController;
     public bool isAnimatorControl;
+    internal bool IsGachaPreview;
     [Header("Body")]
     public GameObject UpBodyBone;
     public Vector3 UpBodyPosition;
@@ -423,7 +425,7 @@ public partial class UmaContainerCharacter : UmaContainer
                     {
                         Mat = mat,
                         Renderers = new Dictionary<Renderer, List<int>>(),
-                        Toggle = IsLive ? null : Instantiate(UI.UmaContainerTogglePrefab, UI.ModelSettings.MaterialsList.content)
+                        Toggle = IsLive || IsGachaPreview ? null : Instantiate(UI.UmaContainerTogglePrefab, UI.ModelSettings.MaterialsList.content)
                     };
                     if (matHlp.Toggle != null)
                     {
@@ -488,7 +490,7 @@ public partial class UmaContainerCharacter : UmaContainer
 
     public void SetHeight(int scale = 0)
     {
-        bool useNativeLiveHeight = IsLive;
+        bool useNativeLiveHeight = IsLive || IsGachaPreview;
 #if UNITY_EDITOR
         // Explicit diagnostic baseline only; player builds always use the game
         // marker for Live. Ordinary model preview keeps its existing convention.
@@ -791,6 +793,11 @@ public partial class UmaContainerCharacter : UmaContainer
         AdvancePreviewIdle(Time.deltaTime);
         if (IsMini)
             return;
+        if (IsGachaPreview)
+        {
+            UpdateFaceLightRuntime();
+            return;
+        }
         if (IsLive)
             Gallop.Live.Director.instance?.ApplyDeferredLiveTimelineLateUpdate();
         if (IsLive && _liveSpringPhaseFrame == Time.frameCount)
@@ -817,13 +824,25 @@ public partial class UmaContainerCharacter : UmaContainer
     }
 
     bool _springSimulationBegun;
-    private void AlterLateUpdateRuntime()
+    internal void StepGachaPhysics(float deltaTime)
+    {
+        if (deltaTime <= 0f)
+        {
+            FaceDrivenKeyTarget?.ApplyLiveEarVirtualParents();
+            return;
+        }
+        AlterLateUpdateRuntime(deltaTime);
+        EndSpringSimulationRuntime();
+        FaceDrivenKeyTarget?.ApplyLiveEarVirtualParents();
+    }
+
+    private void AlterLateUpdateRuntime(float? deltaOverride = null)
     {
         _springSimulationBegun = false;
         if (EnablePhysics && _cySpringLoaded && _cySpringController != null && !(IsLive && LiveModelComponentsPaused))
         {
             _cySpringController.TryUpdateWarmUp();
-            float delta = IsLive ? LiveModelOriginalDeltaTime ?? Time.smoothDeltaTime : Time.deltaTime;
+            float delta = deltaOverride ?? (IsLive ? LiveModelOriginalDeltaTime ?? Time.smoothDeltaTime : Time.deltaTime);
             // CySpringUpdater.BeginSimulation (0x5310bc0): a held model clock
             // must not advance native history while PostSpring holds its pose.
             if (!IsLive || delta > 1e-6f)
@@ -922,7 +941,7 @@ public partial class UmaContainerCharacter : UmaContainer
         Debug.Log($"[FaceLight] init={_faceLightInitialized}, " + $"FaceRenderer={(FaceRenderer ? FaceRenderer.name : "null")}, " + $"FaceMaterial={(FaceMaterial ? FaceMaterial.name : "null")}, " + $"HeadToonBase={(HeadToonBaseTransform ? HeadToonBaseTransform.name : "null")}");
     }
 
-    private void UpdateFaceLightRuntime()
+    internal void UpdateFaceLightRuntime()
     {
         if (IsMini)
             return;
@@ -1017,7 +1036,7 @@ public partial class UmaContainerCharacter : UmaContainer
             }
         }
 
-        if (isAnimatorControl)
+        if (isAnimatorControl && !IsGachaPreview)
         {
             FaceDrivenKeyTarget.ProcessLocator();
         }
@@ -1145,6 +1164,7 @@ public partial class UmaContainerCharacter : UmaContainer
 
     public void LoadBody(UmaDatabaseEntry entry)
     {
+        BodyResourceName = entry.Name;
         Body = InstantiateEntry(entry, transform);
         UmaAnimator = Body.GetComponent<Animator>();
         if (IsMini)
@@ -1475,7 +1495,9 @@ public partial class UmaContainerCharacter : UmaContainer
                     }
                 }
 
-                m.SetFloat("_StencilMask", CharaEntry.Id);
+                // CutIn effects compare against the stencil values authored on the character materials.
+                if (!IsGachaPreview)
+                    m.SetFloat("_StencilMask", CharaEntry.Id);
             }
         }
 
@@ -1955,7 +1977,8 @@ public partial class UmaContainerCharacter : UmaContainer
 
                         index++;
                         var next = $"{dir}/{param[0]}_{param[1]}_{param[2]}_{param[3]}_{index.ToString().PadLeft(2, '0')}";
-                        if (Main.AbList.TryGetValue(next, out UmaDatabaseEntry nextMotion))
+                        if (Main.AbList.TryGetValue(next, out UmaDatabaseEntry nextMotion) &&
+                            !clip.events.Any(e => e.functionName == nameof(SetNextAnimationCut) && e.stringParameter == next))
                         {
                             var aevent = new AnimationEvent
                             {
@@ -2098,6 +2121,8 @@ public partial class UmaContainerCharacter : UmaContainer
             Main.AbList["3d/effect/charaemotion/pfb_eff_chr_emo_eye_003"],
         };
         var mangaObjects = new List<GameObject>();
+        float eyeStencil = IsGachaPreview && FaceMaterial && FaceMaterial.HasProperty("_StencilMask")
+            ? FaceMaterial.GetFloat("_StencilMask") : id;
         mangaEntry.ForEach(entry =>
         {
             LoadedAssets.Add(entry);
@@ -2107,7 +2132,7 @@ public partial class UmaContainerCharacter : UmaContainer
             var leftObj = Instantiate(obj, eyeLocator_L.transform);
             new List<Renderer>(leftObj.GetComponentsInChildren<Renderer>(true)).ForEach(a =>
             {
-                a.material.SetFloat("_StencilMask", id);
+                a.material.SetFloat("_StencilMask", eyeStencil);
                 a.material.SetFloat("_StencilComp", (float)UnityEngine.Rendering.CompareFunction.Equal);
                 a.material.SetFloat("_StencilOp", (float)UnityEngine.Rendering.StencilOp.Keep);
                 a.material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
@@ -2122,7 +2147,7 @@ public partial class UmaContainerCharacter : UmaContainer
 
             new List<Renderer>(RightObj.GetComponentsInChildren<Renderer>(true)).ForEach(a =>
             {
-                a.material.SetFloat("_StencilMask", id);
+                a.material.SetFloat("_StencilMask", eyeStencil);
                 a.material.SetFloat("_StencilComp", (float)UnityEngine.Rendering.CompareFunction.Equal);
                 a.material.SetFloat("_StencilOp", (float)UnityEngine.Rendering.StencilOp.Keep);
                 a.material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;

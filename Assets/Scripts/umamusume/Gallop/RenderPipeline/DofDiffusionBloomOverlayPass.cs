@@ -925,14 +925,19 @@ namespace Gallop.RenderPipeline
             cmd.SetGlobalVector(ShaderManager.GetPropertyId(ShaderManager.PropertyId._Parameter), new Vector4(param.BloomBlurSize * 0.5f, defaultParameter.y, param.BloomThreshold, param.BloomIntensity));
             int sourceWidth = GetHandleWidth(source);
             int sourceHeight = GetHandleHeight(source);
-            int quarterWidth = sourceWidth / BLOOM_DIVIDER;
-            int quarterHeight = sourceHeight / BLOOM_DIVIDER;
+            int shortEdge = Mathf.Min(sourceWidth, sourceHeight);
+            float scale = param.DiffusionReferenceShortEdge > 0 && shortEdge > param.DiffusionReferenceShortEdge
+                ? (float)param.DiffusionReferenceShortEdge / shortEdge : 1f;
+            int referenceWidth = Mathf.RoundToInt(sourceWidth * scale);
+            int referenceHeight = Mathf.RoundToInt(sourceHeight * scale);
+            int quarterWidth = referenceWidth / BLOOM_DIVIDER;
+            int quarterHeight = referenceHeight / BLOOM_DIVIDER;
             RenderTextureHandle lowRezWork0 = RenderTextureHandle.Make(LOWREZOWORK_RT0_NAME, quarterWidth, quarterHeight);
             RenderTextureHandle lowRezWork1 = RenderTextureHandle.Make(LOWREZOWORK_RT1_NAME, quarterWidth, quarterHeight);
             Allocate(cmd, lowRezWork0, quarterWidth, quarterHeight, FilterMode.Bilinear);
             Allocate(cmd, lowRezWork1, quarterWidth, quarterHeight, FilterMode.Bilinear);
-            int halfWidth = (int)(sourceWidth * 0.5f);
-            int halfHeight = (int)(sourceHeight * 0.5f);
+            int halfWidth = referenceWidth / 2;
+            int halfHeight = referenceHeight / 2;
             cmd.SetGlobalVector(ShaderManager.GetPropertyId(ShaderManager.PropertyId._PixelSize), new Vector4(param.DiffusionBlurSize * 0.5f / halfWidth, param.DiffusionBlurSize * 0.5f / halfHeight, defaultParameter.z, defaultParameter.w));
             Blit(cmd, source, lowRezWork0, _diffusionBloomMaterial, 0);
             Blit(cmd, lowRezWork0, lowRezWork1, _diffusionBloomMaterial, 1);
@@ -1367,6 +1372,7 @@ namespace Gallop.RenderPipeline
             public float DiffusionThreshold;
             public float DiffusionSaturation;
             public float DiffusionContrast;
+            public int DiffusionReferenceShortEdge;
             public Camera TargetCamera;
             public float BallBlurPowerFactor;
             public float BallBlurBrightnessThreshhold;

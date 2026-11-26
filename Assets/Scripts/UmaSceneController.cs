@@ -36,17 +36,41 @@ public class UmaSceneController:MonoBehaviour
         instance.StartCoroutine(instance.LoadLiveSceneAsync(name, OnSceneloaded, OnPrevSceneUnloaded, isReady));
     }
 
-    IEnumerator LoadLiveSceneAsync(string sceneName, Action OnSceneloaded, Action OnPrevSceneUnloaded, Func<bool> isReady)
+    public IEnumerator ShowLoadingScreen()
     {
-
-        if (CavansInstance)
-        {
-            Destroy(CavansInstance);
-        }
+        ClearLoadingScreen();
         CavansInstance = Instantiate(CavansPrefab, transform);
         var animation = CavansInstance.GetComponent<Animation>();
         animation.Play("SceneTransition_s");
         yield return new WaitUntil(() => !animation.isPlaying);
+    }
+
+    public IEnumerator HideLoadingScreen()
+    {
+        LoadingProgressChange(-1, -1);
+        if (!CavansInstance)
+            yield break;
+        var animation = CavansInstance.GetComponent<Animation>();
+        animation.Play("SceneTransition_e");
+        yield return new WaitUntil(() => !animation.isPlaying);
+        ClearLoadingScreen();
+    }
+
+    public void ClearLoadingScreen()
+    {
+        LoadingProgressChange(-1, -1);
+        if (CavansInstance)
+        {
+            CavansInstance.SetActive(false);
+            Destroy(CavansInstance);
+        }
+        CavansInstance = null;
+    }
+
+    IEnumerator LoadLiveSceneAsync(string sceneName, Action OnSceneloaded, Action OnPrevSceneUnloaded, Func<bool> isReady)
+    {
+
+        yield return ShowLoadingScreen();
 
         // Set the current Scene to be able to unload it later
         Scene currentScene = SceneManager.GetActiveScene();
@@ -67,9 +91,7 @@ public class UmaSceneController:MonoBehaviour
         OnPrevSceneUnloaded?.Invoke();
         if (isReady != null) yield return new WaitUntil(() => isReady());
 
-        animation.Play("SceneTransition_e");
-        yield return new WaitUntil(() => !animation.isPlaying);
-        Destroy(CavansInstance);
+        yield return HideLoadingScreen();
     }
 
     public void LoadingProgressChange(int curren, int target, string message = null)

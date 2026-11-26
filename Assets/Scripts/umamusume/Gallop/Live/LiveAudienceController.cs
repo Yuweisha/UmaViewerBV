@@ -73,7 +73,7 @@ namespace Gallop.Live
         private static void Color(Material material, int index, UnityEngine.Color value) { material.SetColor(Property(index), value); }
         private static void Float(Material material, int index, float value) { material.SetFloat(Property(index), value); }
 
-        public void UpdateInfo(LiveAudienceTimeline.State state, Func<int?> syncChoreography = null)
+        public void UpdateInfo(LiveAudienceTimeline.State state, Func<int?> syncChoreography = null, bool updateAudienceLighting = true)
         {
             if (Instance == null || state == null) return;
             var v = state.Values;
@@ -91,7 +91,7 @@ namespace Gallop.Live
                 Color(material, 0x94, v.cyalumeGlowColor);
                 Float(material, 0x97, v.cyalumeGlowColorPower);
             }
-            if (audienceMaterial != null)
+            if (updateAudienceLighting && audienceMaterial != null)
             {
                 Color(audienceMaterial, 0x11, new UnityEngine.Color(LiveAudienceTimeline.Multiply(v.AudienceColor.r, v.AudienceColorPower),
                     LiveAudienceTimeline.Multiply(v.AudienceColor.g, v.AudienceColorPower), LiveAudienceTimeline.Multiply(v.AudienceColor.b, v.AudienceColorPower), 1f));

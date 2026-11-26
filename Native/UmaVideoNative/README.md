@@ -18,9 +18,9 @@ D3D11 / NVENC。Unity 纹理不进 CPU 内存，直接交给 NVIDIA 编码器，
 
 ## Android：`android/src/encoder_android.cpp`
 
-MediaCodec 硬编 + MediaMuxer 直接写 MP4。像素经 `AsyncGPUReadback` 到 CPU（一次拷贝），
-YUV 转换和 H.264/H.265 编码都在芯片 VPU，因此 1080p60 能跑满，APK 体积不增加
-（`libmediandk` 是 API 21+ 系统库）。
+MediaCodec 硬编 + MediaMuxer 直接写 MP4。像素经 `AsyncGPUReadback` 到 CPU，
+不支持异步读回的设备使用同步读回；CPU 转换为 YUV 后送入系统编码器。
+实际速度取决于设备、分辨率和演出负载；`libmediandk` 是 API 21+ 系统库。
 
 不用 FFmpeg 的原因：`libx264` 在手机上是纯软编，1080p 只有 15–25 fps；且 IL2CPP 下
 `System.Diagnostics.Process` 不可用，管道方案本来也跑不通。
@@ -54,6 +54,10 @@ void  UVVideoAndroid_Destroy(void* handle);
 
 线程模型：`Submit*` 只入队，编码/复用全在内部 worker 线程；视频队列上限 4 帧，
 满了会阻塞形成背压，避免丢帧或吃爆内存。
+
+AAC 输入按实际缓冲容量分批送入，封装器启动前保留早到的编码数据。
+`Finish` 后拒绝新输入，并等待音视频两轨的输出 EOS；输入暂不可用时重试，
+收尾超时、写入或关闭失败均通过错误状态上报。
 
 `SubmitRGBA` 的缓冲区按 Unity 的左下原点排布，原生侧翻转成视频的左上原点。
 

@@ -30,6 +30,7 @@ namespace Gallop
         [SerializeField] List<ActionParameter> _actionParameterList;
         public FlashPlayer FlashPlayer{get;private set;}
         int _playSeekLastLabelIndex=-1;
+        Func<string,GameObject> loadPrefab = LiveFlashResourceUtility.LoadOnView<GameObject>;
         public Action<ParticleSystem[]> OnInstantiatedParticles;
         public Action<int> OnAudio;
 #if UNITY_EDITOR
@@ -39,10 +40,12 @@ namespace Gallop
 #endif
         public IReadOnlyList<ActionParameter> Actions=>_actionParameterList;
         AnMotionInstance GetMotion(string name,bool fullMatch=false)=>FlashPlayer.Root.Motions.FirstOrDefault(x=>fullMatch?x.Transform.name==name:x.Transform.name.Contains(name));
-        public void LoadFlashPlayer()
+        public void LoadFlashPlayer(Func<string, GameObject> prefabLoader = null)
         {
             if(FlashPlayer!=null)return;
-            var prefab=_flashPrefab!=null?_flashPrefab:LiveFlashResourceUtility.LoadOnView<GameObject>(_flashPrefabPath);
+            if (prefabLoader != null)
+                loadPrefab = prefabLoader;
+            var prefab=_flashPrefab!=null?_flashPrefab:loadPrefab(_flashPrefabPath);
             if(prefab==null)throw new InvalidOperationException("Flash action prefab missing: "+_flashPrefabPath);
             FlashPlayer=new FlashPlayer(Instantiate(prefab,transform,false));
             foreach(var parameter in _actionParameterList)
@@ -84,7 +87,7 @@ namespace Gallop
 #if UNITY_EDITOR
             ActionObserver?.Invoke(parameter,"callback",parameter.InstantiatePrefabInstance!=null?parameter.InstantiatePrefabInstance.GetInstanceID():0);
 #endif
-            var prefab=parameter.InstantiatePrefab!=null?parameter.InstantiatePrefab:LiveFlashResourceUtility.LoadOnView<GameObject>(parameter.InstantiatePrefabPath);
+            var prefab=parameter.InstantiatePrefab!=null?parameter.InstantiatePrefab:loadPrefab(parameter.InstantiatePrefabPath);
             if(prefab!=null)
             {
                 if(parameter.InstantiatePrefabInstance!=null&&!parameter.KeepPrefabInstance)

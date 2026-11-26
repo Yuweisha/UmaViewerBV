@@ -499,6 +499,40 @@ namespace Gallop.RenderPipeline
 
         public static Func<string, int, Texture2D> OriginalTextureLoader { get; set; }
 
+        private UmaDatabaseEntry noiseEntry;
+        private Texture2D noiseTexture;
+
+        private Texture2D LoadNoise()
+        {
+            if (OriginalTextureLoader != null)
+                return OriginalTextureLoader("ImageEffect/Fluctuation/noise", 0x10002);
+
+            var main = UmaViewerMain.Instance;
+            if (main == null || UmaAssetManager.instance == null ||
+                !main.AbList.TryGetValue("imageeffect/fluctuation/noise", out var entry))
+                return null;
+
+            var bundle = UmaAssetManager.LoadAssetBundle(entry);
+            var noise = bundle?.LoadAsset<Texture2D>(
+                "assets/_gallopresources/bundle/resources/imageeffect/fluctuation/noise.png");
+            if (noise != null)
+                noiseEntry = entry;
+            else
+                UmaAssetManager.UnloadAssetBundle(entry, false);
+            return noise;
+        }
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            if (noiseEntry != null)
+            {
+                UmaAssetManager.UnloadAssetBundle(noiseEntry, false);
+                noiseEntry = null;
+            }
+            noiseTexture = null;
+        }
+
         const string RT0 = "AuraPass_RT0", RT1 = "AuraPass_RT1", Down = "Aura.Bloom.downSampleTex", Vertical = "Aura.Bloom.tmpTexBlurV";
         protected override string PoolName => "AuraPass";
 
@@ -510,22 +544,24 @@ namespace Gallop.RenderPipeline
                 throw new NullReferenceException();
             if (!c.Parameter.Aura.IsValidity)
                 return false;
+            // Camera.Render also submits passes for cameras that do not render automatically.
+            var target = c.Parameter.TargetCamera;
+            if (!target || !target.gameObject.activeInHierarchy)
+                return false;
             bool existing = materials.TryGetValue("aura", out var primary) && primary != null;
             if (!Material("aura", 0xb0))
                 return false;
-            if (!existing)
+            if (!existing || noiseTexture == null)
             {
-                if (OriginalTextureLoader == null)
-                    throw new InvalidOperationException("Original Aura ResourceManager noise owner is not installed.");
-                var noise = OriginalTextureLoader("ImageEffect/Fluctuation/noise", 0x10002);
+                if (noiseTexture == null)
+                    noiseTexture = LoadNoise();
+                var noise = noiseTexture;
                 if (noise == null)
                     return false;
                 materials["aura"].SetTexture(Id(0xe4), noise);
             }
 
             if (!Material("chara", 0x98) || !Material("bloom", 0xa3) || !Material("eye", 0x179))
-                return false;
-            if (!c.Parameter.TargetCamera.isActiveAndEnabled)
                 return false;
             renderPassEvent = c.Parameter.Aura.RenderPassEvent;
             camera = c;

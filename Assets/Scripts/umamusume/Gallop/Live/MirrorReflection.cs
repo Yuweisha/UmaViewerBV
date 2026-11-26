@@ -428,7 +428,8 @@ public class MirrorReflection : MonoBehaviour
             _baseCameraTransform = baseCamera.transform;
         }
 
-        if (!EnsureBaseCamera())
+        // An explicit source camera may be disabled for manual capture.
+        if (baseCamera == null && !EnsureBaseCamera())
         {
             Log("Initialize failed: base camera not found.");
             return;
@@ -585,6 +586,19 @@ public class MirrorReflection : MonoBehaviour
             // CameraData.MirrorCasterQuality (+0xdc). It does not select a
             // renderer slot here; GallopRenderer consumes the quality flag.
         }
+    }
+
+    internal void SetCutInRenderOptions(bool toon, bool blurEnabled, int blurDownsample, bool msaa)
+    {
+        if (!_mirrorCamera || !_mirrorCameraData)
+            return;
+
+        SetLightMirrorShader(toon);
+        var blur = _mirrorCameraData.Parameter.BlurOptimize;
+        blur.IsEnable = blurEnabled;
+        blur.Downsample = blurDownsample;
+        _mirrorCameraData.Parameter.BlurOptimize = blur;
+        _mirrorCamera.allowMSAA = msaa;
     }
 
     public void SetMirrorVisibleOfficialStyle(bool visible, bool pauseRenderWhenHidden = true)
@@ -971,6 +985,7 @@ public class MirrorReflection : MonoBehaviour
         _clipPlane = new Vector4(camSpaceNormal.x,camSpaceNormal.y,camSpaceNormal.z,-Vector3.Dot(camSpacePoint, camSpaceNormal));
 
         float oldBaseFov = _baseCamera.fieldOfView;
+        float oldBaseAspect = _baseCamera.aspect;
 
         try
         {
@@ -988,6 +1003,8 @@ public class MirrorReflection : MonoBehaviour
         {
             _baseCamera.fieldOfView = oldBaseFov;
             _baseCamera.ResetAspect();
+            if (!Mathf.Approximately(_baseCamera.aspect, oldBaseAspect))
+                _baseCamera.aspect = oldBaseAspect;
         }
 
         _mirrorCameraTransform.position = reflectedBasePos;

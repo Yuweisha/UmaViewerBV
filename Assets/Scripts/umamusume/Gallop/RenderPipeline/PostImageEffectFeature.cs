@@ -203,8 +203,38 @@ namespace Gallop.RenderPipeline
             DofDiffusionBloomOverlayPass.FeatureParameterResolver = ResolveFeatureParameter;
         }
 
+        private readonly CutInShaderTimePass _cutInShaderTimePass = new CutInShaderTimePass();
+
+        private sealed class CutInShaderTimePass : ScriptableRenderPass
+        {
+            internal float Time;
+            public CutInShaderTimePass()
+            {
+                // URP resets built-in time after its BeforeRendering block.
+                renderPassEvent = RenderPassEvent.BeforeRenderingPrePasses;
+            }
+            public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+            {
+                var cmd = CommandBufferPool.Get("CutIn sampled shader time");
+                float t = Time;
+                cmd.SetGlobalVector("_Time", new Vector4(t / 20f, t, t * 2f, t * 3f));
+                cmd.SetGlobalVector("_SinTime", new Vector4(Mathf.Sin(t / 8f), Mathf.Sin(t / 4f), Mathf.Sin(t / 2f), Mathf.Sin(t)));
+                cmd.SetGlobalVector("_CosTime", new Vector4(Mathf.Cos(t / 8f), Mathf.Cos(t / 4f), Mathf.Cos(t / 2f), Mathf.Cos(t)));
+                cmd.SetGlobalVector("_TimeParameters", new Vector4(t, Mathf.Sin(t), Mathf.Cos(t), 0f));
+                context.ExecuteCommandBuffer(cmd);
+                CommandBufferPool.Release(cmd);
+                // URP publishes its normal time again for the next camera.
+            }
+        }
+
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
+            if (renderingData.cameraData.camera.TryGetComponent<CameraData>(out var clockData) &&
+                clockData.CutInShaderTime is float sampledTime)
+            {
+                _cutInShaderTimePass.Time = sampledTime;
+                renderer.EnqueuePass(_cutInShaderTimePass);
+            }
             var titleDirector = Gallop.Live.Director.instance;
             if (titleDirector != null && renderingData.cameraData.camera == titleDirector.TitleRenderingCamera)
             {
@@ -263,18 +293,20 @@ namespace Gallop.RenderPipeline
             // Director 的演示相机组做成员判定（IsPresentationCamera），同帧内
             // 组内每台相机都注册整链，消除切换窗口。非 Game 类型和
             // Monitor相机由专用末尾复制Pass处理；原生并非按名字跳过。
-            if (!Application.isPlaying || camera.cameraType != CameraType.Game || director == null)
+            camera.TryGetComponent<CameraData>(out var mirrorCameraData);
+            bool cutIn = mirrorCameraData != null && mirrorCameraData.IsCutInRendering;
+            bool mirror = mirrorCameraData != null && mirrorCameraData.IsMirrorRendering;
+            if (!Application.isPlaying || camera.cameraType != CameraType.Game || (director == null && !cutIn && !mirror))
                 return;
             camera.TryGetComponent<MultiCamera>(out var multiCamera);
-            camera.TryGetComponent<CameraData>(out var mirrorCameraData);
             // Mirror cameras are not presentation cameras, but native
             // CreateMirrorCamera enables BlurOptimized and native
             // AddRenderPasses still registers that single pass. Let only the
             // mirror camera through this gate; the narrow branch below returns
             // before the presentation post chain.
-            if (multiCamera == null && !director.IsPresentationCamera(camera) && (mirrorCameraData == null || !mirrorCameraData.IsMirrorRendering))
+            if (!cutIn && !mirror && multiCamera == null && !director.IsPresentationCamera(camera))
                 return;
-            if (camera == director.FinalRenderCamera && _liveFadeSurfacePass != null)
+            if (camera == director?.FinalRenderCamera && _liveFadeSurfacePass != null)
                 renderer.EnqueuePass(_liveFadeSurfacePass);
             // Native composition runs even when the optional image-effect chain is disabled.
             if (multiCamera != null)
@@ -282,7 +314,7 @@ namespace Gallop.RenderPipeline
                 if (_multiCameraCompositePass != null && _multiCameraCompositePass.Setup(multiCamera))
                     renderer.EnqueuePass(_multiCameraCompositePass);
             }
-            else if (camera == director.MainRenderCamera && _multiCameraFinalCompositePass != null && _multiCameraFinalCompositePass.Setup(director.MultiCameraFinalComposite))
+            else if (camera == director?.MainRenderCamera && _multiCameraFinalCompositePass != null && _multiCameraFinalCompositePass.Setup(director.MultiCameraFinalComposite))
                 renderer.EnqueuePass(_multiCameraFinalCompositePass);
             bool renderEnabled = _enableRendering;
             if (!renderEnabled)
@@ -382,7 +414,7 @@ namespace Gallop.RenderPipeline
             // before color gates. Apply to every presentation camera, not merely
             // the active-camera alias from the previous cut; MultiCamera is separate.
             if (multiCamera == null)
-                director.ApplyColorCorrectionParameter(ref parameter.ColorCorrection);
+                director?.ApplyColorCorrectionParameter(ref parameter.ColorCorrection);
             // Original RegisterPass: FilmRoll/BgBlur precede the foreground-only
             // gate. Simple mode retains only ColorCorrection/ColorGrading.
             bool foregroundReady = parameter.ForegroundTexture != null;

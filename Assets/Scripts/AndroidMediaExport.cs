@@ -30,21 +30,29 @@ internal static class AndroidMediaExport
             return false;
         }
 
+        bool attached = AndroidJNI.AttachCurrentThread() == 0;
         try
         {
+            if (!attached) throw new InvalidOperationException("Could not attach export thread to Android");
+            if (GetSdkInt() < 29)
+            {
+                reason = "Public Downloads export requires Android 10 or later";
+                return false;
+            }
             using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
             using (AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
             using (AndroidJavaObject resolver = activity.Call<AndroidJavaObject>("getContentResolver"))
             using (var mediaStore = new AndroidJavaClass("android.provider.MediaStore$Downloads"))
             using (AndroidJavaObject collection = mediaStore.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI"))
             using (var values = new AndroidJavaObject("android.content.ContentValues"))
+            using (var pending = new AndroidJavaObject("java.lang.Integer", 1))
             {
-                values.Call("put", "display_name", displayName);
+                values.Call("put", "_display_name", displayName);
                 values.Call("put", "mime_type", "video/mp4");
 
                 // Android 10+ 才认 relative_path；低版本会直接拒绝 insert，所以先只在 Q+ 上设
-                if (GetSdkInt() >= 29)
-                    values.Call("put", "relative_path", "Download/" + album);
+                values.Call("put", "relative_path", "Download/" + album);
+                values.Call("put", "is_pending", pending);
 
                 AndroidJavaObject uri = resolver.Call<AndroidJavaObject>("insert", collection, values);
 
@@ -54,6 +62,7 @@ internal static class AndroidMediaExport
                     return false;
                 }
 
+                bool published = false;
                 try
                 {
                     using (AndroidJavaObject stream = resolver.Call<AndroidJavaObject>("openOutputStream", uri))
@@ -64,25 +73,40 @@ internal static class AndroidMediaExport
                             return false;
                         }
 
-                        using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read,
-                                   FileShare.Read, 1 << 16))
+                        try
                         {
-                            var buffer = new byte[ChunkSize];
-                            int read;
-
-                            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+                            using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read,
+                                       FileShare.Read, 1 << 16))
                             {
-                                // Unity 的 AndroidJavaObject 会把 byte[] 转成 jbyteArray
-                                var chunk = read == buffer.Length ? buffer : Trim(buffer, read);
-                                stream.Call("write", chunk);
+                                var buffer = new byte[ChunkSize];
+                                int read;
+                                while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    var chunk = read == buffer.Length ? buffer : Trim(buffer, read);
+                                    stream.Call("write", chunk);
+                                }
                             }
+                            stream.Call("flush");
                         }
-
-                        stream.Call("flush");
+                        finally { stream.Call("close"); }
                     }
+
+                    using (var completed = new AndroidJavaObject("android.content.ContentValues"))
+                    using (var visible = new AndroidJavaObject("java.lang.Integer", 0))
+                    {
+                        completed.Call("put", "is_pending", visible);
+                        if (resolver.Call<int>("update", uri, completed, null, null) <= 0)
+                            throw new IOException("MediaStore did not publish the completed video");
+                    }
+                    published = true;
                 }
                 finally
                 {
+                    if (!published)
+                    {
+                        try { resolver.Call<int>("delete", uri, null, null); }
+                        catch (Exception cleanupFailure) { Debug.LogWarning("[LiveRender] " + cleanupFailure.Message); }
+                    }
                     uri.Dispose();
                 }
 
@@ -94,6 +118,10 @@ internal static class AndroidMediaExport
         {
             reason = failure.GetType().Name + ": " + failure.Message;
             return false;
+        }
+        finally
+        {
+            if (attached) AndroidJNI.DetachCurrentThread();
         }
     }
 

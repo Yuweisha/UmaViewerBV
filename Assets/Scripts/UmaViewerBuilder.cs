@@ -1,4 +1,4 @@
-﻿using CriWareFormats;
+using CriWareFormats;
 using Gallop;
 using Gallop.Live;
 using Gallop.Live.Cutt;
@@ -181,7 +181,35 @@ public class UmaViewerBuilder : MonoBehaviour
         }
     }
 
-    private void LoadNormalUma(UmaContainerCharacter umaContainer, CharaEntry chara, string costumeId, string haedCostumeId)
+    internal UmaContainerCharacter CreateGachaCharacter(CharaEntry chara, string costumeId, string headCostumeId,
+        Transform parent)
+    {
+        var actor = new GameObject($"Gacha_{chara.Id}_{costumeId}").AddComponent<UmaContainerCharacter>();
+        actor.transform.SetParent(parent, false);
+        actor.IsGachaPreview = true;
+        var previousHead = CurrentHead;
+        try
+        {
+            actor.CharaData = UmaDatabaseController.ReadCharaData(chara);
+            if (chara.IsMob)
+                LoadMobUma(actor, chara, costumeId, usePreviewSettings: false);
+            else
+                LoadNormalUma(actor, chara, costumeId, headCostumeId, usePreviewSettings: false);
+            return actor;
+        }
+        catch
+        {
+            Destroy(actor.gameObject);
+            throw;
+        }
+        finally
+        {
+            CurrentHead = previousHead;
+        }
+    }
+
+    private void LoadNormalUma(UmaContainerCharacter umaContainer, CharaEntry chara, string costumeId, string haedCostumeId,
+        bool usePreviewSettings = true)
     {
         int id = chara.Id;
         umaContainer.CharaEntry = chara;
@@ -285,7 +313,7 @@ public class UmaViewerBuilder : MonoBehaviour
         int head_id;
         string head_costumeId;
         int tailId = Convert.ToInt32(charaData["tail_model_id"]);
-        if (ModelSettings.IsHeadFix && CurrentHead != null)
+        if (usePreviewSettings && ModelSettings.IsHeadFix && CurrentHead != null)
         {
             head_id = CurrentHead.id;
             head_costumeId = CurrentHead.costumeId;
@@ -332,7 +360,10 @@ public class UmaViewerBuilder : MonoBehaviour
             umaContainer.LiveHeadCharacterId = head_id;
             if (int.TryParse(actualHeadCostumeId, out int liveHeadSubId))
                 umaContainer.LiveHeadModelSubId = liveHeadSubId;
-            string headClothPath = UmaDatabaseController.HeadPath + $"chr{head_id}_{actualHeadCostumeId}/clothes/" + $"pfb_chr{head_id}_{actualHeadCostumeId}_cloth00";
+            string headClothPrefix = UmaDatabaseController.HeadPath + $"chr{head_id}_{actualHeadCostumeId}/clothes/pfb_chr{head_id}_{actualHeadCostumeId}_cloth";
+            string headClothPath = headClothPrefix + (umaContainer.IsGachaPreview ? "01" : "00");
+            if (umaContainer.IsGachaPreview && !Main.AbList.ContainsKey(headClothPath))
+                headClothPath = headClothPrefix + "00";
             if (Main.AbList.TryGetValue(headClothPath, out UmaDatabaseEntry headClothAsset))
             {
                 Debug.Log($"[UmaViewerBuilder] Load head physics: {headClothPath}");
@@ -397,10 +428,13 @@ public class UmaViewerBuilder : MonoBehaviour
         umaContainer.HeadBone = (GameObject)umaContainer.Body.GetComponent<AssetHolder>()._assetTable["head"];
         umaContainer.EyeHeight = umaContainer.Head.GetComponent<AssetHolder>()._assetTableValue["head_center_offset_y"];
         umaContainer.MergeModel();
-        ApplyNormalCostumeVisibilityOptions(umaContainer);
+        if (usePreviewSettings)
+            ApplyNormalCostumeVisibilityOptions(umaContainer);
         umaContainer.SetHeight(-1);
-        umaContainer.Initialize(!ModelSettings.IsTPose);
+        umaContainer.Initialize(usePreviewSettings && !ModelSettings.IsTPose);
         umaContainer.Position = umaContainer.transform.Find("Position");
+        if (!usePreviewSettings)
+            return;
         umaContainer.SetupBoneHandles();
 
         //修改(载入通用服装ColorSet相关)
@@ -408,7 +442,8 @@ public class UmaViewerBuilder : MonoBehaviour
         UI.LoadColorSetButtons();
     }
 
-    private void LoadMobUma(UmaContainerCharacter umaContainer, CharaEntry chara, string costumeId, int bodyid = -1, bool loadMotion = false)
+    private void LoadMobUma(UmaContainerCharacter umaContainer, CharaEntry chara, string costumeId, int bodyid = -1,
+        bool loadMotion = false, bool usePreviewSettings = true)
     {
         int id = chara.Id;
         umaContainer.CharaEntry = chara;
@@ -618,8 +653,10 @@ public class UmaViewerBuilder : MonoBehaviour
         umaContainer.EyeHeight = umaContainer.Head.GetComponent<AssetHolder>()._assetTableValue["head_center_offset_y"];
         umaContainer.MergeModel();
         umaContainer.SetHeight(-1);
-        umaContainer.Initialize(!ModelSettings.IsTPose);
+        umaContainer.Initialize(usePreviewSettings && !ModelSettings.IsTPose);
         umaContainer.Position = umaContainer.transform.Find("Position");
+        if (!usePreviewSettings)
+            return;
         umaContainer.SetupBoneHandles();
         if (!ModelSettings.IsTPose && loadMotion)
         {
@@ -633,7 +670,7 @@ public class UmaViewerBuilder : MonoBehaviour
         UI.ClearColorSetButtons();
     }
 
-    public UmaContainerCharacter LoadLiveMiniUma(LiveMiniSelection.MiniCharacterInfo info, Transform parent)
+    public UmaContainerCharacter LoadLiveMiniUma(LiveMiniSelection.MiniCharacterInfo info, Transform parent, int? headSubId = null)
     {
         var chara = Main.Characters.Single(c => c.Id == info.CharaId);
         var dress = UmaDatabaseController.Instance.ReadDressData(info.DressId);
@@ -645,7 +682,7 @@ public class UmaViewerBuilder : MonoBehaviour
         mini.IsLive = true;
         mini.LiveMasterDressId = info.DressId;
         mini.CharaData = data;
-        LoadMiniUma(mini, chara, costume, false, D("head_sub_id"));
+        LoadMiniUma(mini, chara, costume, false, headSubId ?? D("head_sub_id"));
         if (mini.Body == null)
             throw new InvalidOperationException("Missing selected Mini body: " + info.CharaId + " / " + info.DressId);
         return mini;
@@ -1479,7 +1516,7 @@ public class UmaViewerBuilder : MonoBehaviour
         CurrentLiveSoundAWB.Add(entry);
     }
 
-    private void ClearLiveSounds()
+    internal void ClearLiveSounds()
     {
         foreach (var liveSound in CurrentLiveSoundAWB)
         {

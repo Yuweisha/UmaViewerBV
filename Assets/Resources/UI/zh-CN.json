@@ -1,4 +1,6 @@
 {
+  "Close": "关闭",
+  "Unable to play the selected CutIn.": "无法播放所选角色的演出。",
   "'Copy": "复制",
   "'Copy Path": "复制路径",
   "'FOV '": "FOV",
@@ -75,6 +77,9 @@
   "Fingers": "手指",
   "Fluctuation": "镜头晃动",
   "Free Camera": "自由视角",
+  "Animation Camera": "演出镜头",
+  "Reset": "重置",
+  "C: camera mode | Home: reset to current shot\nWASD: move | Q/E, R/F: height | Shift: faster\nHold right mouse: look | Wheel: move forward/back": "C：切换镜头　Home：回到当前原镜头\nWASD：移动　Q/E、R/F：升降　Shift：加速\n按住右键：转向　滚轮：前后移动",
   "Full Live Mode(WIP)": "完整Live模式(WIP)",
   "Gacha": "扭蛋",
   "Game Size": "游戏长度",

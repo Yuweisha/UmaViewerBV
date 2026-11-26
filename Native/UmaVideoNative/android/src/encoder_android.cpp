@@ -55,6 +55,13 @@ struct AudioChunk {
     size_t offsetSamples = 0;  // 已被送进编码器的采样数（缓冲装不下时分批送）
 };
 
+struct PendingSample {
+    std::vector<uint8_t> bytes;
+    AMediaCodecBufferInfo info;
+    int32_t track;
+    bool video;
+};
+
 struct Encoder {
     int width = 0;
     int height = 0;
@@ -84,15 +91,16 @@ struct Encoder {
 
     std::deque<VideoFrame> videoQueue;
     std::deque<AudioChunk> audioQueue;
+    std::deque<PendingSample> pendingSamples;
 
     bool audioEnabled = false;
     bool stopping = false;   // 收到 Finish：不再接受新帧
     bool aborting = false;   // 收到 Cancel
     bool finished = false;   // worker 已退出
-    bool failed = false;
+    std::atomic<bool> failed{false};
 
     int64_t submittedFrames = 0;
-    int64_t encodedFrames = 0;
+    std::atomic<int64_t> encodedFrames{0};
     int64_t pushedAudioSamples = 0;
 
     std::string error;
@@ -201,8 +209,8 @@ bool ConfigureVideoCodec(Encoder* enc) {
 bool ConfigureAudioCodec(Encoder* enc) {
     enc->audioCodec = AMediaCodec_createEncoderByType("audio/mp4a-latm");
     if (!enc->audioCodec) {
-        LOGI("no AAC encoder; exporting video without audio");
-        return true;
+        enc->Fail("AAC encoder is unavailable");
+        return false;
     }
 
     AMediaFormat* format = AMediaFormat_new();
@@ -219,18 +227,11 @@ bool ConfigureAudioCodec(Encoder* enc) {
     AMediaFormat_delete(format);
 
     if (status != AMEDIA_OK) {
-        LOGE("AAC configure failed (%s); continuing video-only", StatusText(status).c_str());
-        AMediaCodec_delete(enc->audioCodec);
-        enc->audioCodec = nullptr;
-        return true;
+        enc->Fail("AAC configure failed: " + StatusText(status));
+        return false;
     }
 
-    if (AMediaCodec_start(enc->audioCodec) != AMEDIA_OK) {
-        LOGE("AAC start failed; continuing video-only");
-        AMediaCodec_delete(enc->audioCodec);
-        enc->audioCodec = nullptr;
-        return true;
-    }
+    if (!Check(enc, AMediaCodec_start(enc->audioCodec), "AMediaCodec_start(audio)")) return false;
 
     enc->audioEnabled = true;
     LOGI("audio encoder ready: AAC-LC %d Hz x%d", enc->sampleRate, enc->channels);
@@ -354,13 +355,9 @@ bool FeedOneVideoFrame(Encoder* enc, const VideoFrame& frame, int64_t frameIndex
 // AAC 编码器给出的输入缓冲往往小于 MAX_INPUT_SIZE，一次送不满一个 chunk 时
 // 只送缓冲能装下的部分，其余留在队列里等下一个空缓冲 —— 不能直接判失败。
 bool FeedAudio(Encoder* enc) {
-    if (!enc->audioEnabled) {
+    {
         std::lock_guard<std::mutex> guard(enc->lock);
-        if (!enc->audioQueue.empty()) {
-            enc->audioQueue.pop_front();
-            return true;
-        }
-        return false;
+        if (enc->audioQueue.empty()) return false;
     }
 
     ssize_t index = AMediaCodec_dequeueInputBuffer(enc->audioCodec, 0);
@@ -425,6 +422,23 @@ bool FeedAudio(Encoder* enc) {
 
 // ---------------------------------------------------------------- 输出与复用
 
+bool WriteSample(Encoder* enc, int32_t track, const uint8_t* bytes,
+                 const AMediaCodecBufferInfo& info, bool video) {
+    if (!Check(enc, AMediaMuxer_writeSampleData(enc->muxer, static_cast<size_t>(track), bytes, &info),
+               "AMediaMuxer_writeSampleData")) return false;
+    if (video) enc->encodedFrames++;
+    return true;
+}
+
+bool FlushPendingSamples(Encoder* enc) {
+    while (!enc->pendingSamples.empty()) {
+        const auto& sample = enc->pendingSamples.front();
+        if (!WriteSample(enc, sample.track, sample.bytes.data(), sample.info, sample.video)) return false;
+        enc->pendingSamples.pop_front();
+    }
+    return true;
+}
+
 bool DrainCodec(Encoder* enc, AMediaCodec* codec, int32_t* track, bool isVideo,
                 bool draining) {
     AMediaCodecBufferInfo info;
@@ -453,6 +467,10 @@ bool DrainCodec(Encoder* enc, AMediaCodec* codec, int32_t* track, bool isVideo,
                 }
                 enc->muxerStarted = true;
                 LOGI("muxer started (video=%d audio=%d)", enc->videoTrack, enc->audioTrack);
+                if (!FlushPendingSamples(enc)) {
+                    AMediaFormat_delete(format);
+                    return false;
+                }
             }
 
             AMediaFormat_delete(format);
@@ -465,20 +483,31 @@ bool DrainCodec(Encoder* enc, AMediaCodec* codec, int32_t* track, bool isVideo,
             continue;
         }
 
-        if (info.size > 0 && enc->muxerStarted && *track >= 0) {
+        if (info.size > 0 && !(info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)) {
             size_t capacity = 0;
             uint8_t* buffer = AMediaCodec_getOutputBuffer(codec, static_cast<size_t>(index),
                                                           &capacity);
 
-            if (!buffer) {
-                enc->Fail("getOutputBuffer returned null");
+            if (!buffer || info.offset < 0 || static_cast<size_t>(info.offset) > capacity
+                || static_cast<size_t>(info.size) > capacity - static_cast<size_t>(info.offset) || *track < 0) {
+                AMediaCodec_releaseOutputBuffer(codec, static_cast<size_t>(index), false);
+                enc->Fail("invalid codec output buffer or track");
                 return false;
             }
 
-            AMediaMuxer_writeSampleData(enc->muxer, static_cast<size_t>(*track), buffer, &info);
-
-            if (isVideo && !(info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)) {
-                enc->encodedFrames++;
+            if (enc->muxerStarted) {
+                if (!WriteSample(enc, *track, buffer, info, isVideo)) {
+                    AMediaCodec_releaseOutputBuffer(codec, static_cast<size_t>(index), false);
+                    return false;
+                }
+            } else {
+                PendingSample sample;
+                sample.bytes.assign(buffer + info.offset, buffer + info.offset + info.size);
+                sample.info = info;
+                sample.info.offset = 0;
+                sample.track = *track;
+                sample.video = isVideo;
+                enc->pendingSamples.push_back(std::move(sample));
             }
         }
 
@@ -500,49 +529,51 @@ bool DrainCodec(Encoder* enc, AMediaCodec* codec, int32_t* track, bool isVideo,
     return false;
 }
 
-void SignalEndOfStream(Encoder* enc, AMediaCodec* codec, bool isVideo) {
-    ssize_t index = AMediaCodec_dequeueInputBuffer(codec, 1000000);
+bool SignalEndOfStream(Encoder* enc, AMediaCodec* codec, bool isVideo) {
+    ssize_t index = AMediaCodec_dequeueInputBuffer(codec, kDequeueTimeoutUs);
 
     if (index >= 0) {
-        AMediaCodec_queueInputBuffer(codec, static_cast<size_t>(index), 0, 0, 0,
-                                     AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-    } else {
-        LOGE("%s: could not queue EOS buffer", isVideo ? "video" : "audio");
+        const int64_t timestamp = isVideo ? enc->submittedFrames * 1000000LL / enc->fps
+                                         : enc->pushedAudioSamples * 1000000LL / enc->sampleRate;
+        return Check(enc, AMediaCodec_queueInputBuffer(codec, static_cast<size_t>(index), 0, 0,
+                     static_cast<uint64_t>(timestamp), AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM), "queue EOS");
     }
+    if (index != AMEDIACODEC_INFO_TRY_AGAIN_LATER)
+        enc->Fail(std::string(isVideo ? "video" : "audio") + " dequeue EOS input: " + std::to_string(index));
+    return false;
 }
 
 void WorkerMain(Encoder* enc) {
     if (!ConfigureVideoCodec(enc)) return;
     if (!ConfigureAudioCodec(enc)) return;
 
-    bool videoEos = false;
-    bool audioEos = !enc->audioEnabled;
+    bool videoEosSent = false;
+    bool audioEosSent = false;
+    bool videoEosReceived = false;
+    bool audioEosReceived = false;
+    auto finishDeadline = std::chrono::steady_clock::time_point::max();
 
     while (true) {
+        bool finishing;
+        bool queuesEmpty;
         {
-            std::unique_lock<std::mutex> guard(enc->lock);
-
+            std::lock_guard<std::mutex> guard(enc->lock);
             if (enc->aborting) break;
-
-            if (enc->stopping && enc->videoQueue.empty() && enc->audioQueue.empty()) {
-                guard.unlock();
-
-                if (!videoEos) {
-                    SignalEndOfStream(enc, enc->videoCodec, true);
-                    videoEos = true;
-                }
-
-                if (!audioEos && enc->audioCodec) {
-                    SignalEndOfStream(enc, enc->audioCodec, false);
-                    audioEos = true;
-                }
-
-                guard.lock();
-            } else if (enc->videoQueue.empty() && enc->audioQueue.empty() && !enc->stopping) {
-                guard.unlock();
-                // 无数据时空转一小会儿，等主线程提交
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
+            if (enc->failed) return;
+            finishing = enc->stopping;
+            queuesEmpty = enc->videoQueue.empty() && enc->audioQueue.empty();
+        }
+        if (finishing) {
+            if (finishDeadline == std::chrono::steady_clock::time_point::max())
+                finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            if (std::chrono::steady_clock::now() >= finishDeadline) {
+                enc->Fail("codec did not finish draining within 30 seconds");
+                return;
+            }
+            if (queuesEmpty) {
+                if (!videoEosSent) videoEosSent = SignalEndOfStream(enc, enc->videoCodec, true);
+                if (!audioEosSent) audioEosSent = SignalEndOfStream(enc, enc->audioCodec, false);
+                if (enc->failed) return;
             }
         }
 
@@ -573,36 +604,27 @@ void WorkerMain(Encoder* enc) {
         }
 
         // 送音频
-        if (!audioEos) FeedAudio(enc);
-
-        // 收输出
-        bool videoDone = DrainCodec(enc, enc->videoCodec, &enc->videoTrack, true, false);
+        if (!audioEosSent) FeedAudio(enc);
         if (enc->failed) return;
 
-        if (!audioEos && enc->audioCodec) {
-            bool audioDone = DrainCodec(enc, enc->audioCodec, &enc->audioTrack, false, false);
+        // 收输出
+        if (!videoEosReceived)
+            videoEosReceived = DrainCodec(enc, enc->videoCodec, &enc->videoTrack, true, finishing);
+        if (enc->failed) return;
+
+        if (!audioEosReceived) {
+            audioEosReceived = DrainCodec(enc, enc->audioCodec, &enc->audioTrack, false, finishing);
             if (enc->failed) return;
-            if (audioDone) audioEos = true;
         }
 
-        if (videoDone) {
-            // 视频 EOF 后继续把音频排空
-            while (!audioEos && enc->audioCodec) {
-                FeedAudio(enc);
-                bool audioDone = DrainCodec(enc, enc->audioCodec, &enc->audioTrack, false, true);
-                if (enc->failed) return;
-                if (audioDone) break;
-            }
-            break;
-        }
-
-        if (videoEos && audioEos) break;
+        if (videoEosReceived && audioEosReceived) break;
+        if (queuesEmpty) std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
-    if (enc->muxer && enc->muxerStarted) AMediaMuxer_stop(enc->muxer);
+    if (enc->muxerStarted && !Check(enc, AMediaMuxer_stop(enc->muxer), "AMediaMuxer_stop")) return;
 
     LOGI("worker done: submitted=%lld encoded=%lld", static_cast<long long>(enc->submittedFrames),
-         static_cast<long long>(enc->encodedFrames));
+         static_cast<long long>(enc->encodedFrames.load()));
 
     std::lock_guard<std::mutex> guard(enc->lock);
     enc->finished = true;
@@ -617,7 +639,7 @@ void WorkerMain(Encoder* enc) {
 
 API void* UVVideoAndroid_Create(int width, int height, int fps, int bitrateMbps, int hevc,
                                 const char* path, int sampleRate, int channels) {
-    if (width <= 0 || height <= 0 || fps <= 0 || !path) {
+    if (width <= 0 || height <= 0 || (width & 1) || (height & 1) || fps <= 0 || !path) {
         LOGE("UVVideoAndroid_Create: invalid arguments");
         return nullptr;
     }
@@ -667,10 +689,10 @@ API int UVVideoAndroid_SubmitRGBA(void* handle, const void* rgba, int width, int
     {
         std::unique_lock<std::mutex> guard(enc->lock);
         enc->videoSpace.wait(guard, [enc] {
-            return enc->failed || enc->aborting || enc->videoQueue.size() < kMaxQueuedFrames;
+            return enc->failed || enc->aborting || enc->stopping || enc->videoQueue.size() < kMaxQueuedFrames;
         });
 
-        if (enc->failed || enc->aborting) return -1;
+        if (enc->failed || enc->aborting || enc->stopping) return -1;
 
         VideoFrame frame;
         frame.rgba.resize(bytes);
@@ -688,7 +710,6 @@ API int UVVideoAndroid_SubmitAudio(void* handle, const float* interleaved, int s
     auto* enc = static_cast<Encoder*>(handle);
 
     if (!enc || !interleaved || sampleFrames <= 0) return -1;
-    if (!enc->audioEnabled) return 0;
 
     const int channels = enc->channels;
     AudioChunk chunk;
@@ -704,7 +725,7 @@ API int UVVideoAndroid_SubmitAudio(void* handle, const float* interleaved, int s
 
     {
         std::lock_guard<std::mutex> guard(enc->lock);
-        if (enc->failed || enc->aborting) return -1;
+        if (enc->failed || enc->aborting || enc->stopping) return -1;
         enc->audioQueue.push_back(std::move(chunk));
     }
 
@@ -734,7 +755,7 @@ API int UVVideoAndroid_State(void* handle, int* submitted, int* written) {
 
     std::lock_guard<std::mutex> guard(enc->lock);
     if (submitted) *submitted = static_cast<int>(enc->submittedFrames);
-    if (written) *written = static_cast<int>(enc->encodedFrames);
+    if (written) *written = static_cast<int>(enc->encodedFrames.load());
 
     if (enc->failed) return -1;
     if (enc->finished) return 1;

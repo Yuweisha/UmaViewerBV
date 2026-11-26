@@ -34,6 +34,8 @@ namespace Gallop.RenderPipeline
         // UI rendering is excluded by LensFlareFeature.AddRenderPasses.
         public bool IsMirrorRendering;
         public bool IsUIRendering;
+        internal bool IsCutInRendering;
+        internal float? CutInShaderTime;
         // Renderer-owned state recovered from GallopRenderer.Setup / culling.
         public bool IsClearDepth = true;
         public bool IsInvertCulling, IsDisableObjectCulling, IsDisableLightCulling;
