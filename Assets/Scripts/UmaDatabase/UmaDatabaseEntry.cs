@@ -53,7 +53,7 @@ public class UmaDatabaseEntry
     {
         get
         {
-            if ((Config.Instance.DownloadMissingResources || Config.Instance.WorkMode == WorkMode.Standalone) && !File.Exists(Path) && !UmaMissingAssets.IsMissing(Url))
+            if ((Config.Instance.DownloadMissingResources || Config.Instance.WorkMode == WorkMode.Standalone) && !UmaViewerDownload.IsAssetCached(this) && !UmaMissingAssets.IsMissing(Url))
             {
                 DownloadAsset(this);
             }

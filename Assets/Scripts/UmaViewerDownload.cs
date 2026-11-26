@@ -10,6 +10,7 @@ using static UmaViewerUI;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 
 public class UmaViewerDownload : MonoBehaviour
 {
@@ -44,6 +45,19 @@ public class UmaViewerDownload : MonoBehaviour
     {
         if (IsCnCdn)
         {
+            if (Config.Instance.WorkMode == WorkMode.Standalone)
+            {
+                const string resourceServer = "https://files.buenavista.fans:8443/umamusume/dl/";
+                MANIFEST_ROOT_URL = resourceServer + "resources/Manifest";
+                GENERIC_BASE_URL = resourceServer + "resources/Generic";
+#if UNITY_ANDROID
+                ASSET_BASE_URL = resourceServer + "resources/Android/assetbundles/";
+#else
+                ASSET_BASE_URL = resourceServer + "resources/Windows/assetbundles/";
+#endif
+                return;
+            }
+
             MANIFEST_ROOT_URL =
                 "https://umamusume.cn-sy1.rains3.com/dat/";
 
@@ -147,7 +161,7 @@ public class UmaViewerDownload : MonoBehaviour
   
     public static IEnumerator DownloadAssets(List<UmaDatabaseEntry> entries, Action<int, int, string> callback = null)
     {
-        entries = entries.Where(e => !File.Exists(e.Path) && !UmaMissingAssets.IsMissing(e.Url)).ToList();
+        entries = entries.Where(e => !IsAssetCached(e) && !UmaMissingAssets.IsMissing(e.Url)).ToList();
         if (entries.Count == 0) yield break;
         int completed = 0;
         activeAssetDownloadBatches++;
@@ -182,9 +196,11 @@ public class UmaViewerDownload : MonoBehaviour
 
             if (data == null)
             {
+                string message = $"Failed to download resource '{entry.Name}' ({entry.Url}): {error}";
+                Debug.LogError(message);
                 if (Instance)
                 {
-                    Instance.ShowMessage($"Failed to download resources : {error}", UIMessageType.Error);
+                    Instance.ShowMessage(message, UIMessageType.Error);
                 }
             }
             else
@@ -274,7 +290,11 @@ public class UmaViewerDownload : MonoBehaviour
                 }
                 else
                 {
-                    return new DownloadResponse { Data = await ReadResponseBytesAsync(response, timeoutSeconds).ConfigureAwait(false) };
+                    byte[] data = await ReadResponseBytesAsync(response, timeoutSeconds).ConfigureAwait(false);
+                    string resourceError = hash != null ? ResourceResponseError(data) : null;
+                    if (resourceError == null)
+                        return new DownloadResponse { Data = data };
+                    lastError = resourceError;
                 }
             }
             catch (Exception ex)
@@ -294,8 +314,35 @@ public class UmaViewerDownload : MonoBehaviour
     private static string ResourceHash(string url)
     {
         var uri = new Uri(url);
-        if (!uri.AbsolutePath.StartsWith("/dl/resources/", StringComparison.Ordinal)) return null;
+        if (uri.AbsolutePath.IndexOf("/dl/resources/", StringComparison.Ordinal) < 0) return null;
         return System.IO.Path.GetFileName(uri.AbsolutePath);
+    }
+
+    private static string ResourceResponseError(byte[] data)
+    {
+        if (data.Length == 0 || data.Length > 4096 || data[0] != '{')
+            return null;
+        try
+        {
+            var response = JObject.Parse(Encoding.UTF8.GetString(data));
+            if (response["code"]?.Type == JTokenType.Integer && (int)response["code"] != 200 &&
+                response["message"]?.Type == JTokenType.String)
+                return $"CDN error {response["code"]}: {response["message"]}";
+        }
+        catch (Newtonsoft.Json.JsonException) { }
+        return null;
+    }
+
+    public static bool IsAssetCached(UmaDatabaseEntry entry)
+    {
+        if (!File.Exists(entry.Path))
+            return false;
+        if (new FileInfo(entry.Path).Length <= 4096 && ResourceResponseError(File.ReadAllBytes(entry.Path)) != null)
+        {
+            File.Delete(entry.Path);
+            return false;
+        }
+        return true;
     }
 
     private static async Task<byte[]> ReadResponseBytesAsync(HttpResponseMessage response, int timeoutSeconds)

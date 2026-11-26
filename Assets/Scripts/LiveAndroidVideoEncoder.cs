@@ -72,7 +72,7 @@ internal sealed class LiveAndroidVideoEncoder : IDisposable
             const int rate = 48000;
             candidate.handle = UVVideoAndroid_Create(
                 settings.Width, settings.Height, settings.Fps, settings.BitrateMbps,
-                settings.Encoder.IndexOf("265", StringComparison.Ordinal) >= 0 ? 1 : 0,
+                settings.Encoder == LiveRenderSettings.AndroidEncoders[1] ? 1 : 0,
                 path, rate, 2);
 
             if (candidate.handle == IntPtr.Zero)
@@ -117,7 +117,10 @@ internal sealed class LiveAndroidVideoEncoder : IDisposable
         try
         {
             if (UVVideoAndroid_SubmitRGBA(handle, pin.AddrOfPinnedObject(), width, height) != 0)
+            {
                 ThrowIfFailed();
+                throw new InvalidOperationException("Android encoder rejected video input");
+            }
         }
         finally
         {
@@ -140,7 +143,10 @@ internal sealed class LiveAndroidVideoEncoder : IDisposable
         try
         {
             if (UVVideoAndroid_SubmitAudio(handle, pin.AddrOfPinnedObject(), sampleFrames, timestampUs) != 0)
+            {
                 ThrowIfFailed();
+                throw new InvalidOperationException("Android encoder rejected audio input");
+            }
         }
         finally
         {
@@ -152,7 +158,8 @@ internal sealed class LiveAndroidVideoEncoder : IDisposable
     {
         if (ending) return;
 
-        UVVideoAndroid_Finish(handle);
+        if (UVVideoAndroid_Finish(handle) != 0)
+            throw new InvalidOperationException("Android encoder could not finish");
         ending = true;
     }
 

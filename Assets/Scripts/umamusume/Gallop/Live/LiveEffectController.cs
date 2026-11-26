@@ -180,6 +180,7 @@ namespace Gallop.Live
             private readonly Vector3 initialPosition, initialAngle;
             private readonly ParticleSystem root;
             private readonly ParticleSystem[] particles;
+            private readonly float[] initialParticleSpeeds;
             private readonly Renderer[] renderers;
             private readonly Animator[] animators;
             private readonly Dictionary<int, ParticleSystem> namedParticles = new Dictionary<int, ParticleSystem>();
@@ -202,10 +203,18 @@ namespace Gallop.Live
                 initialAngle = transform.localEulerAngles;
                 root = instance.GetComponentInChildren<ParticleSystem>(true);
                 particles = instance.GetComponentsInChildren<ParticleSystem>(true);
+                initialParticleSpeeds = new float[particles.Length];
                 renderers = instance.GetComponentsInChildren<Renderer>(true);
                 animators = instance.GetComponentsInChildren<Animator>(true);
-                foreach (var particle in particles)
+                float gravityScale = TimelineParticlePhysics.GravityModifierScale(Physics.gravity);
+                for (int index = 0; index < particles.Length; index++)
+                {
+                    var particle = particles[index];
+                    var main = particle.main;
+                    initialParticleSpeeds[index] = main.simulationSpeed;
+                    TimelineParticlePhysics.ScaleGravityModifier(main, gravityScale);
                     namedParticles[FNVHash.Generate(particle.gameObject.name)] = particle;
+                }
                 transform.SetParent(fallbackParent, false);
                 SetLayer(normalLayer);
                 Stop(true);
@@ -230,11 +239,12 @@ namespace Gallop.Live
                 SetLayer(info.isTransparentFX ? transparentLayer
                     : info.ExcludeColorCorrection ? excludedColorCorrectionLayer : normalLayer);
                 speed = info.Speed;
-                foreach (var particle in particles)
+                for (int index = 0; index < particles.Length; index++)
                 {
+                    var particle = particles[index];
                     if (particle == null) continue;
                     var main = particle.main;
-                    main.simulationSpeed = speed;
+                    main.simulationSpeed = initialParticleSpeeds[index] * speed;
                 }
                 foreach (var animator in animators) if (animator != null) animator.speed = paused ? 0f : speed;
                 if (info.IsParticleParam) UpdateParticleParams(info.ParticleParamArray);

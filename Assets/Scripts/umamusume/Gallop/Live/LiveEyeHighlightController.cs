@@ -227,18 +227,47 @@ namespace Gallop.Live
             if (normalized >= 1f) Stop();
         }
 
-        public void AfterTimeline()
+        public void AfterTimeline() => AfterTimeline(null);
+
+        private void AfterTimeline(float? pupilScale)
         {
             if (!prepared || disposed) return;
             foreach (var part in Parts) part.AfterApplyDrivenKey();
-            if (actor.FaceDrivenKeyTarget != null) PupilScale = actor.FaceDrivenKeyTarget.LiveEyePupilScale;
+            PupilScale = pupilScale ?? actor.FaceDrivenKeyTarget?.LiveEyePupilScale ?? PupilScale;
             ApplyMaterial();
+            ApplyLocatorState();
+            prepared = false;
+        }
+
+        private void ApplyLocatorState()
+        {
             if (locator != null)
             {
                 int type = Mathf.RoundToInt(Mathf.Max(0, locator.localPosition.z * 100f));
                 if (type != locatorType) { locatorType = type; if (type < 3) Play(type); }
             }
-            prepared = false;
+        }
+
+        internal void SampleCutIn(float timelineTime, float delta, float facialTime, bool reset,
+            bool useFacialStart, bool forceFacialTime, Action applyFace, bool pupilEnabled)
+        {
+            if (reset || !float.IsNaN(lastTime) && timelineTime < lastTime)
+            {
+                Stop();
+                Interpolating = false;
+                locatorType = 0;
+                lastTime = float.NaN;
+            }
+            var previous = State;
+            ApplyLocatorState();
+            if (State != 0 && (forceFacialTime || useFacialStart && State != previous))
+            {
+                PlayTime = Mathf.Max(0f, facialTime);
+                delta = 0f;
+            }
+            BeforeTimeline(timelineTime, delta);
+            applyFace();
+            AfterTimeline(pupilEnabled ? 1f : 0f);
         }
 
         public void Dispose()

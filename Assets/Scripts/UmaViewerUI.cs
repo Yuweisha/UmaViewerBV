@@ -162,6 +162,7 @@ public partial class UmaViewerUI : MonoBehaviour
 
     private void OnDestroy()
     {
+        CloseGachaPlayback();
         UmaAssetManager.OnLoadedBundleUpdate -= AssetSettings.LoadedAssetsAdd;
         UmaAssetManager.OnLoadedBundleRemove -= AssetSettings.LoadedAssetsRemove;
         UmaAssetManager.OnLoadedBundleClear -= AssetSettings.LoadedAssetsClear;
@@ -170,6 +171,12 @@ public partial class UmaViewerUI : MonoBehaviour
 
     private void Update()
     {
+        if (gachaActive)
+        {
+            if (Input.GetKeyDown(KeyCode.Escape))
+                CloseGachaPlayback();
+            return;
+        }
         if (Builder.CurrentAudioSources.Count > 0 && Builder.CurrentAudioSources[0])
         {
             AudioSource MianSource = Builder.CurrentAudioSources[0];

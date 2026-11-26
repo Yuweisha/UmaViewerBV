@@ -81,7 +81,12 @@ public partial class UmaContainerCharacter
 
     void UpdatePreviewShaderEffects(float delta)
     {
-        if(IsLive)return;
+        if(IsLive||IsGachaPreview)return;
+        AdvanceShaderEffects(delta);
+    }
+
+    internal void AdvanceShaderEffects(float delta)
+    {
         if(HeadShaderEffectData!=null)HeadShaderEffectData.updateUV(delta);
         if(BodyShaderEffectData!=null)BodyShaderEffectData.updateUV(delta);
     }

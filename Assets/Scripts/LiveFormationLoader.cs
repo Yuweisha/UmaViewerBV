@@ -213,7 +213,7 @@ public static class LiveFormationLoader
         }
     }
 
-    static string CostumeForDress(DataRow dress, CharaEntry character, UmaDatabaseController db)
+    internal static string CostumeForDress(DataRow dress, CharaEntry character, UmaDatabaseController db)
     {
         int costumeType = Int(dress, "costume_type");
         int dressChara = Int(dress, "chara_id");

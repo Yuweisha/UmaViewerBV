@@ -13,6 +13,7 @@ namespace Gallop.RenderPipeline
         public struct Parameter
         {
             public bool IsEnable, IsEnabledBorderClear, IsEnabledBlurAlpha;
+            internal bool UseNativeCutInBlur;
             public Camera TargetCamera;
             public Transform SunTransform;
             public Vector3 SunPosition;
@@ -183,7 +184,8 @@ namespace Gallop.RenderPipeline
                 Camera camera = _parameter.TargetCamera != null ? _parameter.TargetCamera : renderingData.cameraData.camera;
                 Vector3 viewport = ResolveViewport(_parameter, camera);
                 int iterations = Mathf.Clamp(_parameter.BlurIterations, 1, 4);
-                if (_parameter.IsEnabledBorderClear && (Mathf.Abs(viewport.x - 0.5f) > 1f || Mathf.Abs(viewport.y - 0.5f) > 1f))
+                if (!_parameter.UseNativeCutInBlur && _parameter.IsEnabledBorderClear &&
+                    (Mathf.Abs(viewport.x - 0.5f) > 1f || Mathf.Abs(viewport.y - 0.5f) > 1f))
                 {
                     if (iterations == 1)
                         return;
@@ -214,15 +216,16 @@ namespace Gallop.RenderPipeline
                 }
 
                 int blurPass = _parameter.IsEnabledBlurAlpha ? 4 : 1;
+                float radialStep = _parameter.UseNativeCutInBlur ? 4.60517025f : 6f;
                 float radius = _parameter.BlurRadius / 768f;
                 cmd.SetGlobalVector(BlurRadius, new Vector4(radius, radius, 0f, 0f));
                 for (int i = 0; i < iterations; i++)
                 {
                     cmd.Blit(Low0, Low1, _material, blurPass);
-                    radius = _parameter.BlurRadius * (i * 2f + 1f) * 6f / 768f;
+                    radius = _parameter.BlurRadius * (i * 2f + 1f) * radialStep / 768f;
                     cmd.SetGlobalVector(BlurRadius, new Vector4(radius, radius, 0f, 0f));
                     cmd.Blit(Low1, Low0, _material, blurPass);
-                    radius = _parameter.BlurRadius * (i * 2f + 2f) * 6f / 768f;
+                    radius = _parameter.BlurRadius * (i * 2f + 2f) * radialStep / 768f;
                     cmd.SetGlobalVector(BlurRadius, new Vector4(radius, radius, 0f, 0f));
                 }
 

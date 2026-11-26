@@ -51,7 +51,7 @@ public static class UmaStandalone
     {
         if (!IsSupportedPlatform || Config.Instance.Region != Region.Jp)
         {
-            progress?.Invoke("Standalone database rebuilding currently supports the Japan Windows CDN only.", UIMessageType.Error);
+            progress?.Invoke("Standalone database rebuilding currently supports the Japan region on Windows and Android.", UIMessageType.Error);
             completed(false);
             yield break;
         }
@@ -76,9 +76,10 @@ public static class UmaStandalone
         if (Path.GetFileName(meta) == "meta_umaviewer" && UmaKeySync.NeedsSync(meta))
         {
             UmaDatabaseController.ResetInstance();
-            bool synced = false;
-            yield return UmaKeySync.Ensure(meta, result => synced = result, progress);
-            if (!synced) { completed(false); yield break; }
+            progress?.Invoke("Rebuilding incomplete resource keys from manifests", UIMessageType.Default);
+            bool rebuilt = false;
+            yield return RebuildCore(progress, result => rebuilt = result);
+            if (!rebuilt) { completed(false); yield break; }
         }
         UmaDatabaseController.ResetInstance();
         var database = UmaDatabaseController.Instance;

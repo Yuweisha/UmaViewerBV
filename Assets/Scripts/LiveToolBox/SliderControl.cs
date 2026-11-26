@@ -8,6 +8,18 @@ public class SliderControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandl
     public bool is_Outed;
     public Button PauseButton;
     public bool IsUserPaused { get; private set; }
+    public bool IsDragging { get; private set; }
+    public System.Action PauseRequested { get; set; }
+
+    public static Slider CreateProgressBar(Transform parent)
+    {
+        return Instantiate(Resources.Load<GameObject>("Prefabs/PlaybackProgress"), parent, false).GetComponent<Slider>();
+    }
+
+    public void SetPaused(bool paused)
+    {
+        IsUserPaused = paused;
+    }
 
     private void Awake()
     {
@@ -17,6 +29,11 @@ public class SliderControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandl
 
     public void TogglePause()
     {
+        if (PauseRequested != null)
+        {
+            PauseRequested();
+            return;
+        }
         var director=Gallop.Live.Director.instance;
         if(director==null||!director._isLiveSetup||director.IsOfflineRendering)return;
         if(director.IsPlaybackPaused)
@@ -31,12 +48,14 @@ public class SliderControl : MonoBehaviour, IPointerDownHandler, IPointerUpHandl
 
     public void OnPointerDown(PointerEventData eventData)
     {
+        IsDragging = true;
         is_Outed=false;
         is_Touched=true;
     }
 
     public void OnPointerUp(PointerEventData eventData)
     {
+        IsDragging = false;
         if(!is_Touched)return;
         is_Touched=IsUserPaused;
         is_Outed=true;

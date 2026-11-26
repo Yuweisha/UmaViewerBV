@@ -56,11 +56,17 @@ public partial class UmaViewerUI
             // —— 旧 NVIDIA 驱动会让 *_nvenc 在 configure 阶段就失败。
             if(Application.platform==RuntimePlatform.Android)
             {
-                _renderEncoder=RenderChoice(template,panel,"Encoder",-80,LiveRenderSettings.AndroidEncoderLabels,1);
+                _renderEncoder=RenderChoice(template,panel,"Encoder",-80,LiveRenderSettings.AndroidEncoderLabels,0);
             }
             else
             {
-                _encoderIndices=LiveRenderSettings.AvailableEncoders(LiveRenderSettings.RequireFfmpeg());
+                try { _encoderIndices=LiveRenderSettings.AvailableEncoders(LiveRenderSettings.RequireFfmpeg()); }
+                catch(Exception failure)
+                {
+                    Destroy(_liveRenderDialog);_liveRenderDialog=null;
+                    ShowMessage(failure.Message,UIMessageType.Error);
+                    return;
+                }
                 var labels=_encoderIndices.Select(i=>LiveRenderSettings.EncoderLabels[i]).ToArray();
                 _renderEncoder=RenderChoice(template,panel,"Encoder",-80,labels,0);
             }
@@ -115,7 +121,7 @@ public partial class UmaViewerUI
         string encoder;
 
         if(Application.platform==RuntimePlatform.Android)
-            encoder=_renderEncoder.value==1?"h265_mediacodec":"h264_mediacodec";
+            encoder=LiveRenderSettings.AndroidEncoders[_renderEncoder.value];
         else if(_encoderIndices!=null&&_renderEncoder.value>=0&&_renderEncoder.value<_encoderIndices.Length)
             encoder=LiveRenderSettings.Encoders[_encoderIndices[_renderEncoder.value]];
         else
