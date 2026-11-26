@@ -71,7 +71,7 @@ public class ManifestDB : IDisposable
         this.callback = callback;
         callback?.Invoke("Checking Resource Version", UIMessageType.Default);
         yield return UpdateMetaDB();
-        if (!isError)
+        if (!isError && UmaKeySync.NeedsSync(DBPath))
         {
             bool synced = false;
             yield return UmaKeySync.Ensure(DBPath, result => synced = result, callback);
@@ -297,7 +297,7 @@ public class ManifestDB : IDisposable
 
     private void UpdateManifestEntry(int index, string type, ManifestEntry entry, SqliteCommand command)
     {
-        command.CommandText = "INSERT OR REPLACE INTO a (i,n,d,g,l,c,h,m,k,s,p) VALUES (@id,@name,@deps,@group,@length,@check,@hash,@m,@k,@s,@p)";
+        command.CommandText = "INSERT OR REPLACE INTO a (i,n,d,g,l,c,h,m,k,s,p,e) VALUES (@id,@name,@deps,@group,@length,@check,@hash,@m,@k,@s,@p,@key)";
         command.Parameters.Clear();
         command.Parameters.Add(new SqliteParameter("@id", index));
         command.Parameters.Add(new SqliteParameter("@name", (type.Contains("manifest") ? "//" : "") + entry.tname));
@@ -310,6 +310,7 @@ public class ManifestDB : IDisposable
         command.Parameters.Add(new SqliteParameter("@k", (byte)entry.kind));
         command.Parameters.Add(new SqliteParameter("@s", 1));
         command.Parameters.Add(new SqliteParameter("@p", entry.priority));
+        command.Parameters.Add(new SqliteParameter("@key", entry.key));
         command.ExecuteNonQuery();
     }
 

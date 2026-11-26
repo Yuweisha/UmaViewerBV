@@ -16,23 +16,23 @@ public static class UmaKeySync
 
     public static bool NeedsSync(string dbPath)
     {
-        using var connection = new SqliteConnection("Data Source=" + dbPath);
+        using var connection = new SqliteConnection("Data Source=" + dbPath + ";Pooling=False");
         connection.Open();
         using var probe = new SqliteCommand("SELECT COUNT(*) FROM pragma_table_info('a') WHERE name='e'", connection);
         if (Convert.ToInt64(probe.ExecuteScalar()) == 0) return true;
-        probe.CommandText = "SELECT COUNT(*) FROM a WHERE e IS NOT NULL AND e<>0";
-        return Convert.ToInt64(probe.ExecuteScalar()) == 0;
+        probe.CommandText = "SELECT COUNT(*) FROM a WHERE k=0 AND n NOT LIKE '%.%' AND n<>'livesettings' AND (e IS NULL OR e=0)";
+        return Convert.ToInt64(probe.ExecuteScalar()) != 0;
     }
 
     public static IEnumerator Ensure(string dbPath, Action<bool> completed, Action<string, UIMessageType> progress = null)
     {
-        progress?.Invoke("Downloading Windows resource keys", UIMessageType.Default);
+        progress?.Invoke("Downloading resource keys", UIMessageType.Default);
         string payload = null;
         yield return UmaViewerDownload.DownloadText(Url, text => payload = text, 30);
         bool success = false;
         try
         {
-            if (string.IsNullOrWhiteSpace(payload)) throw new IOException("Windows key service is unavailable.");
+            if (string.IsNullOrWhiteSpace(payload)) throw new IOException("Resource key service is unavailable.");
             int applied = Apply(dbPath, payload);
             if (applied == 0 || NeedsSync(dbPath)) throw new InvalidDataException("The key table did not match any resource hashes.");
             progress?.Invoke($"Applied keys to {applied} resources", UIMessageType.Default);
@@ -48,7 +48,7 @@ public static class UmaKeySync
     // Match by the platform-specific content hash; never infer keys from names.
     public static int Apply(string dbPath, string payload)
     {
-        using var connection = new SqliteConnection("Data Source=" + dbPath);
+        using var connection = new SqliteConnection("Data Source=" + dbPath + ";Pooling=False");
         connection.Open();
         using var transaction = connection.BeginTransaction();
         using var command = new SqliteCommand("SELECT COUNT(*) FROM pragma_table_info('a') WHERE name='e'", connection, transaction);

@@ -45,6 +45,7 @@ namespace AnimateToUnity
         int textureIndex=-1,textureKeyIndex;
         Texture replacement;
         bool replacementKeepSize=true;
+        float replacementScale=1f;
         public AnPlaneMesh(AnRoot root,AnPlaneParameter parameter,Transform target,int order,AnBlendModeTypes blendMode,AnObjectTypes objectType,int stencilRef,int stencilCompare)
         {
             this.root=root;Parameter=parameter;
@@ -65,14 +66,15 @@ namespace AnimateToUnity
             var info=root.FindMesh(Parameter._textureNameList[index],out var group);
             if(info==null)throw new InvalidOperationException("A2U mesh missing: "+Parameter._textureNameList[index]);
             if(info._meshType!=AnMeshTypes.Normal)throw new NotSupportedException("A2U mesh type: "+info._meshType);
-            baseVertices=AnMeshGeometry.Quad(replacement!=null&&!replacementKeepSize?new Vector2(replacement.width,replacement.height):info._size);Mesh.vertices=baseVertices;Mesh.triangles=AnMeshGeometry.Triangles;
+            var size=replacement!=null&&!replacementKeepSize?new Vector2(replacement.width,replacement.height):info._size;
+            baseVertices=AnMeshGeometry.Quad(replacement!=null?size*replacementScale:size);Mesh.vertices=baseVertices;Mesh.triangles=AnMeshGeometry.Triangles;
             Mesh.uv=replacement!=null?new[]{Vector2.zero,Vector2.one,Vector2.right,Vector2.up}:AnMeshGeometry.UV(info);
             Mesh.normals=new[]{Vector3.back,Vector3.back,Vector3.back,Vector3.back};
             material.mainTexture=replacement!=null?replacement:group._textureSetColor;
             textureIndex=index;
         }
-        public void SetTexture(Texture texture,bool keepSize=true)
-        {replacement=texture;replacementKeepSize=keepSize;int previous=textureIndex;textureIndex=-1;SelectTexture(previous);}
+        public void SetTexture(Texture texture,bool keepSize=true,float scale=1f)
+        {replacement=texture;replacementKeepSize=keepSize;replacementScale=scale;int previous=textureIndex;textureIndex=-1;SelectTexture(previous);}
         public void Update(AnObjectState state,AnMotionClock clock,bool visible)
         {
             var key=Parameter._textureKeyParam;

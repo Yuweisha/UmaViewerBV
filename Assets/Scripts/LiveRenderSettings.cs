@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -24,12 +23,15 @@ public sealed class LiveRenderSettings
     public static readonly int[] Bitrates = { 8,12,20,30,50,80 };
     public static readonly string[] EncoderLabels = { "H.264 / CPU (libx264)","H.264 / NVIDIA (NVENC)","H.265 / CPU (libx265)","H.265 / NVIDIA (NVENC)" };
     public static readonly string[] Encoders = { "libx264","h264_nvenc","libx265","hevc_nvenc" };
+    public static readonly string[] AndroidEncoders = { "h264_mediacodec","h265_mediacodec" };
+    public static readonly string[] AndroidEncoderLabels = { "H.264 / MediaCodec (hardware)","H.265 / MediaCodec (hardware)" };
     public int Width=1920,Height=1080,Fps=60,BitrateMbps=20;
     public string Encoder="libx264";
 
     public void Validate()
     {
-        if(!Resolutions.Contains(new Vector2Int(Width,Height))||!FrameRates.Contains(Fps)||!Bitrates.Contains(BitrateMbps)||!Encoders.Contains(Encoder))
+        var encoders=Application.platform==RuntimePlatform.Android?AndroidEncoders:Encoders;
+        if(!Resolutions.Contains(new Vector2Int(Width,Height))||!FrameRates.Contains(Fps)||!Bitrates.Contains(BitrateMbps)||!encoders.Contains(Encoder))
             throw new ArgumentException("Unsupported render setting");
     }
 
@@ -53,6 +55,7 @@ public sealed class LiveRenderSettings
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     static void CheckFfmpegOnce()
     {
+        if(Application.platform==RuntimePlatform.Android)return;
         if(ffmpegChecked)return;
         ffmpegChecked=true;
 
@@ -72,33 +75,9 @@ public sealed class LiveRenderSettings
 
         try
         {
-            using(var process=new Process{StartInfo=new ProcessStartInfo(executable,"-version")
-                {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true}})
-            {
-                process.Start();
-
-                // 必须先同步读完输出再等退出：管道写满的话进程永远不退出，
-                // 原来的 WaitForExit(3000) 会一直超时并把检测结果钉在 false。
-                string version=process.StandardOutput.ReadToEnd();
-                process.StandardError.ReadToEnd();
-
-                if(!process.WaitForExit(8000))
-                {
-                    try{process.Kill();}catch{}
-
-                    UnityEngine.Debug.LogWarning("[FFmpeg] -version 超时: "+executable);
-                    return;
-                }
-
-                ffmpegDetected=process.ExitCode==0
-                    &&version.IndexOf("ffmpeg",StringComparison.OrdinalIgnoreCase)>=0;
-
-                if(ffmpegDetected)
-                    ffmpegExecutable=executable;
-                else
-                    UnityEngine.Debug.LogWarning("[FFmpeg] -version 结果异常 exit="+process.ExitCode+" output="
-                        +version.Substring(0,Math.Min(200,version.Length)));
-            }
+            LiveFfmpegProcess.Run(executable, "-version", 8000, "FFmpeg version check failed", expectVersion: true);
+            ffmpegExecutable = executable;
+            ffmpegDetected = true;
         }
         catch(Exception error)
         {
@@ -153,15 +132,29 @@ public sealed class LiveRenderSettings
     public string EncoderArguments => "-c:v "+Encoder+" -preset "+(Encoder.EndsWith("nvenc",StringComparison.Ordinal)?"p5":"fast")+
         " -b:v "+BitrateMbps+"M -maxrate "+(BitrateMbps*3/2)+"M -bufsize "+(BitrateMbps*2)+"M -pix_fmt yuv420p";
 
+    private static int[] availableEncoders;
+    public static int[] AvailableEncoders(string executable)
+    {
+        if(availableEncoders!=null)return availableEncoders;
+        var usable=new System.Collections.Generic.List<int>();
+        for(int index=0;index<Encoders.Length;index++)
+        {
+            try
+            {
+                LiveFfmpegProcess.Run(executable,"-hide_banner -loglevel error -f lavfi -i color=s=256x256:r=30"+
+                    " -frames:v 1 -c:v "+Encoders[index]+" -pix_fmt yuv420p -f null -",30000,"Encoder unavailable: "+Encoders[index]);
+                usable.Add(index);
+            }
+            catch(Exception failure) { UnityEngine.Debug.LogWarning("[FFmpeg] "+failure.Message); }
+        }
+        if(usable.Count==0)throw new InvalidOperationException("No supported video encoder is available");
+        availableEncoders=usable.ToArray();
+        return availableEncoders;
+    }
+
     public void VerifyEncoder(string executable)
     {
-        using(var process=new Process{StartInfo=new ProcessStartInfo(executable,"-hide_banner -loglevel error -f lavfi -i color=s="+Width+"x"+Height+":r="+Fps+" -frames:v 1 "+EncoderArguments+" -f null -")
-            {UseShellExecute=false,CreateNoWindow=true,RedirectStandardError=true}})
-        {
-            process.Start();
-            string error=process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            if(process.ExitCode!=0)throw new InvalidOperationException("Encoder unavailable: "+Encoder+"\n"+error.Trim());
-        }
+        LiveFfmpegProcess.Run(executable, "-hide_banner -loglevel error -f lavfi -i color=s="+Width+"x"+Height+":r="+Fps+
+            " -frames:v 1 "+EncoderArguments+" -f null -", 30000, "Encoder unavailable: "+Encoder);
     }
 }

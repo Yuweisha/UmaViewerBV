@@ -26,7 +26,8 @@ public partial class UmaContainerCharacter
                 var destination=LiveCharacterLightingRuntime.Classify(renderer.name,material,hasHair);
                 if(destination==LiveCharacterLightingRuntime.Destination.FaceSkin||
                     destination==LiveCharacterLightingRuntime.Destination.Hair||
-                    destination==LiveCharacterLightingRuntime.Destination.Mayu)
+                    destination==LiveCharacterLightingRuntime.Destination.Mayu||
+                    destination==LiveCharacterLightingRuntime.Destination.Eye)
                     _previewHeadLighting.Bindings.Add(new LiveCharacterLightingRuntime.Binding {
                         renderer=renderer,material=material,destination=destination });
             }

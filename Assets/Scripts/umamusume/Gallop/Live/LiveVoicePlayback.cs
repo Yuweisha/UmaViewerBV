@@ -231,7 +231,7 @@ namespace Gallop.Live
         private static void WalkReference(Stream stream, UtfTable header, int referenceType, int referenceIndex,
             List<int> waveRows, int depth)
         {
-            if (depth > 3 || referenceIndex < 0) return;
+            if (depth > 8 || referenceIndex < 0) return;
             switch (referenceType)
             {
                 case 1:
@@ -269,6 +269,18 @@ namespace Gallop.Live
                     }
                     break;
                 }
+                case 7:
+                {
+                    // A local cue reference indexes CueTable rows, not cue IDs.
+                    if (!header.Query(0, "CueTable", out VLData data)) return;
+                    var table = new UtfTable(stream, data.Offset, out int rows, out _);
+                    if (referenceIndex >= rows ||
+                        !TryReadInt(table, referenceIndex, table.GetColumn("ReferenceType"), out long type) ||
+                        !TryReadInt(table, referenceIndex, table.GetColumn("ReferenceIndex"), out long index))
+                        return;
+                    WalkReference(stream, header, (int)type, (int)index, waveRows, depth + 1);
+                    break;
+                }
                 default:
                     break;
             }
@@ -282,7 +294,7 @@ namespace Gallop.Live
                 int type = ReadUInt16BE(stream, items.Offset + (uint)(i * 4));
                 int index = ReadUInt16BE(stream, items.Offset + (uint)(i * 4 + 2));
                 if (type == 1) waveRows.Add(index);
-                else if (type == 2 || type == 3) WalkReference(stream, header, type, index, waveRows, depth + 1);
+                else if (type == 2 || type == 3 || type == 7) WalkReference(stream, header, type, index, waveRows, depth + 1);
             }
         }
 

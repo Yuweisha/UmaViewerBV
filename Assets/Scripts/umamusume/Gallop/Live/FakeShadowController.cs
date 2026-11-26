@@ -30,8 +30,8 @@ namespace Gallop.Live
             _rootTransform = root;
             _locationTransform = location;
             // Initialize 0x4e7f300: each foot owns its material state.
-            _renderer = GetComponentInChildren<Renderer>();
-            _projection = GetComponentInChildren<LightProjection>();
+            _renderer = GetComponentInChildren<Renderer>(true);
+            _projection = GetComponentInChildren<LightProjection>(true);
             if (_projection != null) _projection.Initialize();
             _materials = _renderer != null ? _renderer.materials : new Material[0];
             foreach (var material in _materials) material.SetFloat(IntensityId, 1f);
@@ -55,6 +55,14 @@ namespace Gallop.Live
             if (_projection != null && !useProjection) _projection.Projector.enabled = false;
             if (_renderer != null && useProjection) _renderer.enabled = false;
             _useProjection = useProjection;
+        }
+
+        public void ApplyCutIn(Color color, float power, Vector3 offset, Vector3 scale)
+        {
+            _color = color;
+            _shadowPower = power;
+            _offsetPos = offset;
+            _scale = scale;
         }
 
         public void AlterLateUpdate(Vector3 groundPosition)

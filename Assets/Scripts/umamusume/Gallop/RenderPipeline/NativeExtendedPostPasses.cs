@@ -284,7 +284,7 @@ namespace Gallop.RenderPipeline
             float length = F(a.StrokeLength * .1f);
             NativePostCommand.Vec(c, 0x1db, new Vector4(F(length * s), F(length * cos), 0, 0), "material");
             NativePostCommand.Vec(c, 0x1dc, new Vector4(F(a.CircleMaskOffset.x + .5f), F(a.CircleMaskOffset.y + .5f), 0, 0), "material");
-            var size = OriginalScreenSize == null ? throw new InvalidOperationException("Original Screen width/height owner is not installed.") : OriginalScreenSize();
+            var size = OriginalScreenSize?.Invoke() ?? NativeVirtualScreenSize.Evaluate(false, false, width, height);
             NativePostCommand.Vec(c, 0x1dd, new Vector4(a.CircleMaskSize, F((float)size.x / (float)size.y), 0, 0), "material");
             NativePostCommand.Vec(c, 0x1de, new Vector4(a.CircleMaskStretchRatio.x, a.CircleMaskStretchRatio.y, 0, 0), "material");
             angle = F(a.CircleMaskAngle * .01745329238474369f);
@@ -298,9 +298,9 @@ namespace Gallop.RenderPipeline
             return c;
         }
 
-        // Bind Gallop's virtual resolution calculation, not device pixel size.
-        // A host with the original landscape UI owner can supply that branch.
-        public static Func<Vector2Int> OriginalScreenSize { get; set; } = NativeVirtualScreenSize.ForCurrentDevice;
+        // Offscreen cameras use their render dimensions, not the desktop window.
+        // A host with Gallop's original UI owner can supply its virtual size.
+        public static Func<Vector2Int> OriginalScreenSize { get; set; }
     }
 
     public sealed class TiltShiftPass : NativeExtendedPostPass

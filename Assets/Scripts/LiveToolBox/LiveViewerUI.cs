@@ -46,6 +46,11 @@ public class LiveViewerUI : MonoBehaviour
         targetHeight = 0;
         Invoke(nameof(HideSlider), 1.5f);
         Instance = this;
+        var previousProgress = ProgressBar;
+        ProgressBar = SliderControl.CreateProgressBar(previousProgress.transform.parent);
+        ProgressBar.transform.SetSiblingIndex(previousProgress.transform.GetSiblingIndex());
+        previousProgress.gameObject.SetActive(false);
+        Destroy(previousProgress.gameObject);
         CreatePlaybackProgress();
         var subtitleToggle=GetComponentsInChildren<Toggle>(true);
         foreach(var toggle in subtitleToggle)
@@ -118,26 +123,31 @@ public class LiveViewerUI : MonoBehaviour
     private void CreatePlaybackProgress()
     {
         if (ProgressBar == null || BottonUITransform == null) return;
-        progressSeconds = CreateProgressText("ProgressSeconds", BottonUITransform);
-        var rect = progressSeconds.rectTransform;
+        progressSeconds = CreateProgressSeconds(BottonUITransform,
+            FrameRateDropDown != null && FrameRateDropDown.captionText != null ? FrameRateDropDown.captionText.font
+                : LyricsText != null ? LyricsText.font : null);
+    }
+
+    internal static Text CreateProgressSeconds(RectTransform parent, Font font = null)
+    {
+        var text = CreateProgressText("ProgressSeconds", parent, font);
+        var rect = text.rectTransform;
         rect.anchorMin = rect.anchorMax = new Vector2(1, 0.5f);
         rect.pivot = new Vector2(1, 0.5f);
         rect.anchoredPosition = new Vector2(-8, 0);
         rect.sizeDelta = new Vector2(184, 24);
-        progressSeconds.alignment = TextAnchor.MiddleRight;
-        progressSeconds.text = "0.0s / 0.0s";
-
+        text.alignment = TextAnchor.MiddleRight;
+        text.text = "0.0s / 0.0s";
+        return text;
     }
 
-    private UnityEngine.UI.Text CreateProgressText(string name, RectTransform parent)
+    internal static UnityEngine.UI.Text CreateProgressText(string name, RectTransform parent, Font font = null)
     {
         var textObject = new GameObject(name, typeof(RectTransform), typeof(UnityEngine.UI.Text));
         textObject.layer = parent.gameObject.layer;
         textObject.transform.SetParent(parent, false);
         var text = textObject.GetComponent<UnityEngine.UI.Text>();
-        text.font = FrameRateDropDown != null && FrameRateDropDown.captionText != null
-            ? FrameRateDropDown.captionText.font : null;
-        if (text.font == null && LyricsText != null) text.font = LyricsText.font;
+        text.font = font;
         if (text.font == null) text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         text.fontSize = 16;
         text.color = Color.white;

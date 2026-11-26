@@ -19,6 +19,7 @@ namespace Gallop
         public float ShadowDistance=15f;
         public Color FillColor=Color.white;
         public bool IsDarkestShadowOnly;
+        internal bool ControlsGlobalDistance { get; set; } = true;
         Renderer[] _rendererArray;
         Material[] _materialArray;
         bool _isInitialized;
@@ -29,7 +30,7 @@ namespace Gallop
         {_rendererArray=renderers;_materialArray=materials;_isInitialized=true;}
         public void Reset()
         {IsUseParam=false;_rendererArray=null;_materialArray=null;_isInitialized=false;CameraData.GlobalMaxShadowDistance=15f;}
-        void OnDestroy(){CameraData.GlobalMaxShadowDistance=15f;}
+        void OnDestroy(){if(ControlsGlobalDistance)CameraData.GlobalMaxShadowDistance=15f;}
         public void UpdateParamater()
         {
             if(!_isInitialized)return;
@@ -51,7 +52,7 @@ namespace Gallop
                 else material.DisableKeyword("USE_SHADOW_PARAM");
                 material.SetFloat(ShaderManager.GetPropertyId(ShaderManager.PropertyId._AdditionalLightShadowRenderType),IsDarkestShadowOnly?1:0);
             }
-            if(IsUseParam)CameraData.GlobalMaxShadowDistance=ShadowDistance;
+            if(IsUseParam && ControlsGlobalDistance)CameraData.GlobalMaxShadowDistance=ShadowDistance;
         }
     }
 }

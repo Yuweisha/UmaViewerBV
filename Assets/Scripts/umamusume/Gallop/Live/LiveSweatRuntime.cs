@@ -105,6 +105,21 @@ namespace Gallop.Live
         }
         public GameObject Model(int index)=>models[index];
         public Material[] Materials(int index)=>materials[index];
+        internal void ApplyCutInLocator(int index, bool visible, Vector3 offset, Color color,
+            float power, float strength, float threshold)
+        {
+            models[index].SetActive(visible);
+            if (!visible)
+                return;
+            transforms[index].localPosition = offset;
+            foreach (var material in materials[index])
+            {
+                material.SetColor(ColorId, color);
+                material.SetFloat(PowerId, power);
+                material.SetFloat(StrengthId, strength);
+                material.SetFloat(ThresholdId, threshold);
+            }
+        }
         // Original CharacterObject 4e7b660 returns at the first absent model
         // controller. The current Viewer installs only its assembled model;
         // native reserved-dress creation and teardown remain a separate gap.
@@ -116,7 +131,11 @@ namespace Gallop.Live
         public void Dispose()
         {
             foreach(var set in materials)if(set!=null)foreach(var material in set)if(material!=null)Object.Destroy(material);
-            if(root!=null)Object.Destroy(root);
+            if(root!=null)
+            {
+                root.SetActive(false);
+                Object.Destroy(root);
+            }
         }
     }
 }
@@ -130,11 +149,19 @@ public partial class UmaContainerCharacter
     readonly List<Gallop.Live.LiveSweatRuntime> liveSweatModels=new List<Gallop.Live.LiveSweatRuntime>();
     public IReadOnlyList<Gallop.Live.LiveSweatRuntime> LiveSweatModels=>liveSweatModels;
     // Invoked after the model's actual head fallback and skeleton merge.
-    public void InstallLiveSweat(int physicalOwner)
+    public void InstallLiveSweat(int physicalOwner) => InstallSweat(physicalOwner, IsLive && !IsMini);
+
+    internal void InstallCutInSweat(int layer)
+    {
+        InstallSweat(-1, !IsMini);
+        LiveSweat?.SetLayer(layer);
+    }
+
+    private void InstallSweat(int physicalOwner, bool applicable)
     {
         ReleaseLiveSweat();LiveSweatLocatorResource=null;
         LiveSweatPhysicalOwner=physicalOwner;
-        if(!IsLive||IsMini){LiveSweatInstallationStatus="NotApplicable";return;}
+        if(!applicable){LiveSweatInstallationStatus="NotApplicable";return;}
         var holder=Head.GetComponent<AssetHolder>();
         var omit=holder!=null?holder.Get<Gallop.CharaHeadModelOmitSetting>("omit_setting"):null;
         if(Gallop.Live.LiveSweatRuntime.IsOmitted(omit)){LiveSweatInstallationStatus="OriginalHeadOmitSweat";return;}

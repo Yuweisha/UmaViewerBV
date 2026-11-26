@@ -48,50 +48,59 @@ public class FreeCam : MonoBehaviour
     /// Set to true when free looking (on right mouse button).
     /// </summary>
     private bool looking = false;
+    internal Func<bool> InputAllowed;
+    internal bool UseUnscaledTime;
 
     void Update()
     {
+        if (InputAllowed != null && !InputAllowed())
+        {
+            if (looking)
+                StopLooking();
+            return;
+        }
+        float deltaTime = UseUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
         var fastMode = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
         var movementSpeed = fastMode ? this.fastMovementSpeed : this.movementSpeed;
 
         if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow))
         {
-            transform.position = transform.position + (-transform.right * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (-transform.right * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow))
         {
-            transform.position = transform.position + (transform.right * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (transform.right * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow))
         {
-            transform.position = transform.position + (transform.forward * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (transform.forward * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow))
         {
-            transform.position = transform.position + (-transform.forward * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (-transform.forward * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.Q))
         {
-            transform.position = transform.position + (transform.up * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (transform.up * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.E))
         {
-            transform.position = transform.position + (-transform.up * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (-transform.up * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.R) || Input.GetKey(KeyCode.PageUp))
         {
-            transform.position = transform.position + (Vector3.up * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (Vector3.up * movementSpeed * deltaTime);
         }
 
         if (Input.GetKey(KeyCode.F) || Input.GetKey(KeyCode.PageDown))
         {
-            transform.position = transform.position + (-Vector3.up * movementSpeed * Time.deltaTime);
+            transform.position = transform.position + (-Vector3.up * movementSpeed * deltaTime);
         }
 
         if (looking)
@@ -121,6 +130,12 @@ public class FreeCam : MonoBehaviour
     void OnDisable()
     {
         StopLooking();
+    }
+
+    void OnApplicationFocus(bool focused)
+    {
+        if (!focused && looking)
+            StopLooking();
     }
 
     /// <summary>

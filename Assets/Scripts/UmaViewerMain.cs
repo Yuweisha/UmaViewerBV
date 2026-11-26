@@ -5,6 +5,7 @@ using UnityEngine;
 using System;
 using System.Collections;
 using UnityEngine.Rendering;
+using UnityEngine.SceneManagement;
 using Newtonsoft.Json.Linq;
 
 public class UmaViewerMain : MonoBehaviour
@@ -14,6 +15,7 @@ public class UmaViewerMain : MonoBehaviour
     private const int EnglishNamesCacheVersion = 1;
 
     public static UmaViewerMain Instance;
+    internal bool IsInitialized { get; private set; }
     private UmaViewerUI UI => UmaViewerUI.Instance;
     private UmaViewerBuilder Builder => UmaViewerBuilder.Instance;
 
@@ -42,6 +44,12 @@ public class UmaViewerMain : MonoBehaviour
 
     private void LoadResourceLists()
     {
+        if (Application.platform == RuntimePlatform.Android && Config.Instance.WorkMode == WorkMode.Default &&
+            !UmaDatabaseController.TrySelectDatabasePaths(Config.Instance.MainPath, WorkMode.Default, out _, out _))
+        {
+            AbList = null;
+            return;
+        }
         AbList = UmaDatabaseController.Instance.MetaEntries;
         if (AbList == null) return;
         var chara_3d = AbList.Where(ab => ab.Value.Type == UmaFileType._3d_cutt).Select(ab => ab.Value).ToList();
@@ -69,13 +77,14 @@ public class UmaViewerMain : MonoBehaviour
 
     static void ToggleFullscreen()
     {
+        if (Instance == null || !Instance.IsInitialized || UmaViewerUI.Instance == null ||
+            UmaViewerUI.Instance.IsGachaPlaybackActive || SceneManager.GetActiveScene().name != "Version2" ||
+            UmaSceneController.instance?.CavansInstance != null)
+            return;
         if (!Screen.fullScreen)
         {
             windowedWidth = Screen.width;
             windowedHeight = Screen.height;
-            // FullScreenWindow on the current window size can letterbox a 16:10
-            // display. Ask for the display's native mode and then force screen
-            // cameras back to a full viewport.
             Screen.SetResolution(Display.main.systemWidth, Display.main.systemHeight,
                 FullScreenMode.FullScreenWindow);
         }
@@ -83,7 +92,6 @@ public class UmaViewerMain : MonoBehaviour
         {
             RestoreWindowedResolution();
         }
-        if (Instance != null) Instance.StartCoroutine(Instance.NormalizeFullscreenViewports());
     }
 
     static void RestoreWindowedResolution()
@@ -91,24 +99,6 @@ public class UmaViewerMain : MonoBehaviour
         int width = windowedWidth > 0 ? windowedWidth : 1600;
         int height = windowedHeight > 0 ? windowedHeight : 900;
         Screen.SetResolution(width, height, FullScreenMode.Windowed);
-    }
-
-    System.Collections.IEnumerator NormalizeFullscreenViewports()
-    {
-        // Resolution/fullscreen changes are applied by the player after the
-        // current frame; normalize over the next two frames and once settled.
-        for (int i = 0; i < 3; i++)
-        {
-            yield return new WaitForEndOfFrame();
-            foreach (var camera in FindObjectsOfType<Camera>(true))
-            {
-                if (camera == null || camera.targetTexture != null) continue;
-                camera.rect = new Rect(0f, 0f, 1f, 1f);
-                camera.ResetAspect();
-            }
-            if (i == 2)
-                Debug.LogWarning($"[Fullscreen] mode={Screen.fullScreenMode} system={Display.main.systemWidth}x{Display.main.systemHeight} screen={Screen.width}x{Screen.height} camera={Gallop.Live.Director.instance?.MainRenderCamera?.pixelRect}");
-        }
     }
 
     private IEnumerator Start()
@@ -125,7 +115,12 @@ public class UmaViewerMain : MonoBehaviour
             if (!ready) yield break;
             LoadResourceLists();
         }
-        if (AbList == null) yield break;
+        if (AbList == null)
+        {
+            if (Application.platform == RuntimePlatform.Android && Config.Instance.WorkMode == WorkMode.Default)
+                UI.OtherSettings.ChangeDataPath();
+            yield break;
+        }
         int loadingStep = 0;
         int loadingStepsTotal = 10;
         var UmaCharaData = UmaDatabaseController.Instance.CharaData;
@@ -306,6 +301,7 @@ public class UmaViewerMain : MonoBehaviour
         loadingUI.LoadingProgressChange(loadingStep++, loadingStepsTotal, "Loading UI");
         yield return null;
         UI.LoadLivePanels();
+        UI.LoadGachaMenu();
         loadingUI.LoadingProgressChange(-1, -1);
 
         //Load Shader First
@@ -324,6 +320,7 @@ public class UmaViewerMain : MonoBehaviour
         {
             Debug.LogWarning("[UiLocalization] Apply 失败，界面仍按原样显示: " + error);
         }
+        IsInitialized = true;
     }
 
     private static bool TryParseEnglishNames(

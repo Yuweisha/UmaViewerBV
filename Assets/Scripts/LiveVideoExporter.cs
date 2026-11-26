@@ -31,8 +31,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
     private UmaViewerUI entryUI;
     private Director director;
     private string executable,output,tempFolder,videoFile,audioFile,error;
-    private Process encoder;
-    private readonly StringBuilder encoderErrors=new StringBuilder();
+    private LiveFfmpegProcess encoder;
     private BinaryWriter audio;
     private int sampleRate,frame,totalFrames,audioSamples;
     private int previousFps,previousVsync;
@@ -45,7 +44,9 @@ public sealed class LiveVideoExporter : MonoBehaviour
     private readonly Queue<AsyncGPUReadbackRequest> readbacks=new Queue<AsyncGPUReadbackRequest>();
     private LiveVideoFrameWriter frameWriter;
     private LiveGpuVideoEncoder gpuEncoder;
+    private LiveAndroidVideoEncoder androidEncoder;
     public bool UsesGpuDirect {get;private set;}
+    public bool UsesAndroidNative {get;private set;}
     public int GpuWrittenFrames {get;private set;}
     public double GpuSubmissionMs {get;private set;}
     public string VideoBackend {get;private set;}="FFmpeg rawvideo";
@@ -90,7 +91,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
     public static void Begin(UmaViewerUI ui,LiveEntry song,LiveRenderSettings options,string directory)
     {
         if(IsActive)throw new InvalidOperationException("A Live render is already running");
-        LiveRenderSettings.RequireFfmpeg();
+        if(Application.platform!=RuntimePlatform.Android)LiveRenderSettings.RequireFfmpeg();
         options.Validate();
         var owner=new GameObject("Live video export");
         DontDestroyOnLoad(owner);
@@ -122,7 +123,8 @@ public sealed class LiveVideoExporter : MonoBehaviour
         director.BeginOfflineRender(target);
         director.BeginSubtitleCapture(target);
         asyncReadback=SystemInfo.supportsAsyncGPUReadback;
-        if(!asyncReadback)readback=new Texture2D(settings.Width,settings.Height,TextureFormat.RGB24,false);
+        if(!asyncReadback)readback=new Texture2D(settings.Width,settings.Height,
+            Application.platform==RuntimePlatform.Android?TextureFormat.RGBA32:TextureFormat.RGB24,false);
         foreach(var camera in FindObjectsOfType<Camera>(true))Bind(camera);
         RenderPipelineManager.beginCameraRendering+=BeforeCamera;
         RenderPipelineManager.endCameraRendering+=AfterCamera;
@@ -131,11 +133,22 @@ public sealed class LiveVideoExporter : MonoBehaviour
         if(AudioSettings.speakerMode!=AudioSpeakerMode.Stereo)throw new InvalidOperationException("Stereo audio output was not initialized");
         if(!AudioRenderer.Start())throw new InvalidOperationException("Could not start offline audio recording");
         audioRecording=true;
-        audio=new BinaryWriter(File.Create(audioFile));
-        WriteWaveHeader(0);
+        if(Application.platform!=RuntimePlatform.Android)
+        {
+            audio=new BinaryWriter(File.Create(audioFile));
+            WriteWaveHeader(0);
+        }
         LiveSongAudioControl.Start(director,0f,0);
         string nativeFile=Path.ChangeExtension(videoFile,"ts");
-        if(LiveGpuVideoEncoder.TryCreate(target,settings,nativeFile,out gpuEncoder,out string nativeReason))
+        if(Application.platform==RuntimePlatform.Android)
+        {
+            if(!LiveAndroidVideoEncoder.TryCreate(settings,videoFile,out androidEncoder,out string reason))
+                throw new InvalidOperationException("Android video encoder unavailable: "+reason);
+            UsesAndroidNative=true;
+            VideoBackend="MediaCodec hardware (Android)";
+            Debug.Log("[LiveRender] "+VideoBackend);
+        }
+        else if(LiveGpuVideoEncoder.TryCreate(target,settings,nativeFile,out gpuEncoder,out string nativeReason))
         {
             videoFile=nativeFile;UsesGpuDirect=true;asyncReadback=false;
             VideoBackend="NVENC GPU-direct (D3D11)";
@@ -147,7 +160,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
             StartEncoder();
         }
         bool parallel=true;
-        if(!UsesGpuDirect)frameWriter=new LiveVideoFrameWriter(encoder.StandardInput.BaseStream,settings.Width*settings.Height*(asyncReadback?4:3),parallel);
+        if(!UsesGpuDirect&&!UsesAndroidNative)frameWriter=new LiveVideoFrameWriter(encoder.Input,settings.Width*settings.Height*(asyncReadback?4:3),parallel);
         captureTimer.Start();
         capturing=true;
         CurrentPhase="rendering";
@@ -190,10 +203,13 @@ public sealed class LiveVideoExporter : MonoBehaviour
     {
         status.text="Checking encoder...";
         CurrentPhase="checking-encoder";
-        executable=LiveRenderSettings.RequireFfmpeg();
-        var check=Task.Run(()=>settings.VerifyEncoder(executable));
-        while(!check.IsCompleted)yield return null;
-        if(check.IsFaulted)throw check.Exception.GetBaseException();
+        if(Application.platform!=RuntimePlatform.Android)
+        {
+            executable=LiveRenderSettings.RequireFfmpeg();
+            var check=Task.Run(()=>settings.VerifyEncoder(executable));
+            while(!check.IsCompleted)yield return null;
+            if(check.IsFaulted)throw check.Exception.GetBaseException();
+        }
         if(cancelled)yield break;
         Directory.CreateDirectory(Path.GetDirectoryName(output));
         tempFolder=Path.Combine(Path.GetDirectoryName(output),".umaviewer-render-"+Guid.NewGuid().ToString("N"));
@@ -245,7 +261,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
             if(GpuWrittenFrames!=frame)throw new InvalidOperationException("GPU video encoder frame count mismatch");
             gpuEncoder.Dispose();gpuEncoder=null;
         }
-        else
+        else if(!UsesAndroidNative)
         {
             frameWriter.Complete();
             while(!frameWriter.Completion.IsCompleted)yield return null;
@@ -261,28 +277,54 @@ public sealed class LiveVideoExporter : MonoBehaviour
             if(audioSamples<wanted)yield return null;
         }
         AudioRenderer.Stop();audioRecording=false;
-        WriteWaveHeader(audioSamples);audio.Dispose();audio=null;
+        if(audio!=null) {WriteWaveHeader(audioSamples);audio.Dispose();audio=null;}
+        if(UsesAndroidNative)
+        {
+            androidEncoder.Finish();
+            while(!androidEncoder.IsDone)
+            {
+                if(cancelled)yield break;
+                yield return null;
+            }
+            if(androidEncoder.WrittenFrames!=frame)throw new InvalidOperationException("Android encoder frame count mismatch");
+            androidEncoder.Dispose();androidEncoder=null;
+        }
         foreach(var bank in LiveSongAudioControl.Banks(director))UmaViewerAudio.Stop(bank);
         director.SetPlaybackPaused(true);
         status.text="Finalizing MP4...";
         CurrentPhase="finalizing";
-        if(encoder!=null)encoder.StandardInput.Close();
+        if(UsesAndroidNative)
+        {
+            string fileName=Path.GetFileName(output);
+            finalization=Task.Run(()=>
+            {
+                if(cancelled)return;
+                if(AndroidMediaExport.TryExport(videoFile,fileName,"UmaViewer",out string exported,out string reason))
+                {
+                    output=exported;
+                    return;
+                }
+                Debug.LogWarning("[LiveRender] Public Downloads export failed; saving application copy: "+reason);
+                File.Move(videoFile,output);
+            });
+            while(!finalization.IsCompleted)yield return null;
+            if(finalization.IsFaulted)throw finalization.Exception.GetBaseException();
+            yield break;
+        }
+        encoder?.CloseInput();
         finalization=Task.Run(()=>
         {
             if(encoder!=null)
             {
-                if(!encoder.WaitForExit(120000))throw new TimeoutException("Encoder did not finish");
-                if(encoder.ExitCode!=0)throw new InvalidOperationException("Video encoding failed: "+encoderErrors);
+                int timeout=System.Math.Max(300000,(int)((double)frame/settings.Fps*12000));
+                if(!encoder.WaitForExit(timeout))throw new TimeoutException("Encoder did not finish within "+timeout+" ms");
+                if(encoder.ExitCode!=0)throw new InvalidOperationException("Video encoding failed: "+encoder.Output);
             }
             string destination=Path.Combine(tempFolder,"complete.mp4");
             string arguments="-hide_banner -loglevel error -nostdin -n -i "+LiveRenderSettings.Quote(videoFile)+" -i "+LiveRenderSettings.Quote(audioFile)+
                 " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k -t "+((double)frame/settings.Fps).ToString("R",System.Globalization.CultureInfo.InvariantCulture)+
                 " -movflags +faststart "+LiveRenderSettings.Quote(destination);
-            using(var mux=new Process{StartInfo=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardError=true}})
-            {
-                mux.Start();string message=mux.StandardError.ReadToEnd();mux.WaitForExit();
-                if(mux.ExitCode!=0)throw new InvalidOperationException("Audio/video mux failed: "+message);
-            }
+            LiveFfmpegProcess.Run(executable,arguments,180000,"Audio/video mux failed");
             if(!cancelled)File.Move(destination,output);
         });
         while(!finalization.IsCompleted)yield return null;
@@ -293,6 +335,11 @@ public sealed class LiveVideoExporter : MonoBehaviour
     {
         if(finished)return;
         if(Input.GetKeyDown(KeyCode.Escape))Cancel();
+        if(androidEncoder!=null&&error==null&&!cancelled)
+        {
+            try {DrainReadbacks();androidEncoder.ThrowIfFailed();}
+            catch(Exception failure){error=failure.Message;capturing=false;}
+        }
         if(gpuEncoder!=null&&error==null&&!cancelled)
         {
             try {gpuEncoder.ThrowIfFailed();}
@@ -365,8 +412,13 @@ public sealed class LiveVideoExporter : MonoBehaviour
             {
                 RenderTexture.active=target;
                 readback.ReadPixels(new Rect(0,0,settings.Width,settings.Height),0,0);
-                var data=frameWriter.Rent();readback.GetRawTextureData<byte>().CopyTo(data);
-                frameWriter.Submit(data);submittedFrames++;
+                if(UsesAndroidNative)androidEncoder.Submit(readback.GetRawTextureData<byte>().ToArray());
+                else
+                {
+                    var data=frameWriter.Rent();readback.GetRawTextureData<byte>().CopyTo(data);
+                    frameWriter.Submit(data);
+                }
+                submittedFrames++;
             }
             if(!UsesGpuDirect)MainThreadReadbackMs=priorReadback+(Stopwatch.GetTimestamp()-start)*1000.0/Stopwatch.Frequency;
             CaptureAudio((int)System.Math.Round((double)(frame+1)*sampleRate/settings.Fps));
@@ -384,8 +436,13 @@ public sealed class LiveVideoExporter : MonoBehaviour
         {
             var request=readbacks.Dequeue();
             if(request.hasError)throw new InvalidOperationException("GPU video readback failed");
-            var data=frameWriter.Rent();request.GetData<byte>().CopyTo(data);
-            frameWriter.Submit(data);submittedFrames++;
+            if(UsesAndroidNative)androidEncoder.Submit(request.GetData<byte>().ToArray());
+            else
+            {
+                var data=frameWriter.Rent();request.GetData<byte>().CopyTo(data);
+                frameWriter.Submit(data);
+            }
+            submittedFrames++;
         }
         MainThreadReadbackMs+=(Stopwatch.GetTimestamp()-start)*1000.0/Stopwatch.Frequency;
     }
@@ -398,8 +455,15 @@ public sealed class LiveVideoExporter : MonoBehaviour
             if(!AudioRenderer.Render(buffer))throw new InvalidOperationException("Offline audio rendering failed");
             int write=System.Math.Min(count,maximum-audioSamples);
             if(write<=0)return;
-            var samples=buffer.ToArray();var bytes=new byte[write*8];Buffer.BlockCopy(samples,0,bytes,0,bytes.Length);
-            audio.Write(bytes);audioSamples+=write;
+            var samples=buffer.ToArray();
+            if(UsesAndroidNative)
+                androidEncoder.SubmitAudio(samples,write,(long)System.Math.Round((double)audioSamples*1000000/sampleRate));
+            else
+            {
+                var bytes=new byte[write*8];Buffer.BlockCopy(samples,0,bytes,0,bytes.Length);
+                audio.Write(bytes);
+            }
+            audioSamples+=write;
         }
     }
     private void WriteWaveHeader(int samples)
@@ -416,9 +480,7 @@ public sealed class LiveVideoExporter : MonoBehaviour
         string arguments="-hide_banner -loglevel warning -nostats -n -f rawvideo -pixel_format "+(asyncReadback?"rgba":"rgb24")+" -video_size "+settings.Width+"x"+settings.Height+
             " -framerate "+settings.Fps+" -i pipe:0 -filter_threads "+filterThreads+" -vf vflip -an "+settings.EncoderArguments+
             " -threads "+encoderThreads+" -movflags +faststart "+LiveRenderSettings.Quote(videoFile);
-        encoder=new Process{StartInfo=new ProcessStartInfo(executable,arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardError=true}};
-        encoder.ErrorDataReceived+=(sender,args)=>{if(args.Data!=null)lock(encoderErrors)encoderErrors.AppendLine(args.Data);};
-        encoder.Start();encoder.BeginErrorReadLine();
+        encoder=new LiveFfmpegProcess(executable,arguments,pipeInput:true);
     }
 
     private void Cleanup()
@@ -431,11 +493,10 @@ public sealed class LiveVideoExporter : MonoBehaviour
         if(audioRecording){AudioRenderer.Stop();audioRecording=false;}
         audio?.Dispose();audio=null;
         gpuEncoder?.Dispose();gpuEncoder=null;
+        androidEncoder?.Dispose();androidEncoder=null;
         frameWriter?.Abort();
         if(encoder!=null)
         {
-            try { if(!encoder.HasExited){encoder.Kill();encoder.WaitForExit();} }
-            catch(InvalidOperationException) { }
             encoder.Dispose();encoder=null;
         }
         if(frameWriter!=null)

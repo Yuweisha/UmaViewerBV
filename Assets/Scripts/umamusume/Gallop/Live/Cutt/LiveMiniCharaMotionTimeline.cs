@@ -6,14 +6,6 @@ namespace Gallop
 {
     [Serializable] public sealed class FaceTypeSet {public int[] faceType;public int count;}
     [Serializable] public sealed class EarTypeSet {public EarType[] faceType;public int count;}
-    public sealed class DrivenKeyAnimation : ScriptableObject
-    {
-        public AnimationClip clip;
-        public FaceTypeSet[] animationFaceType;
-        public EarTypeSet[] animationEarType;
-        [SerializeField] bool _isCheckEyeRange;
-        public bool IsCheckEyeRange=>_isCheckEyeRange;
-    }
 }
 namespace Gallop.Live
 {

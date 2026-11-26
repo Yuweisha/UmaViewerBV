@@ -38,6 +38,8 @@ namespace CriWareFormats
             acbNameLoader = new AcbNameLoader(outerStream);
         }
 
+        public bool HasEmbeddedAwb => awbLength > 0;
+
         public AwbReader GetAwb()
         {
             return new AwbReader(new SpliceStream(outerStream, awbOffset, awbLength), true);

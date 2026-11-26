@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Mono.Data.Sqlite;
 using System.Data;
 using System.IO;
+using System.Linq;
 using Debug = UnityEngine.Debug;
 
 public partial class UmaDatabaseController
@@ -621,6 +622,53 @@ public partial class UmaDatabaseController
         var rows = ReadMaster(masterDb, "SELECT * FROM dress_data WHERE id=" +
             dressId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return rows.Count > 0 ? rows[0] : null;
+    }
+
+    internal string ReadGachaVoiceCaption(int characterId, int cardId, bool localizedOnly = false)
+    {
+        var rows = ReadMaster(masterDb, "SELECT voice_id,text FROM character_system_text WHERE character_id=" + characterId +
+            $" AND cue_sheet='snd_voi_gacha_{cardId:D6}' ORDER BY cue_id LIMIT 1");
+        if (rows.Count == 0)
+            return "";
+        string translated = Config.Instance.Language == Language.Cn
+            ? HachimiGachaResources.Caption(characterId, Convert.ToInt32(rows[0]["voice_id"])) : null;
+        return translated ?? (localizedOnly ? "" : Convert.ToString(rows[0]["text"]));
+    }
+
+    internal string ReadGachaCardTitle(int cardId) => Config.Instance.Language == Language.Cn
+        ? HachimiGachaResources.CardTitle(cardId) ?? ReadLiveTitleText(5, cardId)
+        : ReadLiveTitleText(5, cardId);
+
+    internal DataRow ReadGachaCardJingle(int cardId)
+    {
+        var rows = ReadMaster(masterDb, "SELECT long_cutin_bgm_cuesheet_name,long_cutin_bgm_cue_name " +
+            "FROM race_bgm_cutin WHERE is_jingle<>0 AND card_id=" + cardId);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    internal DataRow ReadGachaSupportCard(int cardId)
+    {
+        var rows = ReadMaster(masterDb,
+            "SELECT chara_id,rarity,support_card_type FROM support_card_data WHERE id=" + cardId);
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    internal string ReadGachaSupportTitle(int cardId) => ReadLiveTitleText(76, cardId);
+
+    internal IEnumerable<(int Id, int Character)> ReadAvailableSceneCards(long timestamp) => ReadMaster(masterDb,
+        $"SELECT id,chara_id FROM support_card_data WHERE support_card_type=1 AND start_date<={timestamp} ORDER BY id")
+        .Select(row => (Convert.ToInt32(row["id"]), Convert.ToInt32(row["chara_id"])));
+    internal string ReadGachaSupportName(int cardId) => ReadLiveTitleText(77, cardId);
+
+    internal List<DataRow> ReadGachaCaptureCards() => ReadMaster(masterDb,
+        "SELECT id, chara_id FROM card_data WHERE default_rarity=3 ORDER BY id");
+
+    internal DataRow ReadGachaCard(int cardId)
+    {
+        var rows = ReadMaster(masterDb,
+            "SELECT c.chara_id,c.default_rarity,r.race_dress_id FROM card_data c " +
+            "JOIN card_rarity_data r ON r.card_id=c.id AND r.rarity=c.default_rarity WHERE c.id=" + cardId);
+        return rows.Count == 0 ? null : rows[0];
     }
 
     public static DataRow ReadCharaData(CharaEntry chara)

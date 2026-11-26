@@ -39,7 +39,7 @@ namespace Gallop
 
         public void ApplyLiveEarVirtualParents()
         {
-            if (Container == null || !Container.IsLive) return;
+            if (Container == null || !(Container.IsLive || Container.IsGachaPreview)) return;
             foreach (var pair in liveEarVirtualParents)
             {
                 if (!RotationRecorder.TryGetValue(pair.Target, out Vector3 euler)) continue;

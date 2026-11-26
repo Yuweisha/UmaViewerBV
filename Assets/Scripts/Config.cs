@@ -72,6 +72,7 @@ public class Config
     public string TargetFrameRateTip = "Application frame rate: positive integer FPS, 0 = unlimited (desktop).";
     public int TargetFrameRate = 60;
     public bool LiveSubtitles = true;
+    public bool GachaTapSkip = false;
 
     public int RenderScalePercent = 100;
     public int AnisotropicFiltering = 2;
@@ -191,9 +192,11 @@ public class Config
         bool mobileDefaults = Application.isMobilePlatform;
         if (mobileDefaults)
         {
-            WorkMode = WorkMode.Standalone;
+            WorkMode = Application.platform == RuntimePlatform.Android ? WorkMode.Default : WorkMode.Standalone;
             DownloadMissingResources = true;
-            MainPath = Application.persistentDataPath;
+            MainPath = Application.platform == RuntimePlatform.Android
+                ? "/storage/emulated/0/Android/data/jp.co.cygames.umamusume/files"
+                : Application.persistentDataPath;
 
             // 首次启动写出的默认配置直接用国内 CDN，否则安卓端会去连官方 akamai
             CdnMode = "CN";
@@ -263,7 +266,7 @@ public class Config
                 MainPath = $@"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low"}\Cygames\umamusume";
             }
         }
-        if (mobileDefaults)
+        if (mobileDefaults && Application.platform != RuntimePlatform.Android)
         {
             // 配置里可能存着 Windows 的路径和 WorkMode，移动端必须覆盖回来
             WorkMode = WorkMode.Standalone;

@@ -259,6 +259,8 @@ public class UISettingsOther : MonoBehaviour
         if ((int)Config.Instance.WorkMode != mode)
         {
             Config.Instance.WorkMode = (WorkMode)mode;
+            if (Application.platform == RuntimePlatform.Android && Config.Instance.WorkMode == WorkMode.Standalone)
+                Config.Instance.MainPath = Application.persistentDataPath;
             Config.Instance.UpdateConfig(true);
         }
     }
@@ -317,9 +319,58 @@ public class UISettingsOther : MonoBehaviour
             Config.Instance.MainPath = path[0];
             Config.Instance.UpdateConfig(true);
         }
+#elif UNITY_ANDROID
+        ShowDataPathInput();
 #else
         UmaViewerUI.Instance.ShowMessage("Not supported on this platform", UIMessageType.Warning);
 #endif
+    }
+
+    private void ShowDataPathInput()
+    {
+        TMP_InputField input = null;
+        var popup = Popup.Create("Enter the game data folder containing meta and master/master.mdb.", 800, 300, "Save", () =>
+        {
+            string path = input.text.Trim();
+            if (!Directory.Exists(path) || (Config.Instance.WorkMode == WorkMode.Default &&
+                !UmaDatabaseController.TrySelectDatabasePaths(path, WorkMode.Default, out _, out _)))
+            {
+                UmaViewerUI.Instance.ShowMessage("Cannot read meta and master/master.mdb from this folder. Check the path and Android storage access.", UIMessageType.Error);
+                return;
+            }
+            Config.Instance.MainPath = path;
+            Config.Instance.UpdateConfig(true);
+        }, "Cancel");
+        var message = popup.transform.Find("Panel/TextField").GetComponentInChildren<TMP_Text>();
+        message.rectTransform.anchorMin = new Vector2(0, 1);
+        message.rectTransform.anchorMax = Vector2.one;
+        message.rectTransform.pivot = new Vector2(0.5f, 1);
+        message.rectTransform.anchoredPosition = new Vector2(0, -10);
+        message.rectTransform.sizeDelta = new Vector2(-40, 90);
+        var field = new GameObject("DataPath", typeof(RectTransform), typeof(Image), typeof(RectMask2D), typeof(TMP_InputField));
+        field.transform.SetParent(message.transform.parent, false);
+        field.layer = message.gameObject.layer;
+        var rect = (RectTransform)field.transform;
+        rect.anchorMin = new Vector2(0, 0.45f);
+        rect.anchorMax = new Vector2(1, 0.45f);
+        rect.sizeDelta = new Vector2(-40, 55);
+        var text = Instantiate(message, field.transform);
+        text.name = "Text";
+        text.rectTransform.anchorMin = Vector2.zero;
+        text.rectTransform.anchorMax = Vector2.one;
+        text.rectTransform.offsetMin = new Vector2(10, 5);
+        text.rectTransform.offsetMax = new Vector2(-10, -5);
+        text.enableAutoSizing = false;
+        text.fontSize = 24;
+        text.alignment = TextAlignmentOptions.MidlineLeft;
+        text.enableWordWrapping = false;
+        text.raycastTarget = false;
+        input = field.GetComponent<TMP_InputField>();
+        input.targetGraphic = field.GetComponent<Image>();
+        input.textViewport = rect;
+        input.textComponent = text;
+        input.lineType = TMP_InputField.LineType.SingleLine;
+        input.SetTextWithoutNotify(Config.Instance.MainPath);
     }
 
     public void OpenConfig()

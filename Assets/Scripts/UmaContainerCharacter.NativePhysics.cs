@@ -52,7 +52,7 @@ public partial class UmaContainerCharacter
             if (_chara == null || _chara.BodyScale <= 0.0f)
                 return 1.0f;
 
-            return _chara.BodyScale;
+            return _chara.IsGachaPreview && !isHead ? 1f : _chara.BodyScale;
         }
 
         public override float GetBodyScale()
@@ -149,6 +149,12 @@ public partial class UmaContainerCharacter
             BodyScale
         );
 
+        if (IsGachaPreview)
+        {
+            _cySpringController.UpdateMode = CySpringController.SpringUpdateMode.ModeNormal;
+            _cySpringController.IsAffectOwnerRotation = true;
+            _cySpringController.IsAffectOwnerScale = true;
+        }
         _cySpringController.Reset();
         _cySpringLoaded = true;
         _cySpringController.SetEnableAllCySpringBones(EnablePhysics);
