@@ -663,6 +663,10 @@ public partial class UmaDatabaseController
     internal List<DataRow> ReadGachaCaptureCards() => ReadMaster(masterDb,
         "SELECT id, chara_id FROM card_data WHERE default_rarity=3 ORDER BY id");
 
+    internal List<DataRow> ReadGachaSetCards() => ReadMaster(masterDb,
+        "SELECT c.id,c.chara_id,c.default_rarity,r.race_dress_id FROM card_data c " +
+        "JOIN card_rarity_data r ON r.card_id=c.id AND r.rarity=c.default_rarity ORDER BY c.id");
+
     internal DataRow ReadGachaCard(int cardId)
     {
         var rows = ReadMaster(masterDb,

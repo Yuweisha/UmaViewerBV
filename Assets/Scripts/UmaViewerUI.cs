@@ -171,6 +171,14 @@ public partial class UmaViewerUI : MonoBehaviour
 
     private void Update()
     {
+        if (!gachaActive && Input.GetKeyDown(KeyCode.Escape) && gachaSetPanel && gachaSetPanel.activeSelf)
+        {
+            if (gachaSetPicker && gachaSetPicker.activeSelf)
+                gachaSetPicker.SetActive(false);
+            else
+                gachaSetPanel.SetActive(false);
+            return;
+        }
         if (gachaActive)
         {
             if (Input.GetKeyDown(KeyCode.Escape))
@@ -879,6 +887,7 @@ public partial class UmaViewerUI : MonoBehaviour
 
     void ShowLiveSelectPanel(LiveEntry entry, bool loadPreview = true)
     {
+        if (gachaSetPanel) gachaSetPanel.SetActive(false);
         EnsureRecommendedLiveToggle();
         EnsureLiveSubtitleToggle();
         EnsureLiveRenderEntry();

@@ -93,6 +93,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private readonly GachaPreviewAudio audio;
     private readonly IReadOnlyList<int> cards;
     private readonly int openingId;
+    private readonly LiveCharacterLoadData openingActor;
+    private readonly IReadOnlyList<GachaCutInLoader.Selection> selections;
     private readonly GachaSupportStage.Options supportOptions;
     private GachaSupportStage support;
     private Vector3[] lineupPositions;
@@ -137,7 +139,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         (waitForTap || (!waitForVoice && (tapSkip || supportOptions != null || Config.Instance?.GachaTapSkip == true) &&
             (jumpFrame > lastFrame || Current.AlbumUpgradeCanSkip)));
     internal bool AtFinalName => chapter >= 0 && !Finished && supportOptions == null &&
-        Current.Unique && Current.ResultIndex == cards.Count - 1 && waitForTap && HasNameFlash;
+        (Current.Unique || selections != null) && Current.ResultIndex == cards.Count - 1 && waitForTap && HasNameFlash;
     internal void SetMuted(bool muted) => audio.SetMuted(muted);
     internal void SetAudioPaused(bool paused) => audio.SetPaused(paused);
     internal void SynchronizeAudio() => audio.Synchronize();
@@ -168,12 +170,15 @@ internal sealed partial class GachaCutInPlayer : IDisposable
 
     public GachaCutInPlayer(Camera template, RenderTexture target, IReadOnlyList<int> cards, int openingId,
         GachaSupportStage.Options supportOptions = null, ReplayResources replayResources = null,
-        GachaCutInLoader timingLoader = null)
+        GachaCutInLoader timingLoader = null, IReadOnlyList<GachaCutInLoader.Selection> selections = null,
+        LiveCharacterLoadData openingActor = null)
     {
         timingOnly = timingLoader != null;
         loader = timingLoader ?? new GachaCutInLoader();
         this.cards = cards;
         this.openingId = openingId;
+        this.openingActor = openingActor;
+        this.selections = selections;
         this.supportOptions = supportOptions;
         root = new GameObject("Gacha playback").transform;
         cameraMotion = new GameObject("Camera motion");
@@ -329,9 +334,10 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private List<UmaDatabaseEntry> CollectCharacterAssets()
     {
         var main = UmaViewerMain.Instance;
-        return GachaCutInLoader.CharacterBundles(cards, openingId).Distinct()
+        return GachaCutInLoader.CharacterBundles(cards, openingId, selections).Distinct()
             .SelectMany(entry => UmaAssetManager.SearchAB(main, entry))
-            .Concat(audio.CollectCharacterBanks(cards))
+            .Concat(audio.CollectCharacterBanks(selections == null ? cards :
+                selections.Select(selection => selection.CutInCard > 0 ? selection.CutInCard : selection.Card)))
             .GroupBy(entry => entry.Url, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First()).ToList();
     }
@@ -352,7 +358,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             support = loader.LoadSupport(cards, root, camera, supportOptions);
         else
         {
-            loader.Load(cards, openingId, root);
+            loader.Load(cards, openingId, root, selections, openingActor);
             lineupPositions = new Vector3[cards.Count];
             course = InstantiateVisual(loader.Prefabs[Course], root);
             InstallGates(course.transform);
@@ -981,7 +987,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                     continue;
                 gate.Variants[i] = InstantiateVisual(prefab, target);
             }
-            gate.SetFinish(0);
+            gate.SetFinish(slot <= loader.Draws.Count && selections != null ? loader.Draws[slot - 1].InitialGateFinish : 0);
             if (slot > cards.Count)
                 gate.Open(loader.OpenedGateClip);
         }
