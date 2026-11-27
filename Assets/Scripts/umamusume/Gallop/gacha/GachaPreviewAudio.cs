@@ -90,7 +90,7 @@ internal sealed class GachaPreviewAudio : IDisposable
         ownsClips = sharedClips == null;
         if (sharedClips != null)
             clips = sharedClips;
-        music = CreateChannel("Gacha BGM");
+        music = new Channel(CreateSource("Gacha BGM"), CreateSource("Gacha BGM intro"));
         ambience = CreateChannel("Gacha ambience");
         voice = CreateChannel("Gacha voice");
         cardEffect = CreateChannel("Gacha card effect");
@@ -99,7 +99,7 @@ internal sealed class GachaPreviewAudio : IDisposable
 
     public void StartMusic()
     {
-        music.Play(Resolve("snd_bgm_gm025", "snd_bgm_GM025_gacha_01", "b"), true, 1f);
+        PlayCue(music, "snd_bgm_gm025", "snd_bgm_GM025_gacha_01", "b", true, 1f);
     }
 
     public IEnumerator PrepareCharacterBanks(IEnumerable<int> cards, Action<int, int, string> progress)
@@ -113,6 +113,7 @@ internal sealed class GachaPreviewAudio : IDisposable
     public List<UmaDatabaseEntry> CollectCharacterBanks(IEnumerable<int> cards)
     {
         var banks = new HashSet<UmaDatabaseEntry>();
+        AddBanks(banks, "b", "snd_bgm_gm025");
         foreach (int card in cards)
         {
             var result = UmaDatabaseController.Instance.ReadGachaCard(card);
@@ -315,7 +316,7 @@ internal sealed class GachaPreviewAudio : IDisposable
         {
             if (!decoded.TryGetValue(note.WaveId, out var samples))
             {
-                samples = ReadWave(bank, note.WaveId, out int waveRate, out int waveChannels);
+                samples = ReadWave(bank, note.WaveId, out int waveRate, out int waveChannels, out _);
                 if (rate != 0 && (waveRate != rate || waveChannels != channels))
                     throw new InvalidDataException($"Incompatible waveform formats in {cue}.");
                 rate = waveRate;
@@ -391,7 +392,7 @@ internal sealed class GachaPreviewAudio : IDisposable
             if (string.IsNullOrEmpty(sheet) || sheet == "gacha_000")
                 sheet = fallbackSheet;
             float volume = key._isVolume ? key._volume : 1f;
-            channel.Play(Resolve(sheet, key._id, folder), key._loop,
+            PlayCue(channel, sheet, key._id, folder, key._loop,
                 key._fadeDurationMilliseconds > 0 && key._isVolume ? 0f : volume);
             channel.Fade(volume, key._isVolume ? key._fadeDurationMilliseconds : 0, false);
         }
@@ -399,6 +400,30 @@ internal sealed class GachaPreviewAudio : IDisposable
             channel.Fade(key._volume, key._fadeDurationMilliseconds, false);
         else if (!key._play && !key._keepBgm)
             channel.Fade(0f, key._stopFadeDurationMilliseconds, true);
+    }
+
+    private void PlayCue(Channel channel, string sheet, string cue, string folder, bool loop, float volume)
+    {
+        if (channel != music || !loop || string.IsNullOrEmpty(sheet) || string.IsNullOrEmpty(cue))
+        {
+            channel.Play(Resolve(sheet, cue, folder), loop, volume);
+            return;
+        }
+        string key = $"{sheet}/{cue}/loop";
+        if (!clips.TryGetValue(key, out var body))
+        {
+            try
+            {
+                body = Decode(BankPath(folder, sheet), cue, intro => clips[key + "/intro"] = intro);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Gacha BGM {cue}: {exception.Message}");
+            }
+            clips[key] = body;
+        }
+        clips.TryGetValue(key + "/intro", out var introClip);
+        music.Play(body, true, volume, introClip);
     }
 
     private AudioClip Resolve(string sheet, string cue, string folder)
@@ -426,7 +451,7 @@ internal sealed class GachaPreviewAudio : IDisposable
 
     private Stream OpenBank(UmaDatabaseEntry entry) => File.OpenRead(entry.FilePath);
 
-    private AudioClip Decode(string path, string cue)
+    private AudioClip Decode(string path, string cue, Action<AudioClip> saveIntro = null)
     {
         var index = UmaViewerMain.Instance.AbList;
         if (!index.TryGetValue(path + ".acb", out var acbEntry))
@@ -434,7 +459,7 @@ internal sealed class GachaPreviewAudio : IDisposable
             if (!index.TryGetValue(path + ".awb", out var awbEntry))
                 return null;
             using (var bank = new AwbReader(OpenBank(awbEntry)))
-                return bank.Waves.Count == 1 ? DecodeWave(bank, bank.Waves[0].WaveId, cue) : null;
+                return bank.Waves.Count == 1 ? DecodeWave(bank, bank.Waves[0].WaveId, cue, saveIntro) : null;
         }
 
         using (var stream = OpenBank(acbEntry))
@@ -449,13 +474,13 @@ internal sealed class GachaPreviewAudio : IDisposable
                         if (!index.TryGetValue(path + ".awb", out var external))
                             return null;
                         using (var bank = new AwbReader(OpenBank(external)))
-                            return DecodeWave(bank, waveId, cue);
+                            return DecodeWave(bank, waveId, cue, saveIntro);
                     }
 
                     stream.Position = 0;
                     using (var acb = new AcbReader(stream))
                     using (var bank = acb.GetAwb())
-                        return DecodeWave(bank, waveId, cue);
+                        return DecodeWave(bank, waveId, cue, saveIntro);
                 }
             }
 
@@ -466,7 +491,7 @@ internal sealed class GachaPreviewAudio : IDisposable
                 {
                     using (var bank = new AwbReader(OpenBank(external)))
                     {
-                        var clip = FindWave(acb, bank, cue, false);
+                        var clip = FindWave(acb, bank, cue, false, saveIntro);
                         if (clip)
                             return clip;
                     }
@@ -475,33 +500,43 @@ internal sealed class GachaPreviewAudio : IDisposable
                 if (!acb.HasEmbeddedAwb)
                     return null;
                 using (var bank = acb.GetAwb())
-                    return FindWave(acb, bank, cue, true);
+                    return FindWave(acb, bank, cue, true, saveIntro);
             }
         }
     }
 
-    private static AudioClip FindWave(AcbReader acb, AwbReader bank, string cue, bool embedded)
+    private static AudioClip FindWave(AcbReader acb, AwbReader bank, string cue, bool embedded, Action<AudioClip> saveIntro)
     {
         foreach (var wave in bank.Waves)
         {
             string names = acb.GetWaveName(wave.WaveId, -1, embedded);
             foreach (var name in names.Split(';'))
                 if (string.Equals(name.Trim(), cue, StringComparison.OrdinalIgnoreCase))
-                    return DecodeWave(bank, wave.WaveId, cue);
+                    return DecodeWave(bank, wave.WaveId, cue, saveIntro);
         }
         return null;
     }
 
-    private static AudioClip DecodeWave(AwbReader bank, int waveId, string cue)
+    private static AudioClip DecodeWave(AwbReader bank, int waveId, string cue, Action<AudioClip> saveIntro)
     {
-        var samples = ReadWave(bank, waveId, out int rate, out int channels);
+        var samples = ReadWave(bank, waveId, out int rate, out int channels, out var info);
+        if (saveIntro != null && info.LoopEnabled)
+        {
+            int start = info.LoopStartSample, end = info.LoopEndSample;
+            if (start < 0 || end <= start || end > samples.Length / channels)
+                throw new InvalidDataException($"Invalid HCA loop {start}..{end} for {cue}.");
+            if (start > 0)
+                saveIntro(CreateClip(cue + " intro", new ArraySegment<float>(samples, 0, start * channels).ToArray(), rate, channels));
+            samples = new ArraySegment<float>(samples, start * channels, (end - start) * channels).ToArray();
+        }
         return CreateClip(cue, samples, rate, channels);
     }
 
-    private static float[] ReadWave(AwbReader bank, int waveId, out int rate, out int channels)
+    private static float[] ReadWave(AwbReader bank, int waveId, out int rate, out int channels, out ClHcaSharp.HcaInfo info)
     {
         using (var wave = new UmaWaveStream(bank, waveId))
         {
+            info = wave.Info;
             wave.Loop = false;
             var format = wave.WaveFormat;
             rate = format.SampleRate;
@@ -527,7 +562,7 @@ internal sealed class GachaPreviewAudio : IDisposable
         return clip;
     }
 
-    private Channel CreateChannel(string name)
+    private AudioSource CreateSource(string name)
     {
         var node = new GameObject(name);
         node.transform.SetParent(root, false);
@@ -535,7 +570,12 @@ internal sealed class GachaPreviewAudio : IDisposable
         source.playOnAwake = false;
         source.spatialBlend = 0f;
         source.mute = muted;
-        var channel = new Channel(source);
+        return source;
+    }
+
+    private Channel CreateChannel(string name)
+    {
+        var channel = new Channel(CreateSource(name));
         channel.SetPaused(paused);
         return channel;
     }
@@ -570,6 +610,10 @@ internal sealed class GachaPreviewAudio : IDisposable
         public bool IsPlaying { get; private set; }
         private AudioClip savedClip;
         private bool savedLoop;
+        private readonly AudioSource introSource;
+        private AudioClip introClip;
+        private double IntroDuration => introClip ? (double)introClip.samples / introClip.frequency : 0;
+
 
         internal Channel Capture()
         {
@@ -582,6 +626,8 @@ internal sealed class GachaPreviewAudio : IDisposable
         internal void Restore(Channel state)
         {
             Source.Stop();
+            if (introSource) introSource.Stop();
+            introClip = state.introClip;
             Source.clip = state.savedClip;
             Source.loop = state.savedLoop;
             startVolume = state.startVolume;
@@ -593,7 +639,7 @@ internal sealed class GachaPreviewAudio : IDisposable
             duckVolume = state.duckVolume;
             playbackTime = state.playbackTime;
             IsPlaying = state.IsPlaying;
-            Source.volume = volume * duckVolume;
+            ApplyVolume();
             Synchronize();
         }
 
@@ -602,21 +648,53 @@ internal sealed class GachaPreviewAudio : IDisposable
             set
             {
                 duckVolume = Mathf.Clamp01(value);
-                Source.volume = volume * duckVolume;
+                ApplyVolume();
             }
         }
 
-        public Channel(AudioSource source) => Source = source;
+        private void ApplyVolume()
+        {
+            Source.volume = volume * duckVolume;
+            if (introSource) introSource.volume = Source.volume;
+        }
 
-        public void Play(AudioClip clip, bool loop, float volume)
+        public Channel(AudioSource source, AudioSource introSource = null)
+        {
+            Source = source;
+            this.introSource = introSource;
+        }
+
+        // Schedule both sides of the intro seam on Unity's audio clock. From then on
+        // the mixer loops only the exact PCM frames between the two HCA markers.
+        private void PlayIntroAt(int sample)
+        {
+            introSource.Stop();
+            Source.Stop();
+            introSource.clip = introClip;
+            introSource.timeSamples = sample;
+            Source.timeSamples = 0;
+            double start = AudioSettings.dspTime + 0.02;
+            introSource.PlayScheduled(start);
+            Source.PlayScheduled(start + (double)(introClip.samples - sample) / introClip.frequency);
+        }
+
+        public void Play(AudioClip clip, bool loop, float volume, AudioClip intro = null)
         {
             if (!clip)
                 return;
+            if (introSource) introSource.Stop();
+            introClip = intro;
             Fade(volume, 0, false);
             Source.clip = clip;
             Source.loop = loop;
             playbackTime = 0;
             IsPlaying = true;
+            if (introClip)
+            {
+                Source.Stop();
+                if (!paused) PlayIntroAt(0);
+                return;
+            }
             Source.Play();
             if (paused)
                 Source.Pause();
@@ -624,6 +702,7 @@ internal sealed class GachaPreviewAudio : IDisposable
 
         public void Stop()
         {
+            if (introSource) introSource.Stop();
             IsPlaying = false;
             playbackTime = 0;
             Source.Stop();
@@ -635,7 +714,15 @@ internal sealed class GachaPreviewAudio : IDisposable
             if (!IsPlaying || !clip)
                 return;
             double length = (double)clip.samples / clip.frequency;
-            double position = Source.loop ? playbackTime % length : playbackTime;
+            double bodyTime = playbackTime - IntroDuration;
+            if (introClip && bodyTime < 0)
+            {
+                int introSample = Math.Min(introClip.samples - 1, (int)(playbackTime * introClip.frequency));
+                if (!paused && (!introSource.isPlaying || Math.Abs(introSource.timeSamples - introSample) > clip.frequency / 10))
+                    PlayIntroAt(introSample);
+                return;
+            }
+            double position = Source.loop ? bodyTime % length : bodyTime;
             int sample = Math.Min(clip.samples - 1, (int)(position * clip.frequency));
             if (paused)
             {
@@ -659,6 +746,13 @@ internal sealed class GachaPreviewAudio : IDisposable
             if (paused == value)
                 return;
             paused = value;
+            if (introClip)
+            {
+                introSource.Stop();
+                Source.Stop();
+                if (!value) Synchronize();
+                return;
+            }
             if (value)
             {
                 Source.Pause();
@@ -694,7 +788,7 @@ internal sealed class GachaPreviewAudio : IDisposable
                 return;
             elapsed += deltaTime;
             volume = Mathf.Lerp(startVolume, targetVolume, elapsed / fadeTime);
-            Source.volume = volume * duckVolume;
+            ApplyVolume();
             if (elapsed >= fadeTime)
                 CompleteFade();
         }
@@ -702,7 +796,7 @@ internal sealed class GachaPreviewAudio : IDisposable
         private void CompleteFade()
         {
             volume = targetVolume;
-            Source.volume = volume * duckVolume;
+            ApplyVolume();
             fadeTime = 0f;
             if (stopAfterFade)
                 Stop();

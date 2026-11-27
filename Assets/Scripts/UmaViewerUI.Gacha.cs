@@ -39,6 +39,7 @@ public partial class UmaViewerUI
     private Canvas gachaControlsCanvas;
     private FreeCam gachaFreeCamera;
     private Text gachaCameraLabel;
+    private Text gachaFallbackName;
     private Text gachaCameraHelp;
     private bool gachaPaused;
     private bool gachaSeeking;
@@ -346,6 +347,7 @@ public partial class UmaViewerUI
             gachaPlayer.SynchronizeAudio();
             gachaPlayer.RenderFrame(GachaPlaybackTexture);
             gachaFade.color = gachaPlayer.Fade;
+            if (gachaFallbackName) gachaFallbackName.text = gachaPlayer.FallbackName ?? "";
         }
     }
 
@@ -353,7 +355,7 @@ public partial class UmaViewerUI
     {
         using (gachaReplayResources.Enter())
         {
-            if (gachaSetPlayback && gachaPlayer.WaitingForTap && !gachaPlayer.HasNameFlash)
+            if (gachaSetPlayback && gachaPlayer.WaitingForTap && !gachaPlayer.ShowingResultName)
                 gachaPlayer.Advance();
             gachaPlayer.Tick(GachaStep);
         }
@@ -652,6 +654,14 @@ public partial class UmaViewerUI
         fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
         fitter.aspectRatio = (float)renderSize.x / renderSize.y;
 
+        if (gachaSetPlayback)
+        {
+            gachaFallbackName = LiveRenderUI.Text("", surface.transform, Vector2.zero, new Vector2(0, 60), 32);
+            gachaFallbackName.font = HachimiGachaResources.Font;
+            gachaFallbackName.rectTransform.anchorMin = new Vector2(0, .16f);
+            gachaFallbackName.rectTransform.anchorMax = new Vector2(1, .16f);
+            gachaFallbackName.gameObject.AddComponent<Outline>();
+        }
         gachaFade = new GameObject("CutIn fade", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
         gachaFade.rectTransform.SetParent(surface.transform, false);
         gachaFade.rectTransform.anchorMin = Vector2.zero;
