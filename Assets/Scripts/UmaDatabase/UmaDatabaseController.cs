@@ -663,6 +663,21 @@ public partial class UmaDatabaseController
     internal List<DataRow> ReadGachaCaptureCards() => ReadMaster(masterDb,
         "SELECT id, chara_id FROM card_data WHERE default_rarity=3 ORDER BY id");
 
+    // Character Note combines shared, gift, home, live-limited and private outfits with
+    // both dress grants from each rarity of the character's cards. Preview all unlocks.
+    internal HashSet<(int, int)> ReadGachaSetDressGrants() => new HashSet<(int, int)>(ReadMaster(masterDb,
+        "SELECT chara_id, id AS dress_id FROM dress_data WHERE " +
+        "(chara_id=0 AND (condition_type IN (1,2) OR (condition_type=5 AND use_home=1) " +
+        "OR (condition_type=7 AND id IN (SELECT dress_id FROM dress_live_limited)))) " +
+        "OR (chara_id>0 AND condition_type=6 AND body_type BETWEEN 230 AND 239) " +
+        "UNION SELECT c.chara_id,r.get_dress_id_1 FROM card_data c JOIN card_rarity_data r ON r.card_id=c.id WHERE r.get_dress_id_1>0 " +
+        "UNION SELECT c.chara_id,r.get_dress_id_2 FROM card_data c JOIN card_rarity_data r ON r.card_id=c.id WHERE r.get_dress_id_2>0")
+        .Select(row => (Convert.ToInt32(row["chara_id"]), Convert.ToInt32(row["dress_id"]))));
+
+    internal HashSet<int> ReadDrawableGachaCardIds() => new HashSet<int>(ReadMaster(masterDb,
+        "SELECT DISTINCT card_id FROM gacha_available WHERE card_type=1 AND odds>0")
+        .Select(row => Convert.ToInt32(row["card_id"])));
+
     internal List<DataRow> ReadGachaSetCards() => ReadMaster(masterDb,
         "SELECT c.id,c.chara_id,c.default_rarity,r.race_dress_id FROM card_data c " +
         "JOIN card_rarity_data r ON r.card_id=c.id AND r.rarity=c.default_rarity ORDER BY c.id");

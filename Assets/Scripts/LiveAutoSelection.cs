@@ -139,7 +139,7 @@ public static class LiveAutoSelection
         return null;
     }
 
-    private static bool HasBody(UmaViewerMain main, CharaEntry character, string costumeId)
+    internal static bool HasBody(UmaViewerMain main, CharaEntry character, string costumeId)
     {
         if (costumeId.Length < 4)
             return main.AbList.ContainsKey(UmaDatabaseController.BodyPath + $"bdy{character.Id}_{costumeId}/pfb_bdy{character.Id}_{costumeId}");

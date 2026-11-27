@@ -63,7 +63,7 @@ internal sealed class GachaCutInLoader : IDisposable
         IReadOnlyList<Selection> selections = null)
     {
         var main = UmaViewerMain.Instance;
-        var results = cards.Select(ReadDraw).ToArray();
+        var results = selections == null ? cards.Select(ReadDraw).ToArray() : null;
         var rarities = selections?.Select(result => result.CutInCard > 0 ? 3 : result.Rarity).ToArray()
             ?? results.Select(result => result.Rarity).ToArray();
         var cutCards = selections?.Select(result => result.CutInCard).ToArray() ?? cards;
@@ -83,10 +83,11 @@ internal sealed class GachaCutInLoader : IDisposable
                 if (main.AbList.TryGetValue(path, out var shadow))
                     yield return shadow;
 
-        for (int i = 0; i < results.Length; i++)
+        for (int i = 0; i < cards.Count; i++)
         {
             int textCard = selections?[i].CutInCard > 0 ? selections[i].CutInCard : cards[i];
-            var text = TextPaths(textCard, selections?[i].Character.Id ?? results[i].Character.Id, rarities[i]);
+            var character = selections?[i].Character ?? results[i].Character;
+            var text = TextPaths(textCard, NameplateOwner(textCard, character.Id), rarities[i]);
             foreach (var path in new[] { text.Name, text.NameTexture, text.Comment, text.CommentEffect, text.CommentTexture })
                 if (path != null && main.AbList.TryGetValue(path, out var entry))
                     yield return entry;
@@ -484,7 +485,7 @@ internal sealed class GachaCutInLoader : IDisposable
         GachaPreviewFlash flash = null;
         UmaAssetManager.LoadTracked(bundleLoads, () =>
         {
-            var paths = TextPaths(card, draw.Character.Id, rarity);
+            var paths = TextPaths(card, draw.NameplateCharacter, rarity);
             var database = UmaDatabaseController.Instance;
             string cardTitle = database.ReadGachaCardTitle(card);
             var commentPrefab = LoadNamedAsset<GameObject>(paths.Comment);
@@ -506,6 +507,11 @@ internal sealed class GachaCutInLoader : IDisposable
         });
         return flash;
     }
+
+    // The card identifies the owner of the result artwork even when another actor performs it.
+    private static int NameplateOwner(int card, int actor) =>
+        card > 0 && UmaDatabaseController.Instance.ReadGachaCard(card) is System.Data.DataRow row
+            ? Convert.ToInt32(row["chara_id"]) : actor;
 
     private static string TimelinePath(string name) => $"cutt/cutin/skill/{name}/{name}";
 
@@ -684,6 +690,7 @@ internal sealed class GachaCutInLoader : IDisposable
         public readonly CharaEntry Character;
         public readonly int Rarity;
         public readonly UmaContainerCharacter Actor;
+        public readonly int NameplateCharacter;
         public readonly int InitialGateFinish;
         public readonly bool OverrideActor;
 
@@ -692,6 +699,7 @@ internal sealed class GachaCutInLoader : IDisposable
         {
             Card = card;
             Character = character;
+            NameplateCharacter = NameplateOwner(card, character.Id);
             Rarity = rarity;
             Actor = actor;
             InitialGateFinish = initialGateFinish < 0 ? Math.Min(rarity - 1, 1) : initialGateFinish;

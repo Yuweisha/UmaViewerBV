@@ -75,6 +75,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private readonly GameObject cameraMotion;
     private readonly Camera camera;
     private Camera orthoBackgroundCamera;
+    private bool orthoBackgroundActive;
     private readonly CameraClearFlags defaultClearFlags;
     private readonly bool defaultAllowMsaa;
     private readonly Color defaultBackgroundColor;
@@ -139,7 +140,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         (waitForTap || (!waitForVoice && (tapSkip || supportOptions != null || Config.Instance?.GachaTapSkip == true) &&
             (jumpFrame > lastFrame || Current.AlbumUpgradeCanSkip)));
     internal bool AtFinalName => chapter >= 0 && !Finished && supportOptions == null &&
-        (Current.Unique || selections != null) && Current.ResultIndex == cards.Count - 1 && waitForTap && HasNameFlash;
+        (Current.Unique || selections != null) && Current.ResultIndex == cards.Count - 1 && waitForTap && ShowingResultName;
     internal void SetMuted(bool muted) => audio.SetMuted(muted);
     internal void SetAudioPaused(bool paused) => audio.SetPaused(paused);
     internal void SynchronizeAudio() => audio.Synchronize();
@@ -148,6 +149,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     public bool IsVoicePlaying => audio.IsVoicePlaying;
     public bool HasCommentFlash => flash?.CommentVisible == true;
     public bool HasNameFlash => flash?.NameVisible == true;
+    internal string FallbackName { get; private set; }
+    internal bool ShowingResultName => HasNameFlash || FallbackName != null;
     public bool HasLocalizedCommentFlash => flash?.LocalizedCommentVisible == true;
     public bool HasLocalizedNameFlash => flash?.LocalizedNameVisible == true;
     public Draw ActiveDraw => supportOptions == null && !Finished && Current.ResultIndex >= 0
@@ -253,8 +256,11 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                     binding.Actor.UpdateFaceLightRuntime();
             monitorCamera?.Render();
             maskCamera?.Render();
-            if (orthoBackgroundCamera && orthoBackgroundCamera.enabled)
+            if (orthoBackgroundCamera && orthoBackgroundActive)
             {
+                // Manual playback owns the final surface. An automatic background
+                // pass later in the frame would overwrite the complete composition.
+                orthoBackgroundCamera.enabled = camera.enabled;
                 orthoBackgroundCamera.targetTexture = target;
                 orthoBackgroundCamera.aspect = renderAspect;
                 orthoBackgroundCamera.Render();
@@ -271,7 +277,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         }
         finally
         {
-            if (orthoBackgroundCamera && orthoBackgroundCamera.enabled)
+            if (orthoBackgroundCamera && orthoBackgroundActive)
             {
                 orthoBackgroundCamera.targetTexture = previous;
                 orthoBackgroundCamera.aspect = aspect;
@@ -366,6 +372,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         audio.StartMusic();
         NextCut();
         camera.enabled = true;
+        if (orthoBackgroundCamera)
+            orthoBackgroundCamera.enabled = orthoBackgroundActive;
     }
 
     internal GachaCutInPlayer CreateTimingProbe(RenderTexture target, ReplayResources resources)
@@ -571,7 +579,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             return;
         if (waitForTap)
         {
-            if (support == null && HasNameFlash)
+            if (support == null && ShowingResultName)
             {
                 NextCut();
                 return;
@@ -728,6 +736,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         lastFrame = -1;
         jumpFrame = -1;
         title = null;
+        FallbackName = null;
         shake = null;
         gateZoom = null;
         gatePan = null;
@@ -1120,6 +1129,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                 {
                     if (flash?.PlayName() == true)
                         audio.PlayCharacterNameEffect(draw.Rarity);
+                    else if (selections != null)
+                        FallbackName = UmaViewerMain.Instance.Characters.FirstOrDefault(c => c.Id == draw.NameplateCharacter)?.GetName() ?? draw.NameplateCharacter.ToString();
                     title = draw.Label;
                 }
                 if (command == "ResultStart")
@@ -1820,6 +1831,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
 
     private void SetOrthoBackgroundActive(bool active)
     {
+        orthoBackgroundActive = active;
         camera.clearFlags = active ? CameraClearFlags.Nothing : defaultClearFlags;
         bool sharesSceneDepth = colorCorrectionExemptCamera && colorCorrectionExemptCamera.enabled;
         camera.allowMSAA = !active && !sharesSceneDepth && defaultAllowMsaa;
@@ -1846,7 +1858,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             settings.renderShadows = false;
         }
         if (orthoBackgroundCamera)
-            orthoBackgroundCamera.enabled = active;
+            orthoBackgroundCamera.enabled = active && camera.enabled;
     }
 
     private void SamplePostEffects()

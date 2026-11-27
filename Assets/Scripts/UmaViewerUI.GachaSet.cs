@@ -24,6 +24,7 @@ public partial class UmaViewerUI
     private readonly Text[] gachaSetCutInNames = new Text[10];
     private readonly Dropdown[] gachaSetGates = new Dropdown[10];
     private List<DataRow> gachaSetCards;
+    private GachaSetRandom gachaSetRandom;
     private ScrollRect gachaSetCharacters, gachaSetCostumes;
     private int gachaSetSelectedSlot;
     private bool gachaSetPickingCutIn;
@@ -113,8 +114,25 @@ public partial class UmaViewerUI
         });
         clear.name = "Clear";
         clear.GetComponentInChildren<Text>().font = GachaSetFont;
+        PlaceGachaSetItem((RectTransform)clear.transform, 535, 635, 200, 50);
+        var random = CreateGachaSetButton("Random", panel, RandomizeGachaSet);
+        PlaceGachaSetItem((RectTransform)random.transform, 278, 635, 200, 50);
         var play = CreateGachaSetButton("Play", panel, PlayGachaSet);
-        PlaceGachaSetItem((RectTransform)play.transform, 110, 635, 220, 50);
+        PlaceGachaSetItem((RectTransform)play.transform, 20, 635, 200, 50);
+    }
+
+    private void RandomizeGachaSet()
+    {
+        gachaSetRandom ??= new GachaSetRandom(Main, gachaSetCards);
+        if (!gachaSetRandom.TryRoll(gachaSetOverdrive.isOn, gachaSetSlots, out var actor))
+        {
+            ShowMessage(UiLocalization.T("No eligible gacha selections found."), UIMessageType.Warning);
+            return;
+        }
+        CloseGachaSetPicker();
+        gachaSetOpeningActor = actor;
+        gachaSetOpening.SetValueWithoutNotify(UnityEngine.Random.Range(0, 2));
+        RefreshGachaSetSlots();
     }
 
     private void CreateGachaSetGrid(RectTransform panel, bool cutIn, float top)
@@ -262,7 +280,7 @@ public partial class UmaViewerUI
         var actor = openingActor?.CharaEntry;
         if (hasOpening && actor == null)
             actor = Main.Characters.FirstOrDefault(item => item.Id == 9001 + gachaSetOpening.value);
-        var outfit = openingActor == null ? null : Main.Costumes.FirstOrDefault(item => item.MasterDressId == openingActor.MasterDressId);
+        var outfit = (openingActor?.MasterDressId ?? 0) == 0 ? null : Main.Costumes.FirstOrDefault(item => item.MasterDressId == openingActor.MasterDressId);
         SetGachaSetSlotVisual(gachaSetOpeningSlot, actor, outfit);
         gachaSetOpeningSlot.GetComponent<Button>().interactable = hasOpening;
         gachaSetOpeningName.text = UiLocalization.T("Opening actor") + "\n" + (hasOpening
@@ -271,7 +289,7 @@ public partial class UmaViewerUI
         for (int index = 0; index < gachaSetSlots.Length; index++)
         {
             var slot = gachaSetSlots[index];
-            var characterCostume = slot == null ? null : Main.Costumes.FirstOrDefault(item => item.MasterDressId == slot.DressId);
+            var characterCostume = (slot?.DressId ?? 0) == 0 ? null : Main.Costumes.FirstOrDefault(item => item.MasterDressId == slot.DressId);
             SetGachaSetSlotVisual(gachaSetCharacterSlots[index], slot?.Character, characterCostume);
             gachaSetCharacterNames[index].text = slot?.Character?.GetName() ?? UiLocalization.T("Empty");
             gachaSetGates[index].SetValueWithoutNotify(slot?.InitialGateFinish ?? 0);
@@ -352,7 +370,8 @@ public partial class UmaViewerUI
         }
         ClearGachaSetList(gachaSetCharacters);
         ClearGachaSetList(gachaSetCostumes);
-        var characters = Main.Characters.Where(character => !character.IsMob && (opening ||
+        gachaSetRandom ??= new GachaSetRandom(Main, gachaSetCards);
+        var characters = Main.Characters.Where(character => !character.IsMob && (cutIn || gachaSetRandom.Outfits(character.Id).Count > 0) && (opening || gachaSetOverdrive.isOn ||
             gachaSetCards.Any(row => Convert.ToInt32(row["chara_id"]) == character.Id)));
         if (cutIn)
             characters = characters.Where(character => gachaSetCards.Any(row => Convert.ToInt32(row["chara_id"]) == character.Id &&
@@ -371,7 +390,11 @@ public partial class UmaViewerUI
                 HighlightChildImage(gachaSetCharacters.content, item);
                 if (!gachaSetPickingCutIn)
                 {
-                    SetGachaSetCharacter(character, null);
+                    var outfits = gachaSetRandom.Outfits(character.Id);
+                    var firstCard = gachaSetCards.FirstOrDefault(row => Convert.ToInt32(row["chara_id"]) == character.Id);
+                    var preferred = opening ? outfits.FirstOrDefault(a => a.CostumeId == "00") :
+                        firstCard == null ? null : outfits.FirstOrDefault(a => a.MasterDressId == Convert.ToInt32(firstCard["race_dress_id"]));
+                    SetGachaSetCharacter(preferred ?? outfits[0]);
                     gachaSetRemove.interactable = true;
                 }
                 ListGachaSetCostumes(character);
@@ -411,20 +434,22 @@ public partial class UmaViewerUI
     private void ListGachaSetCostumes(CharaEntry character)
     {
         ClearGachaSetList(gachaSetCostumes);
-        var costumes = Main.Costumes.Where(costume => costume.MasterDressId > 0 &&
-            (costume.CharaId == character.Id || costume.CharaId == 0)).GroupBy(costume => costume.MasterDressId).Select(group => group.First())
-            .OrderBy(costume => costume.MasterDressId);
-        foreach (var costume in costumes)
+        var outfits = gachaSetRandom.Outfits(character.Id);
+        var characterCards = gachaSetCards.Where(row => Convert.ToInt32(row["chara_id"]) == character.Id);
+        // CutIns are selected by the animation card, independent of the actor's wardrobe.
+        var choices = gachaSetPickingCutIn
+            ? characterCards.Where(row => Convert.ToInt32(row["default_rarity"]) == 3 &&
+                GachaCutInLoader.HasUniqueCut(Convert.ToInt32(row["id"])))
+                .Select(row => (Dress: Convert.ToInt32(row["race_dress_id"]), Card: Convert.ToInt32(row["id"]), Actor: (LiveCharacterLoadData)null))
+            : outfits.Select(actor => (Dress: actor.MasterDressId, Card: 0, Actor: actor));
+        foreach (var choice in choices.OrderBy(c => c.Dress))
         {
-            var card = gachaSetCards.FirstOrDefault(row => Convert.ToInt32(row["chara_id"]) == character.Id &&
-                Convert.ToInt32(row["race_dress_id"]) == costume.MasterDressId);
-            if (gachaSetPickingCutIn && (card == null || Convert.ToInt32(card["default_rarity"]) != 3 ||
-                !GachaCutInLoader.HasUniqueCut(Convert.ToInt32(card["id"]))))
-                continue;
+            var costume = choice.Dress == 0 ? null : Main.Costumes.FirstOrDefault(c => c.MasterDressId == choice.Dress);
             var item = Instantiate(UmaContainerCostumePrefab, gachaSetCostumes.content).GetComponent<UmaUIContainer>();
             item.UseLocalizedText();
             UIPressScaleFeedback.AddTo(item.gameObject);
-            item.Name = costume.DressName;
+            item.Name = choice.Dress == 0 ? UiLocalization.T("Default") : costume?.DressName ??
+                UmaDatabaseController.Instance.DressData.FirstOrDefault(row => Convert.ToInt32(row["id"]) == choice.Dress)?["dressname"]?.ToString() ?? choice.Dress.ToString();
             var caption = item.TextMesh.gameObject.activeSelf ? item.TextMesh.rectTransform : item.Text.rectTransform;
             caption.anchorMin = Vector2.zero;
             caption.anchorMax = Vector2.one;
@@ -437,17 +462,17 @@ public partial class UmaViewerUI
             item.Text.resizeTextForBestFit = true;
             item.Text.resizeTextMinSize = 14;
             item.Text.resizeTextMaxSize = 20;
-            item.Image.sprite = costume.Icon ?? CostumeIconDefault;
+            item.Image.sprite = costume?.Icon ?? CostumeIconDefault;
             item.Image.enabled = true;
             item.Button.onClick.AddListener(() =>
             {
                 if (gachaSetPickingCutIn)
                 {
                     gachaSetSlots[gachaSetSelectedSlot] ??= new GachaCutInLoader.Selection();
-                    gachaSetSlots[gachaSetSelectedSlot].CutInCard = Convert.ToInt32(card["id"]);
+                    gachaSetSlots[gachaSetSelectedSlot].CutInCard = choice.Card;
                 }
                 else
-                    SetGachaSetCharacter(character, costume);
+                    SetGachaSetCharacter(choice.Actor);
                 RefreshGachaSetSlots();
                 CloseGachaSetPicker();
             });
@@ -455,32 +480,22 @@ public partial class UmaViewerUI
         gachaSetCostumes.verticalNormalizedPosition = 1f;
     }
 
-    private void SetGachaSetCharacter(CharaEntry character, CostumeEntry costume)
+    private void SetGachaSetCharacter(LiveCharacterLoadData actor)
     {
         if (gachaSetSelectedSlot == OpeningSlot)
         {
-            var database = UmaDatabaseController.Instance;
-            var openingDress = costume == null ? null : database.ReadDressData(costume.MasterDressId);
-            gachaSetOpeningActor = new LiveCharacterLoadData
-            {
-                CharaEntry = character, MasterDressId = costume?.MasterDressId ?? 0,
-                CostumeId = openingDress == null ? "00" : LiveFormationLoader.CostumeForDress(openingDress, character, database),
-                HeadCostumeId = openingDress == null ? "00" : Convert.ToInt32(openingDress["head_sub_id"]).ToString("D2")
-            };
+            gachaSetOpeningActor = actor;
             RefreshGachaSetSlots();
             return;
         }
-        var cards = gachaSetCards.Where(row => Convert.ToInt32(row["chara_id"]) == character.Id).ToArray();
-        var selected = cards.FirstOrDefault(row => Convert.ToInt32(row["race_dress_id"]) == costume?.MasterDressId) ?? cards.First();
-        int dressId = costume?.MasterDressId ?? Convert.ToInt32(selected["race_dress_id"]);
-        var dress = UmaDatabaseController.Instance.ReadDressData(dressId);
+        var cards = gachaSetCards.Where(row => Convert.ToInt32(row["chara_id"]) == actor.CharaEntry.Id);
+        var selected = cards.FirstOrDefault(row => Convert.ToInt32(row["race_dress_id"]) == actor.MasterDressId) ?? cards.FirstOrDefault();
         var previous = gachaSetSlots[gachaSetSelectedSlot];
         var slot = new GachaCutInLoader.Selection
         {
-            Character = character, Card = Convert.ToInt32(selected["id"]), DressId = dressId,
-            Costume = LiveFormationLoader.CostumeForDress(dress, character, UmaDatabaseController.Instance),
-            Head = Convert.ToInt32(dress["head_sub_id"]).ToString("D2"),
-            Rarity = Convert.ToInt32(selected["default_rarity"])
+            Character = actor.CharaEntry, Card = selected == null ? 0 : Convert.ToInt32(selected["id"]),
+            DressId = actor.MasterDressId, Costume = actor.CostumeId, Head = actor.HeadCostumeId,
+            Rarity = selected == null ? 1 : Convert.ToInt32(selected["default_rarity"])
         };
         slot.InitialGateFinish = slot.Rarity - 1;
         MatchGachaSetCutIn(slot);
