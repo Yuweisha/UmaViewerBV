@@ -75,6 +75,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private readonly GameObject cameraMotion;
     private readonly Camera camera;
     private Camera orthoBackgroundCamera;
+    private bool orthoBackgroundActive;
     private readonly CameraClearFlags defaultClearFlags;
     private readonly bool defaultAllowMsaa;
     private readonly Color defaultBackgroundColor;
@@ -93,6 +94,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private readonly GachaPreviewAudio audio;
     private readonly IReadOnlyList<int> cards;
     private readonly int openingId;
+    private readonly LiveCharacterLoadData openingActor;
+    private readonly IReadOnlyList<GachaCutInLoader.Selection> selections;
     private readonly GachaSupportStage.Options supportOptions;
     private GachaSupportStage support;
     private Vector3[] lineupPositions;
@@ -137,7 +140,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         (waitForTap || (!waitForVoice && (tapSkip || supportOptions != null || Config.Instance?.GachaTapSkip == true) &&
             (jumpFrame > lastFrame || Current.AlbumUpgradeCanSkip)));
     internal bool AtFinalName => chapter >= 0 && !Finished && supportOptions == null &&
-        Current.Unique && Current.ResultIndex == cards.Count - 1 && waitForTap && HasNameFlash;
+        (Current.Unique || selections != null) && Current.ResultIndex == cards.Count - 1 && waitForTap && ShowingResultName;
     internal void SetMuted(bool muted) => audio.SetMuted(muted);
     internal void SetAudioPaused(bool paused) => audio.SetPaused(paused);
     internal void SynchronizeAudio() => audio.Synchronize();
@@ -146,6 +149,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     public bool IsVoicePlaying => audio.IsVoicePlaying;
     public bool HasCommentFlash => flash?.CommentVisible == true;
     public bool HasNameFlash => flash?.NameVisible == true;
+    internal string FallbackName { get; private set; }
+    internal bool ShowingResultName => HasNameFlash || FallbackName != null;
     public bool HasLocalizedCommentFlash => flash?.LocalizedCommentVisible == true;
     public bool HasLocalizedNameFlash => flash?.LocalizedNameVisible == true;
     public Draw ActiveDraw => supportOptions == null && !Finished && Current.ResultIndex >= 0
@@ -168,12 +173,15 @@ internal sealed partial class GachaCutInPlayer : IDisposable
 
     public GachaCutInPlayer(Camera template, RenderTexture target, IReadOnlyList<int> cards, int openingId,
         GachaSupportStage.Options supportOptions = null, ReplayResources replayResources = null,
-        GachaCutInLoader timingLoader = null)
+        GachaCutInLoader timingLoader = null, IReadOnlyList<GachaCutInLoader.Selection> selections = null,
+        LiveCharacterLoadData openingActor = null)
     {
         timingOnly = timingLoader != null;
         loader = timingLoader ?? new GachaCutInLoader();
         this.cards = cards;
         this.openingId = openingId;
+        this.openingActor = openingActor;
+        this.selections = selections;
         this.supportOptions = supportOptions;
         root = new GameObject("Gacha playback").transform;
         cameraMotion = new GameObject("Camera motion");
@@ -248,8 +256,11 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                     binding.Actor.UpdateFaceLightRuntime();
             monitorCamera?.Render();
             maskCamera?.Render();
-            if (orthoBackgroundCamera && orthoBackgroundCamera.enabled)
+            if (orthoBackgroundCamera && orthoBackgroundActive)
             {
+                // Manual playback owns the final surface. An automatic background
+                // pass later in the frame would overwrite the complete composition.
+                orthoBackgroundCamera.enabled = camera.enabled;
                 orthoBackgroundCamera.targetTexture = target;
                 orthoBackgroundCamera.aspect = renderAspect;
                 orthoBackgroundCamera.Render();
@@ -266,7 +277,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         }
         finally
         {
-            if (orthoBackgroundCamera && orthoBackgroundCamera.enabled)
+            if (orthoBackgroundCamera && orthoBackgroundActive)
             {
                 orthoBackgroundCamera.targetTexture = previous;
                 orthoBackgroundCamera.aspect = aspect;
@@ -329,9 +340,10 @@ internal sealed partial class GachaCutInPlayer : IDisposable
     private List<UmaDatabaseEntry> CollectCharacterAssets()
     {
         var main = UmaViewerMain.Instance;
-        return GachaCutInLoader.CharacterBundles(cards, openingId).Distinct()
+        return GachaCutInLoader.CharacterBundles(cards, openingId, selections).Distinct()
             .SelectMany(entry => UmaAssetManager.SearchAB(main, entry))
-            .Concat(audio.CollectCharacterBanks(cards))
+            .Concat(audio.CollectCharacterBanks(selections == null ? cards :
+                selections.Select(selection => selection.CutInCard > 0 ? selection.CutInCard : selection.Card)))
             .GroupBy(entry => entry.Url, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First()).ToList();
     }
@@ -352,7 +364,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             support = loader.LoadSupport(cards, root, camera, supportOptions);
         else
         {
-            loader.Load(cards, openingId, root);
+            loader.Load(cards, openingId, root, selections, openingActor);
             lineupPositions = new Vector3[cards.Count];
             course = InstantiateVisual(loader.Prefabs[Course], root);
             InstallGates(course.transform);
@@ -360,6 +372,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         audio.StartMusic();
         NextCut();
         camera.enabled = true;
+        if (orthoBackgroundCamera)
+            orthoBackgroundCamera.enabled = orthoBackgroundActive;
     }
 
     internal GachaCutInPlayer CreateTimingProbe(RenderTexture target, ReplayResources resources)
@@ -565,7 +579,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             return;
         if (waitForTap)
         {
-            if (support == null && HasNameFlash)
+            if (support == null && ShowingResultName)
             {
                 NextCut();
                 return;
@@ -722,6 +736,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
         lastFrame = -1;
         jumpFrame = -1;
         title = null;
+        FallbackName = null;
         shake = null;
         gateZoom = null;
         gatePan = null;
@@ -981,7 +996,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                     continue;
                 gate.Variants[i] = InstantiateVisual(prefab, target);
             }
-            gate.SetFinish(0);
+            gate.SetFinish(slot <= loader.Draws.Count && selections != null ? loader.Draws[slot - 1].InitialGateFinish : 0);
             if (slot > cards.Count)
                 gate.Open(loader.OpenedGateClip);
         }
@@ -1114,6 +1129,8 @@ internal sealed partial class GachaCutInPlayer : IDisposable
                 {
                     if (flash?.PlayName() == true)
                         audio.PlayCharacterNameEffect(draw.Rarity);
+                    else if (selections != null)
+                        FallbackName = UmaViewerMain.Instance.Characters.FirstOrDefault(c => c.Id == draw.NameplateCharacter)?.GetName() ?? draw.NameplateCharacter.ToString();
                     title = draw.Label;
                 }
                 if (command == "ResultStart")
@@ -1814,6 +1831,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
 
     private void SetOrthoBackgroundActive(bool active)
     {
+        orthoBackgroundActive = active;
         camera.clearFlags = active ? CameraClearFlags.Nothing : defaultClearFlags;
         bool sharesSceneDepth = colorCorrectionExemptCamera && colorCorrectionExemptCamera.enabled;
         camera.allowMSAA = !active && !sharesSceneDepth && defaultAllowMsaa;
@@ -1840,7 +1858,7 @@ internal sealed partial class GachaCutInPlayer : IDisposable
             settings.renderShadows = false;
         }
         if (orthoBackgroundCamera)
-            orthoBackgroundCamera.enabled = active;
+            orthoBackgroundCamera.enabled = active && camera.enabled;
     }
 
     private void SamplePostEffects()

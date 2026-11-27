@@ -291,8 +291,8 @@ public class UmaViewerBuilder : MonoBehaviour
             {
                 var asset1 = Main.AbList[UmaDatabaseController.BodyPath + $"bdy{costumeIdShort}/clothes/pfb_bdy{costumeIdShort}_cloth00"];
                 umaContainer.LoadPhysics(asset1);
-                asset1 = Main.AbList[UmaDatabaseController.BodyPath + $"bdy{costumeIdShort}/clothes/pfb_bdy{costumeIdShort}_bust{bust}_cloth00"];
-                umaContainer.LoadPhysics(asset1);
+                if (Main.AbList.TryGetValue(UmaDatabaseController.BodyPath + $"bdy{costumeIdShort}/clothes/pfb_bdy{costumeIdShort}_bust{bust}_cloth00", out asset1))
+                    umaContainer.LoadPhysics(asset1);
             }
         }
         else
@@ -303,10 +303,11 @@ public class UmaViewerBuilder : MonoBehaviour
             if (Main.AbList.TryGetValue(schoolUniformCollision, out UmaDatabaseEntry schoolCollisionAsset))
                 umaContainer.LoadSchoolUniformSkirtCollision(schoolCollisionAsset);
             //Load Physics
-            var asset1 = Main.AbList[UmaDatabaseController.BodyPath + $"bdy{id}_{costumeId}/clothes/pfb_bdy{id}_{costumeId}_cloth00"];
-            umaContainer.LoadPhysics(asset1);
-            asset1 = Main.AbList[UmaDatabaseController.BodyPath + $"bdy{id}_{costumeId}/clothes/pfb_bdy{id}_{costumeId}_bust_cloth00"];
-            umaContainer.LoadPhysics(asset1);
+            string cloth = UmaDatabaseController.BodyPath + $"bdy{id}_{costumeId}/clothes/pfb_bdy{id}_{costumeId}";
+            if (Main.AbList.TryGetValue(cloth + "_cloth00", out var bodyCloth))
+                umaContainer.LoadPhysics(bodyCloth);
+            if (Main.AbList.TryGetValue(cloth + "_bust_cloth00", out var bustCloth))
+                umaContainer.LoadPhysics(bustCloth);
         }
 
         // Record Head Data

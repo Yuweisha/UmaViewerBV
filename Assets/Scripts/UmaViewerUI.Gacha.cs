@@ -39,6 +39,7 @@ public partial class UmaViewerUI
     private Canvas gachaControlsCanvas;
     private FreeCam gachaFreeCamera;
     private Text gachaCameraLabel;
+    private Text gachaFallbackName;
     private Text gachaCameraHelp;
     private bool gachaPaused;
     private bool gachaSeeking;
@@ -114,6 +115,12 @@ public partial class UmaViewerUI
 
     private void OpenGachaPlayback(int card)
     {
+        OpenGachaPlayback(new[] { card }, 9001, null);
+    }
+
+    private void OpenGachaPlayback(IReadOnlyList<int> cards, int opening,
+        IReadOnlyList<GachaCutInLoader.Selection> selections, LiveCharacterLoadData openingActor = null)
+    {
         if (gachaActive || UmaAssetManager.LoadCoroutine != null)
             return;
 #if UNITY_ANDROID && !UNITY_EDITOR
@@ -121,7 +128,8 @@ public partial class UmaViewerUI
         Screen.orientation = ScreenOrientation.Portrait;
 #endif
         gachaActive = true;
-        gachaSteps.Push(PlayGachaCutIn(card));
+        gachaSetPlayback = selections != null;
+        gachaSteps.Push(PlayGachaCutIn(cards, opening, selections, openingActor));
         gachaLoad = StartCoroutine(RunGachaPlayback());
     }
 
@@ -160,7 +168,8 @@ public partial class UmaViewerUI
         CloseGachaPlayback();
     }
 
-    private IEnumerator PlayGachaCutIn(int card)
+    private IEnumerator PlayGachaCutIn(IReadOnlyList<int> cards, int opening,
+        IReadOnlyList<GachaCutInLoader.Selection> selections, LiveCharacterLoadData openingActor)
     {
         var loading = UmaSceneController.instance;
         yield return loading.ShowLoadingScreen();
@@ -235,8 +244,8 @@ public partial class UmaViewerUI
         gachaViewport.texture = gachaTexture;
         gachaReplayResources = new GachaCutInPlayer.ReplayResources();
         using (gachaReplayResources.Enter())
-            gachaPlayer = new GachaCutInPlayer(template, gachaTexture, new[] { card }, 9001,
-                replayResources: gachaReplayResources);
+            gachaPlayer = new GachaCutInPlayer(template, gachaTexture, cards, opening,
+                replayResources: gachaReplayResources, selections: selections, openingActor: openingActor);
         loading.LoadingProgressChange(0, 1);
         yield return gachaPlayer.PrepareCharacterAssets((completed, total, message) =>
         {
@@ -249,7 +258,9 @@ public partial class UmaViewerUI
         using (gachaReplayResources.Enter())
             gachaPlayer.Load();
         gachaPlayer.CaptureCamera.enabled = false;
-        yield return WarmupGachaPlayback(card);
+        if (!gachaSetPlayback)
+            yield return WarmupGachaPlayback(cards[0]);
+        if (!gachaSetPlayback)
         using (var timingResources = new GachaCutInPlayer.ReplayResources(gachaReplayResources.Clips))
         {
             GachaCutInPlayer timing;
@@ -262,7 +273,7 @@ public partial class UmaViewerUI
                 while (!timing.AtFinalName)
                 {
                     if (timing.Finished || gachaDurationTicks >= 120 * GachaCutInPlayer.PlaybackFrameRate)
-                        throw new InvalidOperationException($"Card {card} did not reach its final name hold.");
+                        throw new InvalidOperationException($"Card {cards[0]} did not reach its final name hold.");
                     using (timingResources.Enter())
                         timing.Tick(GachaStep);
                     gachaDurationTicks++;
@@ -336,13 +347,18 @@ public partial class UmaViewerUI
             gachaPlayer.SynchronizeAudio();
             gachaPlayer.RenderFrame(GachaPlaybackTexture);
             gachaFade.color = gachaPlayer.Fade;
+            if (gachaFallbackName) gachaFallbackName.text = gachaPlayer.FallbackName ?? "";
         }
     }
 
     private void StepGachaPlayback()
     {
         using (gachaReplayResources.Enter())
+        {
+            if (gachaSetPlayback && gachaPlayer.WaitingForTap && !gachaPlayer.ShowingResultName)
+                gachaPlayer.Advance();
             gachaPlayer.Tick(GachaStep);
+        }
     }
 
     private IEnumerator WarmupGachaPlayback(int card)
@@ -454,16 +470,23 @@ public partial class UmaViewerUI
             gachaRequestedTick = Mathf.Clamp(Mathf.RoundToInt(value * gachaDurationTicks), 0, gachaDurationTicks);
             UpdateGachaPlaybackSeconds(gachaRequestedTick);
         });
+        if (gachaSetPlayback)
+        {
+            pauseButton.transform.SetParent(gachaPlaybackBar, false);
+            gachaPlaybackProgress.gameObject.SetActive(false);
+            gachaPlaybackSeconds.text = "";
+        }
         UpdateGachaPlaybackBar();
     }
 
     private void UpdateGachaPlaybackBar()
     {
-        if (!gachaPlaybackControl.IsDragging && gachaRequestedTick < 0)
+        if (!gachaSetPlayback && !gachaPlaybackControl.IsDragging && gachaRequestedTick < 0)
             gachaPlaybackProgress.SetValueWithoutNotify((float)gachaPlaybackTick / gachaDurationTicks);
         float current = gachaPlaybackControl.IsDragging || gachaRequestedTick >= 0
             ? gachaPlaybackProgress.value * gachaDurationTicks : gachaPlaybackTick;
-        UpdateGachaPlaybackSeconds(current);
+        if (!gachaSetPlayback)
+            UpdateGachaPlaybackSeconds(current);
 #if UNITY_ANDROID && !UNITY_EDITOR
         bool visible = true;
 #else
@@ -559,8 +582,13 @@ public partial class UmaViewerUI
     {
         if (!gachaReady || gachaPlayer == null)
             return;
-        if (!gachaSeeking && !gachaFreeCamera && gachaPlayer.AtFinalName)
-            CloseGachaPlayback();
+        if (!gachaSeeking && !gachaFreeCamera)
+        {
+            if (gachaPlayer.AtFinalName)
+                CloseGachaPlayback();
+            else if (gachaSetPlayback && gachaPlayer.WaitingForTap)
+                gachaPlayer.Advance();
+        }
     }
 
     private void FailGachaPlayback(Exception error)
@@ -626,6 +654,14 @@ public partial class UmaViewerUI
         fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
         fitter.aspectRatio = (float)renderSize.x / renderSize.y;
 
+        if (gachaSetPlayback)
+        {
+            gachaFallbackName = LiveRenderUI.Text("", surface.transform, Vector2.zero, new Vector2(0, 60), 32);
+            gachaFallbackName.font = HachimiGachaResources.Font;
+            gachaFallbackName.rectTransform.anchorMin = new Vector2(0, .16f);
+            gachaFallbackName.rectTransform.anchorMax = new Vector2(1, .16f);
+            gachaFallbackName.gameObject.AddComponent<Outline>();
+        }
         gachaFade = new GameObject("CutIn fade", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
         gachaFade.rectTransform.SetParent(surface.transform, false);
         gachaFade.rectTransform.anchorMin = Vector2.zero;
@@ -641,6 +677,7 @@ public partial class UmaViewerUI
         bool wasActive = gachaActive;
         gachaActive = false;
         gachaReady = false;
+        gachaSetPlayback = false;
 #if UNITY_ANDROID && !UNITY_EDITOR
         if (wasActive)
             Screen.orientation = gachaReturnOrientation;

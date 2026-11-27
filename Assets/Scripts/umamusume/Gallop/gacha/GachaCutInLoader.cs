@@ -40,6 +40,13 @@ internal sealed class GachaCutInLoader : IDisposable
     public AnimationClip OpenedGateClip { get; private set; }
     public UmaContainerCharacter OpeningActor { get; private set; }
 
+    internal sealed class Selection
+    {
+        internal CharaEntry Character;
+        internal int Card, CutInCard, Rarity, InitialGateFinish, DressId;
+        internal string Costume, Head;
+    }
+
     public GachaCutInLoader()
     {
         optionalEffects = UmaViewerMain.Instance.AbList.Values
@@ -52,11 +59,15 @@ internal sealed class GachaCutInLoader : IDisposable
     internal static bool HasUniqueCut(int card) => UmaViewerMain.Instance.AbList.ContainsKey(
         $"cutt/cutin/skill/crd{card:D6}_001/crd{card:D6}_001");
 
-    internal static IEnumerable<UmaDatabaseEntry> CharacterBundles(IReadOnlyList<int> cards, int openingId)
+    internal static IEnumerable<UmaDatabaseEntry> CharacterBundles(IReadOnlyList<int> cards, int openingId,
+        IReadOnlyList<Selection> selections = null)
     {
         var main = UmaViewerMain.Instance;
-        var results = cards.Select(ReadDraw).ToArray();
-        foreach (var cut in CharacterCuts(results.Select(result => result.Rarity).ToArray(), cards, openingId))
+        var results = selections == null ? cards.Select(ReadDraw).ToArray() : null;
+        var rarities = selections?.Select(result => result.CutInCard > 0 ? 3 : result.Rarity).ToArray()
+            ?? results.Select(result => result.Rarity).ToArray();
+        var cutCards = selections?.Select(result => result.CutInCard).ToArray() ?? cards;
+        foreach (var cut in CharacterCuts(rarities, cutCards, openingId, selections))
             if (main.AbList.TryGetValue(TimelinePath(cut.Name), out var timeline))
                 yield return timeline;
 
@@ -66,30 +77,41 @@ internal sealed class GachaCutInLoader : IDisposable
             if (main.AbList.TryGetValue(path, out var gate))
                 yield return gate;
 
-        if (results.Any(result => result.Rarity == 3))
+        if (rarities.Any(rarity => rarity == 3))
             foreach (var path in new[] { FootShadowPrefab, FootShadowRun, FootShadowStop,
                 Gallop.Live.FootLightRuntime.DefaultShadowPath, CharacterCompleteEffect, UiAdditiveMaterial })
                 if (main.AbList.TryGetValue(path, out var shadow))
                     yield return shadow;
 
-        for (int i = 0; i < results.Length; i++)
+        for (int i = 0; i < cards.Count; i++)
         {
-            var text = TextPaths(cards[i], results[i].Character.Id, results[i].Rarity);
+            int textCard = selections?[i].CutInCard > 0 ? selections[i].CutInCard : cards[i];
+            var character = selections?[i].Character ?? results[i].Character;
+            var text = TextPaths(textCard, NameplateOwner(textCard, character.Id), rarities[i]);
             foreach (var path in new[] { text.Name, text.NameTexture, text.Comment, text.CommentEffect, text.CommentTexture })
                 if (path != null && main.AbList.TryGetValue(path, out var entry))
                     yield return entry;
         }
     }
 
-    public void Load(IReadOnlyList<int> cards, int openingId, Transform root)
+    public void Load(IReadOnlyList<int> cards, int openingId, Transform root,
+        IReadOnlyList<Selection> selections = null, LiveCharacterLoadData openingActor = null)
     {
-        if (cards.Count != 1 && cards.Count != 5 && cards.Count != 10)
-            throw new ArgumentException("Gacha previews require 1, 5 or 10 results.", nameof(cards));
+        if (cards.Count < 1 || cards.Count > 10)
+            throw new ArgumentException("Gacha previews require 1 to 10 results.", nameof(cards));
         UmaAssetManager.LoadTracked(bundleLoads, () =>
         {
-            foreach (int card in cards)
-                draws.Add(LoadDraw(card, root));
-            foreach (var cut in CharacterCuts(draws.Select(draw => draw.Rarity).ToArray(), cards, openingId))
+            for (int index = 0; index < cards.Count; index++)
+            {
+                var selected = selections?[index];
+                draws.Add(selected == null ? LoadDraw(cards[index], root) : new Draw(
+                    selected.CutInCard > 0 ? selected.CutInCard : selected.Card, selected.Character,
+                    selected.CutInCard > 0 ? 3 : selected.Rarity,
+                    CreateActor(selected.Character, selected.Costume, selected.Head, root, selected.DressId),
+                    selected.InitialGateFinish, selected.CutInCard > 0));
+            }
+            var cutCards = selections?.Select(result => result.CutInCard).ToArray() ?? cards;
+            foreach (var cut in CharacterCuts(draws.Select(draw => draw.Rarity).ToArray(), cutCards, openingId, selections))
                 cuts.Add(LoadCut(cut.Name, cut.Cast, cut.ResultIndex, cut.ActorSlot, cut.Unique,
                     cut.StartFrame, cut.UpgradesGate, cut.GateAlreadyOpen));
             LoadFixedCast(root);
@@ -105,14 +127,18 @@ internal sealed class GachaCutInLoader : IDisposable
             if (!OpenGateClip || !OpenedGateClip)
                 throw new InvalidOperationException("Gacha gate motion unavailable.");
 
-            var opening = UmaViewerMain.Instance.Characters.FirstOrDefault(c => c.Id == openingId && !c.IsMob)
-                ?? new CharaEntry { Id = openingId };
-            OpeningActor = CreateActor(opening, "00", "00", root);
+            if (openingId != 0)
+            {
+                var actor = openingActor?.CharaEntry ?? UmaViewerMain.Instance.Characters.FirstOrDefault(c => c.Id == openingId && !c.IsMob)
+                    ?? new CharaEntry { Id = openingId };
+                OpeningActor = CreateActor(actor, openingActor?.CostumeId ?? "00", openingActor?.HeadCostumeId ?? "00",
+                    root, openingActor?.MasterDressId ?? 0);
+            }
             // MakeMob uses character 1, mob 8019 and race dress 1 for the gate silhouettes.
             var mob = new CharaEntry { Id = 8019, IsMob = true };
             var database = UmaDatabaseController.Instance;
             string raceDress = LiveFormationLoader.CostumeForDress(database.ReadDressData(1), mob, database);
-            for (int i = 0; i < draws.Count; i++)
+            for (int i = 0; openingId != 0 && i < draws.Count; i++)
                 lineupActors.Add(CreateActor(mob, raceDress, "00", root));
         });
     }
@@ -134,6 +160,8 @@ internal sealed class GachaCutInLoader : IDisposable
             for (int slot = 0; slot < cut.Sheet._characterList.Length; ++slot)
             {
                 var track = cut.Sheet._characterList[slot]._characterKeys;
+                if (slot == cut.ActorSlot && draw.OverrideActor)
+                    continue;
                 // Native FixCharaId and CardId slots send their authored model and dress IDs to the loader.
                 if (track == null ||
                     (track._characterType != 3 && track._characterType != 4) || !Keys(track).Any(key => key._visible))
@@ -215,22 +243,27 @@ internal sealed class GachaCutInLoader : IDisposable
         }
     }
 
-    private static IEnumerable<CharacterCut> CharacterCuts(IReadOnlyList<int> rarities, IReadOnlyList<int> cards, int openingId)
+    private static IEnumerable<CharacterCut> CharacterCuts(IReadOnlyList<int> rarities, IReadOnlyList<int> cards, int openingId,
+        IReadOnlyList<Selection> selections = null)
     {
-        yield return new CharacterCut(openingId == 9002 ? "gac_chr_start_002" : "gac_chr_start_001", Cast.Opening);
+        if (openingId != 0)
+            yield return new CharacterCut(openingId == 9002 ? "gac_chr_start_002" : "gac_chr_start_001", Cast.Opening);
         string lineup = cards.Count == 1 ? "gac_chr_gate_single_001" :
-            cards.Count == 5 ? "gac_chr_gate_5ren_001" : "gac_chr_gate_001";
-        yield return new CharacterCut(lineup, Cast.Lineup);
+            cards.Count <= 5 ? "gac_chr_gate_5ren_001" : "gac_chr_gate_001";
+        if (openingId != 0)
+            yield return new CharacterCut(lineup, Cast.Lineup);
         for (int i = 0; i < cards.Count; i++)
         {
-            bool upgradesGate = rarities[i] == 3;
+            bool hasCutIn = selections == null ? rarities[i] == 3 : selections[i].CutInCard > 0;
+            bool upgradesGate = openingId != 0 && hasCutIn &&
+                (selections == null || selections[i].InitialGateFinish < 2);
             if (upgradesGate)
                 yield return new CharacterCut("gac_chr_gate_more_001", Cast.Result, i, actorSlot: 10,
                     startFrame: 24, upgradesGate: true);
-            if (i == 0 || upgradesGate)
-                yield return new CharacterCut(upgradesGate ? "gac_chr_gate_out2_001" : "gac_chr_gate_out1_001",
+            if (openingId != 0 && (i == 0 || hasCutIn))
+                yield return new CharacterCut(hasCutIn ? "gac_chr_gate_out2_001" : "gac_chr_gate_out1_001",
                     Cast.Result, i, actorSlot: 10);
-            if (upgradesGate)
+            if (hasCutIn)
             {
                 yield return new CharacterCut(CharacterCommentCut, Cast.Result, i, gateAlreadyOpen: true);
                 yield return new CharacterCut($"crd{cards[i]:D6}_001", Cast.Result, i, unique: true);
@@ -452,7 +485,7 @@ internal sealed class GachaCutInLoader : IDisposable
         GachaPreviewFlash flash = null;
         UmaAssetManager.LoadTracked(bundleLoads, () =>
         {
-            var paths = TextPaths(card, draw.Character.Id, rarity);
+            var paths = TextPaths(card, draw.NameplateCharacter, rarity);
             var database = UmaDatabaseController.Instance;
             string cardTitle = database.ReadGachaCardTitle(card);
             var commentPrefab = LoadNamedAsset<GameObject>(paths.Comment);
@@ -474,6 +507,11 @@ internal sealed class GachaCutInLoader : IDisposable
         });
         return flash;
     }
+
+    // The card identifies the owner of the result artwork even when another actor performs it.
+    private static int NameplateOwner(int card, int actor) =>
+        card > 0 && UmaDatabaseController.Instance.ReadGachaCard(card) is System.Data.DataRow row
+            ? Convert.ToInt32(row["chara_id"]) : actor;
 
     private static string TimelinePath(string name) => $"cutt/cutin/skill/{name}/{name}";
 
@@ -652,14 +690,20 @@ internal sealed class GachaCutInLoader : IDisposable
         public readonly CharaEntry Character;
         public readonly int Rarity;
         public readonly UmaContainerCharacter Actor;
-        public int InitialGateFinish => Math.Min(Rarity - 1, 1);
+        public readonly int NameplateCharacter;
+        public readonly int InitialGateFinish;
+        public readonly bool OverrideActor;
 
-        public Draw(int card, CharaEntry character, int rarity, UmaContainerCharacter actor)
+        public Draw(int card, CharaEntry character, int rarity, UmaContainerCharacter actor,
+            int initialGateFinish = -1, bool overrideActor = false)
         {
             Card = card;
             Character = character;
+            NameplateCharacter = NameplateOwner(card, character.Id);
             Rarity = rarity;
             Actor = actor;
+            InitialGateFinish = initialGateFinish < 0 ? Math.Min(rarity - 1, 1) : initialGateFinish;
+            OverrideActor = overrideActor;
         }
 
         public string Label => $"{new string('★', Rarity)}  {Character.GetName()}";
